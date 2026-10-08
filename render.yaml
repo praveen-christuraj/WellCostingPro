@@ -1,0 +1,41 @@
+# Render blueprint for the WellCosting Pro API.
+# Apply via Render Dashboard -> Blueprints -> New Blueprint Instance (repo root).
+# Secrets (sync: false) are entered in the Render dashboard, never committed here.
+# Full walkthrough: docs/deployment.md
+services:
+  - type: web
+    name: wellcosting-api
+    runtime: python
+    plan: free # upgrade to starter for an always-on service (no cold starts)
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: alembic upgrade head # runs migrations before every deploy
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+    healthCheckPath: /api/health
+    envVars:
+      # From Supabase: postgresql+psycopg://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+      - key: DATABASE_URL
+        sync: false
+      # Generate with: openssl rand -hex 32  (unique per environment, at least 32 characters)
+      - key: SECRET_KEY
+        sync: false
+      # Vercel is HTTPS, so the refresh cookie must be Secure.
+      - key: SECURE_COOKIES
+        value: "true"
+      # Exact Vercel origin(s), comma-separated, e.g. https://wellcosting-pro.vercel.app
+      - key: CORS_ORIGINS
+        sync: false
+      - key: BOOTSTRAP_ADMIN_ON_STARTUP
+        value: "true"
+      # First-boot administrator seeding. Fill these once, then DELETE
+      # SEED_ADMIN_PASSWORD from the dashboard after the first successful boot.
+      - key: SEED_ORG_SLUG
+        sync: false
+      - key: SEED_ORG_NAME
+        sync: false
+      - key: SEED_OWNER_NAME
+        sync: false
+      - key: SEED_ADMIN_EMAIL
+        sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
