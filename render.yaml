@@ -6,14 +6,15 @@ services:
   - type: web
     name: wellcosting-api
     runtime: python
-    plan: free # upgrade to starter for an always-on service (no cold starts)
+    plan: free # choose a paid instance for an always-on service
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    preDeployCommand: alembic upgrade head # runs migrations before every deploy
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+    # Keep migrations in the start command for this Free Blueprint. Paid services
+    # can use preDeployCommand and run only Uvicorn in startCommand.
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
     healthCheckPath: /api/health
     envVars:
-      # From Supabase: postgresql+psycopg://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+      # Prefer the Supabase Session pooler URI copied from Connect; preserve its host/user/port.
       - key: DATABASE_URL
         sync: false
       # Generate with: openssl rand -hex 32  (unique per environment, at least 32 characters)

@@ -15,7 +15,7 @@ WellCosting Pro is a tenant-aware SaaS foundation. This first increment covers a
 
 ## Deployment (Vercel + Render + Supabase)
 - Production topology: Vercel serves the static frontend; `frontend/vercel.json` rewrites `/api/*` (plus `/docs`, `/openapi.json`) to the Render-hosted FastAPI service, so the SPA keeps relative `/api` calls and the HttpOnly refresh cookie stays same-origin. No `VITE_*` variables are needed.
-- Render runs the API (Python runtime, rootDir `backend`) with `DATABASE_URL` pointing at Supabase Postgres (direct 5432 connection, `postgresql+psycopg://` + `sslmode=require`), a unique `SECRET_KEY` (>=32 chars), `SECURE_COOKIES=true`, and `CORS_ORIGINS` set to the exact Vercel origin(s). Migrations run via `preDeployCommand: alembic upgrade head` (see `render.yaml`).
+- Render runs the API (Python runtime, rootDir `backend`) with `DATABASE_URL` pointing at Supabase Postgres (prefer the shared session pooler on port 5432 for IPv4-compatible persistent connections; use the host and username copied from Supabase, `postgresql+psycopg://` + `sslmode=require`), a unique `SECRET_KEY` (>=32 chars), `SECURE_COOKIES=true`, and `CORS_ORIGINS` set to the exact Vercel origin(s). The Free Blueprint runs Alembic migrations in its single-process start command; paid services can use a pre-deploy migration command (see `render.yaml` and `docs/deployment.md`).
 - First boot seeds the owner from `SEED_*` env vars (password removed after seeding) or via `python -m app.seed` run against the Supabase URL.
 - Guide: `docs/deployment.md`; blueprint: `render.yaml`.
 
