@@ -19,6 +19,13 @@ services:
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+      # First-run administrator: seeded from these values, otherwise `docker compose exec -it api python -m app.seed`.
+      BOOTSTRAP_ADMIN_ON_STARTUP: ${BOOTSTRAP_ADMIN_ON_STARTUP:-true}
+      SEED_ORG_SLUG: ${SEED_ORG_SLUG:-}
+      SEED_ORG_NAME: ${SEED_ORG_NAME:-}
+      SEED_OWNER_NAME: ${SEED_OWNER_NAME:-}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
     depends_on:
       db:
         condition: service_healthy
