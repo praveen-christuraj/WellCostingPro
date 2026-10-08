@@ -12,6 +12,14 @@ class Settings(BaseSettings):
     refresh_token_days: int = 7
     secure_cookies: bool = False
     cors_origins: str = "http://localhost:5173"
+    # First-run administrator bootstrap. Ask at startup when the database has no owner.
+    bootstrap_admin_on_startup: bool = True
+    # Optional unattended seeding for a first boot with no terminal. Leave blank to be asked.
+    seed_org_slug: str = ""
+    seed_org_name: str = ""
+    seed_owner_name: str = ""
+    seed_admin_email: str = ""
+    seed_admin_password: str = ""
 
     @model_validator(mode="after")
     def validate_deployment(self):

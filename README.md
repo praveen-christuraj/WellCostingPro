@@ -10,10 +10,11 @@ React 19 · TypeScript · Material UI 7 · AG Grid Community · ECharts · FastA
 
 1. Copy `.env.example` to `.env`, and replace **both** secrets with strong random values (`openssl rand -hex 32` for `SECRET_KEY`).
 2. `docker compose up --build` (web at http://localhost:8080, API docs at http://localhost:8080/docs).
-3. Provision the first workspace and owner, using a password you choose (12+ characters):
+3. Provision the first workspace and owner. This asks for the workspace, the administrator and a password you choose (12+ characters), and runs migrations first if they are pending:
    ```sh
-   docker compose exec api python -m app.seed --slug my-company --name "My Company" --email owner@example.com --owner-name "Jane Smith"
+   docker compose exec -it api python -m app.seed
    ```
+   The API asks the same questions at startup when it has a terminal. For an unattended first boot set the `SEED_*` variables in `.env` instead — see [First-run administrator](#first-run-administrator).
 4. Sign in with workspace ID `my-company`, owner email and the password you entered. Create users, roles, permissions, and assignments from the UI. No demo users or passwords are shipped.
 
 Production deployments should terminate HTTPS at a trusted proxy and set `SECURE_COOKIES=true`.
@@ -25,17 +26,29 @@ python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements.txt
 cd backend
 ../.venv/bin/alembic upgrade head
-../.venv/bin/python -m app.seed --slug my-company --name "My Company" --email owner@example.com --owner-name "Jane Smith"
+../.venv/bin/python -m app.seed          # guided: workspace, owner and password; offers to migrate first
 ../.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 # in another terminal, from repository root:
 cd frontend && npm ci && npm run dev
 ```
 
-By default the API uses `backend/wellcosting.db` for this local-only path. For PostgreSQL outside Compose, set `DATABASE_URL=postgresql+psycopg://...` and `SECRET_KEY` in `backend/.env` before migrating. Frontend at http://localhost:5173 proxies `/api` to the API; OpenAPI at http://localhost:8000/docs.
+By default the API uses `backend/wellcosting.db` for this local-only path. For PostgreSQL outside Compose, set `DATABASE_URL=postgresql+psycopg://...` and `SECRET_KEY` in `backend/.env` before migrating. Frontend at http://localhost:5173 proxies `/api` to the API; OpenAPI at http://localhost:8000/docs. `make seed-admin` and `make check-admin` wrap the commands below.
+
+## First-run administrator
+
+A fresh clone has an empty database, so nobody can sign in. Rather than shipping demo credentials, the backend detects that state and asks for the first administrator:
+
+- **At API startup** — when no owner account exists, the API logs what to run, and on an interactive terminal it asks directly: offer to run pending migrations, then the workspace ID, workspace name, administrator name, e-mail and a password entered twice and never echoed. Declining changes nothing.
+- **From the CLI** — `python -m app.seed` runs that same flow. `python -m app.seed --check` only reports status for scripts and container entrypoints: exit `0` an administrator exists, `1` none exists, `2` the schema is not migrated, `3` provisioning failed.
+- **Unattended** — set `SEED_ORG_SLUG`, `SEED_ORG_NAME`, `SEED_OWNER_NAME`, `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD`; the first start seeds from them (`python -m app.seed --from-env` does it explicitly). Clear the password again afterwards.
+- **Explicit** — `python -m app.seed --slug my-company --name "My Company" --email owner@example.com --owner-name "Jane Smith"` prompts only for the password. Add `--attach-existing` to give a workspace whose owner was lost a new administrator.
+- **In the UI** — `GET /api/health` returns `admin_seeded`, and the sign-in page explains what to run when it is `false`.
+
+Seeding is idempotent (it never touches an existing owner), never creates tables behind Alembic, and is switched off entirely by `BOOTSTRAP_ADMIN_ON_STARTUP=false`. Non-interactive processes are never blocked waiting for input.
 
 ## API and policy
 
-- `POST /api/v1/auth/login`, `/refresh`, `/logout`, `/change-password`; `GET /auth/me`.
+- `GET /api/health` reports liveness plus `admin_seeded`; `POST /api/v1/auth/login`, `/refresh`, `/logout`, `/change-password`; `GET /auth/me`.
 - `GET /api/v1/overview`; list/create/update users, roles, permissions; assign roles to users and permissions to roles. See `/docs` for complete request schemas.
 - Workspace slug is required at sign-in. Resource IDs are checked against the authenticated organization, including assignment IDs. Owner role is provisioned once per organization and cannot be managed via ordinary RBAC endpoints. All other roles and capabilities are editable tenant data; platform capabilities are initially provisioned by `app.seed`.
 - Access JWTs expire after 15 minutes and are stored only in memory; refresh sessions rotate, are revocable, and live in an HttpOnly cookie. Password change revokes all sessions and invalidates existing access tokens. API evaluates grants from database on every request, not from stale JWT claims.
@@ -45,7 +58,7 @@ By default the API uses `backend/wellcosting.db` for this local-only path. For P
 
 `cd backend && ../.venv/bin/python -m pytest -q` · `cd frontend && npm run build` · `make graph`.
 
-- `backend/app/api`, `models`, `schemas`, `core`, `seed.py` — API, persistence, validation, security, provisioning.
+- `backend/app/api`, `models`, `schemas`, `core`, `services`, `seed.py`, `bootstrap.py` — API, persistence, validation, security, provisioning and the first-run administrator bootstrap.
 - `backend/alembic/versions` — explicit database migrations.
 - `frontend/src/pages`, `components`, `context`, `lib` — routed UI and typed API layer.
 - `.agent/` and `AGENTS.md` — committed Graphify tool, architecture graph, durable AI memory and agent workflows; not in `.gitignore`.
