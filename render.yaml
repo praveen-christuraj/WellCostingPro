@@ -14,7 +14,7 @@ services:
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
     healthCheckPath: /api/health
     envVars:
-      # Prefer the Supabase Session pooler URI copied from Connect; preserve its host/user/port.
+      # Supabase Connect -> Session pooler: preserve generated host/user, use port 5432.
       - key: DATABASE_URL
         sync: false
       # Generate with: openssl rand -hex 32  (unique per environment, at least 32 characters)
