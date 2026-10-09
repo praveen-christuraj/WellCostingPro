@@ -1,8 +1,18 @@
+
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://YOUR-RENDER-SERVICE.onrender.com/api/:path*" },
-    { "source": "/docs", "destination": "https://YOUR-RENDER-SERVICE.onrender.com/docs" },
-    { "source": "/openapi.json", "destination": "https://YOUR-RENDER-SERVICE.onrender.com/openapi.json" }
+    {
+      "source": "/api/:path*",
+      "destination": "https://wellcosting-api.onrender.com/api/:path*"
+    },
+    {
+      "source": "/docs",
+      "destination": "https://wellcosting-api.onrender.com/docs"
+    },
+    {
+      "source": "/openapi.json",
+      "destination": "https://wellcosting-api.onrender.com/openapi.json"
+    }
   ]
 }
