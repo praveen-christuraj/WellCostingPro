@@ -1,6 +1,6 @@
 # WellCosting Pro
 
-A tenant-aware foundation for a well-costing SaaS: login and workspace access management first, well-costing features next.
+A tenant-aware foundation for a well-costing SaaS: login, workspace access management, and well-costing master reference data, with costing workflows next.
 
 ## Stack
 
@@ -50,7 +50,8 @@ Seeding is idempotent (it never touches an existing owner), never creates tables
 
 - `GET /api/health` reports liveness plus `admin_seeded`; `POST /api/v1/auth/login`, `/refresh`, `/logout`, `/change-password`; `GET /auth/me`.
 - `GET /api/v1/overview`; list/create/update users, roles, permissions; assign roles to users and permissions to roles. See `/docs` for complete request schemas.
-- Workspace slug is required at sign-in. Resource IDs are checked against the authenticated organization, including assignment IDs. Owner role is provisioned once per organization and cannot be managed via ordinary RBAC endpoints. All other roles and capabilities are editable tenant data; platform capabilities are initially provisioned by `app.seed`.
+- Master Data Management covers UOM, Currency, Phases, Hole Sections, and Activities. Each organization gets isolated records, an overview dashboard, create/edit, xlsx/csv import with preview and row errors, csv/xlsx/PDF export, checkbox-based bulk actions, and a Deleted Entries view. Normal deletion is soft-only; restore or permanently delete from Deleted Entries. The `master-data:read`, `master-data:create`, `master-data:update`, `master-data:delete`, `master-data:restore`, `master-data:permanent-delete`, `master-data:import`, and `master-data:export` capabilities guard the API.
+- Workspace slug is required at sign-in. Resource IDs are checked against the authenticated organization, including assignment IDs. Owner role is provisioned once per organization and cannot be managed via ordinary RBAC endpoints. All other roles and capabilities are editable tenant data; platform capabilities are initially provisioned by `app.seed` and the master-data migration.
 - Access JWTs expire after 15 minutes and are stored only in memory; refresh sessions rotate, are revocable, and live in an HttpOnly cookie. Password change revokes all sessions and invalidates existing access tokens. API evaluates grants from database on every request, not from stale JWT claims.
 - A nonowner cannot grant a role or permission that exceeds their own grants. Permission keys follow `resource:action`.
 
@@ -66,7 +67,7 @@ Seeding is idempotent (it never touches an existing owner), never creates tables
 
 ### Reference projects
 
-Architecture and dashboard patterns were reviewed from [fastapi-admin-v4](https://github.com/lijianqiao/fastapi-admin-v4), [full-stack-fastapi-template](https://github.com/fastapi/full-stack-fastapi-template), [react-admin-dashboard](https://github.com/kotenkodev/react-admin-dashboard), [Admin_Dashboard](https://github.com/tripathipawan/Admin_Dashboard) and [mui-admin-dashboard](https://github.com/JoelEmanuelNilsson/mui-admin-dashboard). This is an original implementation, not a copy of their code.
+Master Data workflows were reviewed from [Well-Costing](https://github.com/praveen-christuraj/Well-Costing), then adapted to this application's tenant-scoped SQLAlchemy models, RBAC, API, MUI and AG Grid structure; the legacy tab UI was not copied. Architecture and dashboard patterns were also reviewed from [fastapi-admin-v4](https://github.com/lijianqiao/fastapi-admin-v4), [full-stack-fastapi-template](https://github.com/fastapi/full-stack-fastapi-template), [react-admin-dashboard](https://github.com/kotenkodev/react-admin-dashboard), [Admin_Dashboard](https://github.com/tripathipawan/Admin_Dashboard) and [mui-admin-dashboard](https://github.com/JoelEmanuelNilsson/mui-admin-dashboard). This is an original implementation, not a copy of their code.
 
 ### Production follow-ups
 

@@ -7,12 +7,15 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
 os.environ["SECRET_KEY"] = "test-only-secret-do-not-deploy-12345"
 
 import pytest
+from alembic import command
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from app.bootstrap import Outcome, bootstrap_admin, env_credentials, inspect_admin
 from app.core.config import get_settings
 from app.core.database import Base, SessionLocal, engine
-from app.core.migrations import MISSING, READY, schema_status, upgrade_head
+from app.core.migrations import MISSING, READY, alembic_config, schema_status, upgrade_head
+from app.core.security import hash_password
+from app.models import Organization, Permission, Role, User
 from app.main import app
 from app.seed import EXIT_FAILED, EXIT_MISSING, EXIT_OK, EXIT_SCHEMA, main
 from app.services import provisioning
@@ -47,6 +50,36 @@ def scripted_terminal(monkeypatch):
 def owners():
     with SessionLocal() as db:
         return provisioning.administrators(db)
+
+
+def test_master_data_migration_backfills_capabilities_for_existing_owners(migrated_database):
+    reset_schema(migrate=False)
+    command.upgrade(alembic_config(), "3d9e6b51c4a0")
+    with SessionLocal() as db:
+        organization = Organization(slug="legacy", name="Legacy Energy")
+        db.add(organization)
+        db.flush()
+        audit_permission = Permission(organization_id=organization.id, key="audit:read", description="Read audit log")
+        owner_role = Role(organization_id=organization.id, name="Owner", is_owner=True, permissions=[audit_permission])
+        db.add(User(
+            organization_id=organization.id,
+            email="owner@example.com",
+            full_name="Legacy Owner",
+            password_hash=hash_password("correct-password-123"),
+            roles=[owner_role],
+        ))
+        db.commit()
+
+    upgrade_head()
+    with SessionLocal() as db:
+        owner_role = db.scalar(select(Role).where(Role.is_owner.is_(True)))
+        keys = {permission.key for permission in owner_role.permissions}
+        expected = {
+            f"master-data:{action}"
+            for action in provisioning.CAPABILITIES["master-data"]
+        }
+        assert expected.issubset(keys)
+        assert schema_status() == READY
 
 
 def test_missing_admin_is_reported_without_writing(migrated_database):

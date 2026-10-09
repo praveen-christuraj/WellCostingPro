@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth, audit, rbac
+from app.api import auth, audit, master_data, rbac
 from app.api.deps import Db
 from app.bootstrap import bootstrap_admin
 from app.core.config import get_settings
@@ -25,6 +25,7 @@ app.add_middleware(CORSMiddleware, allow_origins=[s.strip() for s in settings.co
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(rbac.router, prefix="/api/v1")
+app.include_router(master_data.router, prefix="/api/v1")
 
 
 @app.get("/api/health")

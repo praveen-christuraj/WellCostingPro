@@ -7,8 +7,8 @@ import type { AuditEntry, AuditPage } from '../lib/types'
 import { ErrorMessage, PageHeading, Tag } from '../components/Common'
 import { DataTable } from '../components/DataTable'
 
-const ACTIONS = ['login', 'login_failed', 'logout', 'create', 'update', 'delete', 'assign']
-const ENTITIES = ['auth', 'user', 'role', 'permission']
+const ACTIONS = ['login', 'login_failed', 'logout', 'create', 'update', 'delete', 'soft_delete', 'restore', 'permanent_delete', 'import', 'export', 'assign']
+const ENTITIES = ['auth', 'user', 'role', 'permission', 'master_data']
 
 // Auditing module: read-only action trail with server-side filters and export.
 export default function AuditLog() {
