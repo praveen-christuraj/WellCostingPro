@@ -18,7 +18,17 @@ to `/api/v1/auth`. Vercel's `rewrites` (see `frontend/vercel.json`) proxy those
 paths to Render, so from the browser's perspective everything is same-origin and
 the cookie keeps working. No `VITE_*` build-time variables are required.
 
-Estimated setup time: ~30 minutes.
+Estimated setup time: 30–60 minutes, excluding time spent troubleshooting provider-specific errors.
+
+> **Before retrying a failed deployment:** do not create duplicate Render services or Supabase projects. Inspect the existing Render service's **Events** and **Logs**, confirm the configuration below, and redeploy the existing service. Never paste database URLs, secrets, or administrator passwords into support chats or issue reports.
+
+### Verified repository deployment contract
+
+- Render must run from `backend/`; it contains `requirements.txt`, `alembic.ini`, `alembic/`, and `app/`.
+- Vercel must build from `frontend/`; its frontend calls relative `/api/v1` URLs and requires no `VITE_API_URL`.
+- `frontend/vercel.json` currently contains an intentional Render-hostname placeholder. Until it is replaced and redeployed, Vercel API requests will fail.
+- `GET /api/health` **is not a database-readiness check**: the application catches database errors and can still return HTTP 200 with `{"status":"ok","admin_seeded":false}`. Use migration logs and `admin_seeded:true` to verify first-run setup.
+- Render's current default Python runtime may differ from the one used during development. **Pin Python 3.12** as shown below rather than relying on Render's default.
 
 ---
 
@@ -101,6 +111,7 @@ service from `render.yaml`.
    | Name | `wellcosting-api` (or another available name; copy the actual URL Render assigns) |
    | Region | Same region as the Supabase project, or the nearest available region |
    | Environment | **Python 3** |
+   | Python version | Set environment variable `PYTHON_VERSION=3.12.11` (pin for first deploy) |
    | Root Directory | `backend` |
    | Build Command | `pip install -r requirements.txt` |
    | Start Command (Free plan) | `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
@@ -114,7 +125,7 @@ service from `render.yaml`.
    use `uvicorn app.main:app --host 0.0.0.0 --port $PORT` as its Start Command.
    Pre-deploy migrations are preferable for paid services because they run
    before the new application version starts.
-4. In the service form's **Advanced** section, add the environment variables
+4. In the service form's **Advanced** section, set `PYTHON_VERSION=3.12.11` and add the environment variables
    from the next section before creating the service. In particular, set the
    `DATABASE_URL` from §1, a `SECRET_KEY`, and `CORS_ORIGINS` to the production
    Vercel origin you plan to use. If you have not created the Vercel project
@@ -145,6 +156,7 @@ service from `render.yaml`.
 
 | Variable | Required | Value / how to generate |
 |---|---|---|
+| `PYTHON_VERSION` | **Yes for reproducible first deploy** | `3.12.11` (pin a supported Python 3.12 patch release; Render currently defaults new services to Python 3.14) |
 | `DATABASE_URL` | **Yes** | The Session pooler URI from §1, with the `postgresql+psycopg://` driver prefix and `sslmode=require` |
 | `SECRET_KEY` | **Yes** | Generate a unique key with `openssl rand -hex 32`; on Windows PowerShell, `py -c "import secrets; print(secrets.token_hex(32))"` also works. Use at least 32 characters per environment; the app rejects a missing, short, or default key with PostgreSQL. |
 | `SECURE_COOKIES` | **Yes** | `true` — Vercel serves HTTPS, and the refresh cookie is set with the `Secure` flag |
@@ -154,7 +166,7 @@ service from `render.yaml`.
 | `SEED_ORG_NAME` | First boot | Display name, e.g. `My Company` |
 | `SEED_OWNER_NAME` | First boot | Administrator's name, e.g. `Jane Smith` |
 | `SEED_ADMIN_EMAIL` | First boot | Administrator e-mail, e.g. `owner@example.com` |
-| `SEED_ADMIN_PASSWORD` | First boot | Password, **12+ characters**. **Delete this variable after the first successful boot** (see §4). |
+| `SEED_ADMIN_PASSWORD` | First boot | Password, **12+ characters**. **Delete this variable only after logs confirm seeding and a login succeeds** (see §4). |
 | `ACCESS_TOKEN_MINUTES` | No | Default `15` |
 | `REFRESH_TOKEN_DAYS` | No | Default `7` |
 | `APP_NAME` | No | Default `WellCosting Pro` |
@@ -167,7 +179,7 @@ Notes:
   minutes without inbound traffic; waking it can take about a minute. The API
   filesystem is ephemeral, so keep the database on Supabase, not local SQLite.
 - Verify the deploy at `https://<actual-service-url>.onrender.com/api/health`.
-  A successful database-backed check should include `"status":"ok"` and
+  A response to this endpoint is **not** proof of database connectivity: the code catches database errors and can return HTTP 200 with `admin_seeded:false`. A successfully migrated and seeded database should include `"status":"ok"` and
   `"admin_seeded":false` before provisioning or `true` afterwards. This endpoint
   is a liveness check: if it reports `false`, inspect Render logs as well,
   because an unavailable database can also prevent the owner check.
@@ -248,8 +260,7 @@ deploy, including Free):** before the first API start, set all five variables:
 `SEED_ADMIN_PASSWORD` (§2). Use a workspace slug such as `my-company`, a valid
 owner email, and a unique password of at least 12 characters. The API applies
 Alembic migrations first, then creates the initial workspace and owner from
-these values. Wait for Render logs to report `Seeded administrator ...`, then
-**remove `SEED_ADMIN_PASSWORD`** from Render's Environment page and redeploy.
+these values. Wait for Render logs to report `Seeded administrator ...`, verify `admin_seeded:true`, and **successfully sign in once**. Only then **remove `SEED_ADMIN_PASSWORD`** from Render's Environment page and redeploy.
 Removing the other four seed values is also recommended. Verify the health
 response shows `"admin_seeded":true`.
 
@@ -283,6 +294,27 @@ e-mail and the password you chose.
       Supabase plan limits, network restrictions, and custom-domain needs.
 
 ## 6. Troubleshooting
+
+### Diagnostic sequence: follow this order instead of guessing
+
+1. **Build failed:** open Render → service → **Events → failed deploy → Logs**. Check Python version, `backend` root directory, and dependency installation. Set `PYTHON_VERSION=3.12.11` and use **Save, rebuild, and deploy** if changing the runtime.
+2. **Build succeeded but startup failed:** locate the first error after `alembic upgrade head`. If it says `password authentication failed`, `could not translate host name`, or `connection refused`, fix the Supabase Session pooler URI. If it says `SECRET_KEY`, fix that variable. If it says `alembic` or `ModuleNotFoundError`, verify the root directory and installed requirements.
+3. **Service live but `admin_seeded:false`:** inspect logs for `Administrator setup failed`, `No administrator account exists`, or database exceptions. Verify that all five `SEED_*` variables are set, and that migrations finished. Do not treat HTTP 200 from `/api/health` as proof of a working database.
+4. **Render API works, Vercel API fails:** check `frontend/vercel.json` for the actual Render hostname, commit the change, and verify a new production Vercel deployment. Test `https://YOUR-VERCEL-DOMAIN/api/health` before testing login.
+5. **Login fails:** first verify `admin_seeded:true`; then use the exact workspace slug, email and password configured in Render. Check Render logs for validation errors. Never reset the database simply to fix login.
+
+### Safe database URL validation
+
+In Supabase → **Connect → Session pooler**, copy the URI **as a whole**. Preserve its host and username (commonly `postgres.PROJECT_REF`), port `5432`, and database name. Replace the URI prefix with `postgresql+psycopg://`, insert the database password with reserved characters percent-encoded, and append `sslmode=require` using `?` or `&` as appropriate. Do not mix the direct-connection username/host with the pooler hostname. Do not send the completed URI to anyone.
+
+### First-deployment pass/fail gates
+
+- **Gate A:** Render build installs Python dependencies without errors.
+- **Gate B:** Alembic migrations finish, followed by Uvicorn listening on Render's `PORT`.
+- **Gate C:** Render logs confirm administrator provisioning; `/api/health` reports `admin_seeded:true`.
+- **Gate D:** Vercel `/api/health` reaches Render via the rewrite.
+- **Gate E:** Login works at the Vercel production domain; only now remove the bootstrap password.
+
 
 | Symptom | Likely cause |
 |---|---|
