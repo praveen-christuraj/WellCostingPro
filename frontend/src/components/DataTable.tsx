@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Box, Button, Collapse, Divider, IconButton, InputAdornment, Menu, MenuItem, Paper, TextField, Typography } from '@mui/material'
+import { Alert, Box, Button, Collapse, Divider, IconButton, InputAdornment, Menu, MenuItem, Paper, TextField, Typography } from '@mui/material'
 import { AddRounded, CloseRounded, DownloadRounded, FilterListRounded, SearchRounded, UploadRounded } from '@mui/icons-material'
 import { AgGridReact } from 'ag-grid-react'
 import { AllCommunityModule, ModuleRegistry, themeQuartz, type ColDef } from 'ag-grid-community'
@@ -21,8 +21,16 @@ function fieldDefs<T extends object>(columns: ColDef<T>[]): FieldDef[] {
     })
 }
 
-export function DataTable<T extends object>({ rows, columns, searchPlaceholder = 'Search records...', exportName = 'export', onImport }: {
-  rows: T[]; columns: ColDef<T>[]; searchPlaceholder?: string; exportName?: string; onImport?: () => void
+export function DataTable<T extends object>({ rows, columns, searchPlaceholder = 'Search records...', exportName = 'export', onImport, canExport = true, selectable = false, onSelectionChange, onExport }: {
+  rows: T[]
+  columns: ColDef<T>[]
+  searchPlaceholder?: string
+  exportName?: string
+  onImport?: () => void
+  canExport?: boolean
+  selectable?: boolean
+  onSelectionChange?: (selectedRows: T[]) => void
+  onExport?: (kind: 'csv' | 'xlsx' | 'pdf', recordCount: number) => Promise<void> | void
 }) {
   const { mode } = useColorMode()
   const [search, setSearch] = useState('')
@@ -32,6 +40,7 @@ export function DataTable<T extends object>({ rows, columns, searchPlaceholder =
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [exportAnchor, setExportAnchor] = useState<null | HTMLElement>(null)
+  const [exportError, setExportError] = useState('')
   const [pageSize, setPageSize] = useState(20)
 
   const fields = useMemo(() => fieldDefs(columns), [columns])
@@ -60,7 +69,7 @@ export function DataTable<T extends object>({ rows, columns, searchPlaceholder =
         if (!value) return false
         const day = new Date(value as string).getTime()
         if (dateFrom && day < new Date(`${dateFrom}T00:00:00`).getTime()) return false
-        if (dateTo && day > new Date(`${dateTo}T23:59:59`).getTime()) return false
+        if (dateTo && day > new Date(`${dateTo}T23:59:59.999`).getTime()) return false
       }
       return true
     })
@@ -72,11 +81,17 @@ export function DataTable<T extends object>({ rows, columns, searchPlaceholder =
 
   const doExport = async (kind: 'csv' | 'xlsx' | 'pdf') => {
     setExportAnchor(null)
+    setExportError('')
     const stamp = new Date().toISOString().slice(0, 10)
     const name = `${exportName}-${stamp}`
-    if (kind === 'csv') exportCsv(`${name}.csv`, visible, exportCols)
-    if (kind === 'xlsx') await exportXlsx(`${name}.xlsx`, visible, exportCols)
-    if (kind === 'pdf') await exportPdf(`${name}.pdf`, exportName, visible, exportCols)
+    try {
+      if (onExport) await onExport(kind, visible.length)
+      if (kind === 'csv') exportCsv(`${name}.csv`, visible, exportCols)
+      if (kind === 'xlsx') await exportXlsx(`${name}.xlsx`, visible, exportCols)
+      if (kind === 'pdf') await exportPdf(`${name}.pdf`, exportName, visible, exportCols)
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : 'Export could not be completed')
+    }
   }
 
   const updateRule = (id: number, patch: Partial<Rule>) => setRules(rs => rs.map(r => r.id === id ? { ...r, ...patch } : r))
@@ -89,15 +104,16 @@ export function DataTable<T extends object>({ rows, columns, searchPlaceholder =
         <TextField placeholder={searchPlaceholder} value={search} onChange={e => setSearch(e.target.value)} size="small" sx={{ width: { xs: '100%', sm: 260 } }} InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded sx={{ color: 'text.secondary', fontSize: 19 }}/></InputAdornment> }}/>
         <Button size="small" startIcon={<FilterListRounded sx={{ fontSize: 18 }}/>} onClick={() => setFiltersOpen(o => !o)} color={activeFilters ? 'primary' : 'inherit'}>Filters{activeFilters ? ` (${activeFilters})` : ''}</Button>
         {onImport && <Button size="small" color="inherit" startIcon={<UploadRounded sx={{ fontSize: 18 }}/>} onClick={onImport}>Import</Button>}
-        <Button size="small" color="inherit" startIcon={<DownloadRounded sx={{ fontSize: 18 }}/>} onClick={e => setExportAnchor(e.currentTarget)}>Export</Button>
-        <Menu anchorEl={exportAnchor} open={!!exportAnchor} onClose={() => setExportAnchor(null)}>
+        {canExport && <Button size="small" color="inherit" startIcon={<DownloadRounded sx={{ fontSize: 18 }}/>} onClick={e => setExportAnchor(e.currentTarget)}>Export</Button>}
+        {canExport && <Menu anchorEl={exportAnchor} open={!!exportAnchor} onClose={() => setExportAnchor(null)}>
           <MenuItem onClick={() => doExport('csv')}>Export as CSV (.csv)</MenuItem>
           <MenuItem onClick={() => doExport('xlsx')}>Export as Excel (.xlsx)</MenuItem>
           <MenuItem onClick={() => doExport('pdf')}>Export as PDF (.pdf)</MenuItem>
-        </Menu>
+        </Menu>}
       </Box>
       <Typography fontSize={12} color="text.secondary">{visible.length} of {rows.length} {rows.length === 1 ? 'record' : 'records'}</Typography>
     </Box>
+    {exportError && <Alert severity="error" onClose={() => setExportError('')} sx={{ mx: 2.2, mb: 1.5 }}>{exportError}</Alert>}
     <Collapse in={filtersOpen} unmountOnExit>
       <Box sx={{ px: 2.2, pb: 2.2 }}>
         <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 2 }}>
@@ -153,6 +169,8 @@ export function DataTable<T extends object>({ rows, columns, searchPlaceholder =
         paginationPageSize={pageSize}
         paginationPageSizeSelector={[20, 50, 100]}
         onPaginationChanged={e => setPageSize(e.api.paginationGetPageSize())}
+        rowSelection={selectable ? { mode: 'multiRow', checkboxes: true, headerCheckbox: true, selectAll: 'filtered' } : undefined}
+        onSelectionChanged={event => onSelectionChange?.(event.api.getSelectedRows())}
         getRowId={p => (p.data as { id: string }).id}
         overlayNoRowsTemplate="No records found"
         suppressCellFocus

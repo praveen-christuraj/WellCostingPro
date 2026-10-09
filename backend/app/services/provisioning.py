@@ -23,6 +23,9 @@ CAPABILITIES = {resource: actions for resource, actions in {
     "permissions": ("read", "create", "update", "delete"),
     "assignments": ("write",),
     "audit": ("read",),
+    "master-data": (
+        "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
+    ),
 }.items()}
 
 
@@ -66,14 +69,40 @@ def admin_missing(db: Session) -> bool:
 
 
 def owner_role(db: Session, organization_id: str) -> Role:
-    """The tenant's owner role, created with baseline capabilities if absent."""
+    """The tenant's immutable owner role with every provisioned capability."""
     role = db.scalar(select(Role).where(Role.organization_id == organization_id, Role.is_owner.is_(True)))
+    available = {
+        permission.key: permission
+        for permission in db.scalars(select(Permission).where(Permission.organization_id == organization_id))
+    }
+    baseline_keys = [
+        f"{resource}:{action}"
+        for resource, actions in CAPABILITIES.items()
+        for action in actions
+    ]
+    for key in baseline_keys:
+        if key not in available:
+            permission = Permission(
+                organization_id=organization_id,
+                key=key,
+                description=f"{key.split(':', 1)[1].title()} {key.split(':', 1)[0]}",
+            )
+            db.add(permission)
+            available[key] = permission
+
     if role:
+        assigned = {permission.key for permission in role.permissions}
+        role.permissions.extend(available[key] for key in baseline_keys if key not in assigned)
+        db.flush()
         return role
-    have = {permission.key for permission in db.scalars(select(Permission).where(Permission.organization_id == organization_id))}
-    missing = [Permission(organization_id=organization_id, key=f"{resource}:{action}", description=f"{action.title()} {resource}")
-               for resource, actions in CAPABILITIES.items() for action in actions if f"{resource}:{action}" not in have]
-    role = Role(organization_id=organization_id, name=OWNER_ROLE, description="Organization owner", is_owner=True, permissions=missing)
+
+    role = Role(
+        organization_id=organization_id,
+        name=OWNER_ROLE,
+        description="Organization owner",
+        is_owner=True,
+        permissions=[available[key] for key in baseline_keys],
+    )
     db.add(role)
     db.flush()
     return role
