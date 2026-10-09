@@ -1,15 +1,33 @@
 # Durable project memory
 
 ## Product scope
-WellCosting Pro is a tenant-aware SaaS foundation. This first increment covers authentication, user/role/permission CRUD, assignments, and a live overview. Well costing domain entities are **not implemented yet**.
+WellCosting Pro is a tenant-aware SaaS foundation. The current increment covers authentication, user/role/permission CRUD, assignments, a workspace dashboard, an audit trail, and the platform conventions below. Well costing domain entities are **not implemented yet**.
+
+## Standing product conventions (mandatory for every module and page)
+These are cross-cutting requirements. Every new page, module, and feature must comply; code review must reject violations. They apply to User Management, Master Data Management, Business modules, Report modules, Back-up modules, Auditing modules, and anything added later.
+
+1. **Audit everything.** All user actions on all pages (create, update, delete, assign, import, export, sign-in/out, admin changes) are written to the audit trail with actor, action, entity, summary, IP and timestamp. Audit records are read-only to normal users. Every page ships with auditing by default.
+2. **Light and dark themes.** Every screen must work in both Light and Dark themes, with matched font colours, borders, backgrounds and chart/grid palettes. The user selects the theme (persisted per browser); defaults to the system preference.
+3. **Top navigation only.** Primary navigation is a top-side horizontal bar with dropdown menus grouped by module. No side navigation drawers for primary nav.
+4. **No JSON in the database.** Never store JSON/JSONB blobs, serialized documents, or key-value payload columns. Use conventional, typed, column-wise table design (one column per business attribute). API responses may shape JSON; persistence must not.
+5. **Pagination everywhere lists appear.** Every page listing data uses pagination with page-size options **20 / 50 / 100** (default 20), both on server-driven lists and in grids.
+6. **Easy and advanced filtering.** List pages offer a quick (easy) search plus an advanced filter panel that can filter on any available column/criterion (equals, contains, ranges, etc.). Date and date-range filters are kept as a separate, dedicated control group (from/to pickers), distinct from the general filters.
+7. **Import and export.** Data list pages provide import from Excel-family files (**.xlsx and .csv**) and export to **.xlsx, .csv and PDF**, with preview before import and row-level errors shown inline. (Endpoints/pages that cannot support import must at least support export.)
+8. **Module-wise dashboards.** Each module (User Management, Master Data Management, Business modules, Report modules, Back-up modules, Auditing modules, …) gets its own dashboard/summary page showing module KPIs and recent activity. Modules are still being added; do not represent unbuilt modules as shipped.
+9. **Navy Blue & White enterprise theme.** Professional Navy Blue and White palette (light) and navy-based dark palette; no green branding, no unnecessary animations, no decorative motion, no emojis. Enterprise-grade, business-oriented, well-structured layouts.
+10. **Alerts near the data.** Error messages, warnings and confirmations appear next to the responsible input/field or as dialog pop-ups — never as detached global banners. Destructive actions confirm via dialog.
+11. **RBAC on every page.** Every page is created with RBAC controls by default; visible actions are permission-gated and the admin user controls access through roles/permissions. The API remains the authorization authority.
 
 ## Architecture decisions
-- React 19 + MUI 7 + AG Grid 35 + ECharts 6 + Vite, routed in `frontend/src/App.tsx`.
+- React 19 + MUI 7 + AG Grid 35 + ECharts 6 + Vite, routed in `frontend/src/App.tsx`. MUI light/dark themes built in `frontend/src/theme.ts`, toggled via `frontend/src/context/ThemeContext.tsx` (persists to `localStorage`, sets `data-theme` on `<html>` for CSS variables).
+- Navigation is the top bar in `frontend/src/components/Layout.tsx`: module dropdown menus, theme toggle, account menu. No sidebar.
+- `frontend/src/components/DataTable.tsx` is the standard list surface: quick search, advanced filters (per-column rules + separate date & date-range group), AG Grid pagination 20/50/100, and Export (CSV/XLSX/PDF) via `frontend/src/lib/export.ts`. `frontend/src/components/ImportDialog.tsx` is the standard import flow (xlsx/csv parse, preview, row-level errors).
 - FastAPI + SQLAlchemy 2 + Alembic; PostgreSQL for Compose/deployment, SQLite only for lightweight local development and tests.
-- Organization IDs scope all RBAC records; never accept an organization ID in a management request. Authentication uses workspace slug + email + password.
+- Organization IDs scope all RBAC and audit records; never accept an organization ID in a management request. Authentication uses workspace slug + email + password.
 - Access JWT stays in browser memory; rotating opaque refresh tokens are hashed in DB and sent as HttpOnly SameSite cookies. A password change revokes sessions and increments token version.
 - API is the authorization authority. Client-side `can()` only hides controls. Owner role is immutable and assigned only by provisioning to prevent lockout. Nonowners cannot grant access they don't have.
-- Capability keys use `resource:action`; baseline API capabilities are provisioned per organization, and custom capabilities are tenant data.
+- Capability keys use `resource:action`; baseline API capabilities are provisioned per organization, and custom capabilities are tenant data. Baseline includes `audit:read` for the Auditing module.
+- **Audit trail is column-wise** (`audit_logs` table: actor, action, entity_type, entity_id, entity_label, summary, ip_address, user_agent, created_at — never a JSON payload column). `app/services/audit.py` records entries in the same transaction as the change; `app/api/audit.py` serves the paginated, filterable `/audit` list behind `audit:read`.
 - Migrations are explicit Alembic revisions. Do not use `create_all` in the app runtime.
 - The owner account is the platform administrator. On a new device the database is empty, so at startup the API detects the missing owner and asks the operator to create one (`app/bootstrap.py` + prompts in `app/services/console.py`, provisioning in `app/services/provisioning.py`, schema state in `app/core/migrations.py`). It never invents credentials, never writes to an existing tenant, never creates tables behind Alembic and never blocks a non-interactive process; `SEED_*` variables cover unattended first boots and `BOOTSTRAP_ADMIN_ON_STARTUP=false` disables the check. `python -m app.seed` is the same flow as a CLI, `--check` exits 0 admin present / 1 missing / 2 unmigrated / 3 failed.
 
@@ -20,7 +38,7 @@ WellCosting Pro is a tenant-aware SaaS foundation. This first increment covers a
 - Guide: `docs/deployment.md`; blueprint: `render.yaml`.
 
 ## Next engineering priorities
-Well/project/cost domain model, invitation and password reset email flow, SSO/MFA, structured audit trail, paginated server-side grids, stronger distributed rate limiting, background jobs, billing and tenant lifecycle automation, observability, PostgreSQL integration tests and deployment hardening. Do not represent these as shipped.
+Well/project/cost domain model (with its own module dashboard), invitation and password reset email flow, SSO/MFA, server-driven pagination and bulk export endpoints for very large datasets, richer audit retention/rotation, stronger distributed rate limiting, background jobs, billing and tenant lifecycle automation, observability, PostgreSQL integration tests and deployment hardening. Every new module must follow the Standing product conventions above. Do not represent these as shipped.
 
 ## Verification
-`cd backend && ../.venv/bin/python -m pytest -q`; `cd frontend && npm run build`; `make graph`.
+`cd backend && ../.venv/bin/python -m pytest -q`; `cd frontend && npm install && npm run build`; `make graph`.
