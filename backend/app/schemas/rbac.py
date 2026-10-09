@@ -86,3 +86,24 @@ class Overview(BaseModel):
     permissions: int
     recent_users: list[UserOut]
     role_distribution: list[dict]
+
+
+class AuditOut(ORMModel):
+    id: str
+    actor_user_id: str | None
+    actor_email: str
+    actor_name: str
+    action: str
+    entity_type: str
+    entity_id: str | None
+    entity_label: str
+    summary: str
+    ip_address: str
+    created_at: datetime
+
+
+class AuditPage(BaseModel):
+    items: list[AuditOut]
+    total: int
+    page: int
+    page_size: int

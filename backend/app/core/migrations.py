@@ -14,7 +14,7 @@ from app.core.database import engine as default_engine
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = BACKEND_ROOT / "alembic.ini"
-REQUIRED_TABLES = ("organizations", "users", "roles", "permissions", "user_roles", "role_permissions")
+REQUIRED_TABLES = ("organizations", "users", "roles", "permissions", "user_roles", "role_permissions", "audit_logs")
 
 # schema_status() results, ordered from "nothing exists" to "usable".
 MISSING, BEHIND, READY = "missing", "behind", "ready"

@@ -1,3 +1,5 @@
 # Skill: implement a full-stack feature
 
 Start with a tenant-scoped model and an explicit Alembic revision; add Pydantic I/O, a versioned API route with server-side authorization, and tests for success/failure/isolation. Add typed frontend API calls, a responsive MUI interface, accessible form labels and empty/error states. Use AG Grid for tabular data and ECharts for actual API-derived metrics. Keep browser calls relative to `/api`, so Vite/nginx proxy them. Run backend tests and frontend build, then regenerate `.agent/memory/architecture.dot`.
+
+Every feature must follow the Standing product conventions in `.agent/memory/project.md`: column-wise tables (no JSON columns), audit records for all actions, RBAC guard on every page, list pages via `DataTable` (pagination 20/50/100, easy + advanced + date-range filters, xlsx/csv/PDF export; `ImportDialog` for xlsx/csv import), alerts beside the responsible input or in dialogs, Navy Blue & White light/dark themes with no animations or emojis, top navigation module dropdowns, and a dashboard/summary page per module.

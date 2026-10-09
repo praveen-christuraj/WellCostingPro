@@ -22,6 +22,7 @@ CAPABILITIES = {resource: actions for resource, actions in {
     "roles": ("read", "create", "update", "delete"),
     "permissions": ("read", "create", "update", "delete"),
     "assignments": ("write",),
+    "audit": ("read",),
 }.items()}
 
 

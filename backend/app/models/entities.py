@@ -82,3 +82,22 @@ class RefreshSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class AuditLog(Base):
+    """Immutable record of a user action. Column-wise by convention — never a JSON payload."""
+
+    __tablename__ = "audit_logs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    actor_email: Mapped[str] = mapped_column(String(255), default="")
+    actor_name: Mapped[str] = mapped_column(String(160), default="")
+    action: Mapped[str] = mapped_column(String(40), index=True)  # create | update | delete | assign | login | ...
+    entity_type: Mapped[str] = mapped_column(String(40), index=True)  # user | role | permission | auth | ...
+    entity_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    entity_label: Mapped[str] = mapped_column(String(255), default="")
+    summary: Mapped[str] = mapped_column(String(500), default="")
+    ip_address: Mapped[str] = mapped_column(String(45), default="")
+    user_agent: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
