@@ -103,10 +103,14 @@ def create_service(
     provider: str = "In House",
     vendor_id: str | None = None,
 ) -> dict:
+    if vendor_id is None:
+        options = client.get("/api/v1/master-data/vendors/options", headers=headers).json()
+        vendor_id = options[0]["id"] if options else create_vendor(client, headers)["id"]
     response = client.post(
         "/api/v1/master-data/services",
         headers=headers,
         json={
+            "service_code": name.upper().replace(" ", "-"),
             "service_name": name,
             "service_category": category,
             "provider_type": provider,
@@ -133,7 +137,7 @@ def test_services_are_tenant_scoped_and_validate_category_provider_and_vendor():
             provider="3rd Party",
             vendor_id=vendor["id"],
         )
-        assert created["service_code"] == "SVC-0001"
+        assert created["service_code"] == "WIRELINE-CASED-HOLE-EVALUATION"
         assert created["service_category"] == "Completion Services"
         assert created["provider_type"] == "Third Party Services"
         assert created["vendor_code"] == vendor["vendor_code"]
@@ -146,7 +150,7 @@ def test_services_are_tenant_scoped_and_validate_category_provider_and_vendor():
             "/api/v1/master-data/services",
             headers=north,
             json={
-                "service_name": "Foreign Vendor Service",
+                "service_code": "FOREIGN-VENDOR-SERVICE", "service_name": "Foreign Vendor Service",
                 "service_category": "Drilling Services",
                 "provider_type": "Third Party",
                 "vendor_id": south_vendor["id"],
@@ -158,7 +162,7 @@ def test_services_are_tenant_scoped_and_validate_category_provider_and_vendor():
             "/api/v1/master-data/services",
             headers=north,
             json={
-                "service_name": "Unassigned External Service",
+                "service_code": "UNASSIGNED-EXTERNAL-SERVICE", "service_name": "Unassigned External Service",
                 "service_category": "Drilling Services",
                 "provider_type": "Third Party",
             },
@@ -168,7 +172,7 @@ def test_services_are_tenant_scoped_and_validate_category_provider_and_vendor():
             "/api/v1/master-data/services",
             headers=north,
             json={
-                "service_name": "Invalid Category Service",
+                "service_code": "INVALID-CATEGORY-SERVICE", "service_name": "Invalid Category Service",
                 "service_category": "Well Services",
                 "provider_type": "In House",
             },
@@ -179,7 +183,7 @@ def test_services_are_tenant_scoped_and_validate_category_provider_and_vendor():
             "/api/v1/master-data/services",
             headers=north,
             json={
-                "service_name": "wireline cased hole evaluation",
+                "service_code": "DUP-NAME", "vendor_id": vendor["id"], "service_name": "wireline cased hole evaluation",
                 "service_category": "Drilling Services",
                 "provider_type": "In House",
             },
@@ -187,15 +191,15 @@ def test_services_are_tenant_scoped_and_validate_category_provider_and_vendor():
         assert duplicate_name.status_code == 409
 
         internal = create_service(client, north, name="Internal Wellsite Support")
-        assert internal["service_code"] == "SVC-0002"
+        assert internal["service_code"] == "INTERNAL-WELLSITE-SUPPORT"
         updated = client.patch(
             f"/api/v1/master-data/services/{created['id']}",
             headers=north,
-            json={"provider_type": "In House", "vendor_id": None, "service_category": "Drilling"},
+            json={"provider_type": "In House", "vendor_id": vendor["id"], "service_category": "Drilling"},
         )
         assert updated.status_code == 200, updated.text
         assert updated.json()["provider_type"] == "In House Services"
-        assert updated.json()["vendor_id"] is None
+        assert updated.json()["vendor_id"] == vendor["id"]
         assert updated.json()["service_category"] == "Drilling Services"
 
         summary = client.get("/api/v1/master-data/services/overview", headers=north)
@@ -205,9 +209,9 @@ def test_services_are_tenant_scoped_and_validate_category_provider_and_vendor():
         assert next(item["count"] for item in stats["category_counts"] if item["key"] == "Drilling Services") == 2
         assert next(item["count"] for item in stats["provider_type_counts"] if item["key"] == "In House Services") == 2
 
-        # Service numbering is workspace-local, just like each master-data code.
+        # Service codes are supplied by the user.
         south_service = create_service(client, south, name="South Service")
-        assert south_service["service_code"] == "SVC-0001"
+        assert south_service["service_code"] == "SOUTH-SERVICE"
 
 
 def test_services_soft_delete_restore_bulk_actions_and_audit_are_scoped():
@@ -280,7 +284,7 @@ def test_services_soft_delete_restore_bulk_actions_and_audit_are_scoped():
         assert services_stat["deleted_count"] == 0
 
 
-def test_service_import_accepts_legacy_provider_labels_and_restores_by_name():
+def test_service_import_accepts_legacy_provider_labels_and_restores_by_code():
     with TestClient(app) as client:
         headers = login(client)
         vendor = create_vendor(client, headers, "COMPLETIONS-01")
@@ -290,19 +294,19 @@ def test_service_import_accepts_legacy_provider_labels_and_restores_by_name():
             json={
                 "rows": [
                     {
-                        "service_name": "Completion Wireline",
+                        "service_code": "COMPLETION-WIRELINE", "service_name": "Completion Wireline",
                         "service_category": "Completion Services",
                         "provider_type": "3rd Party",
                         "vendor_code": vendor["vendor_code"],
                         "description": "Third-party intervention crew",
                     },
                     {
-                        "service_name": "Internal Rig Maintenance",
+                        "service_code": "INTERNAL-RIG-MAINTENANCE", "service_name": "Internal Rig Maintenance", "vendor_code": vendor["vendor_code"],
                         "provider_type": "Inhouse",
                         "description": "Scheduled internal maintenance",
                     },
                     {
-                        "service_name": "Missing External Vendor",
+                        "service_code": "MISSING-EXTERNAL-VENDOR", "service_name": "Missing External Vendor",
                         "service_category": "Drilling Services",
                         "provider_type": "Third Party",
                     },
@@ -329,7 +333,7 @@ def test_service_import_accepts_legacy_provider_labels_and_restores_by_name():
             headers=headers,
             json={
                 "rows": [{
-                    "service_name": "Internal Rig Maintenance",
+                    "service_code": "INTERNAL-RIG-MAINTENANCE", "service_name": "Internal Rig Maintenance", "vendor_code": vendor["vendor_code"],
                     "service_category": "Completion",
                     "provider_type": "Internal",
                     "description": "Updated internal scope",
@@ -444,7 +448,7 @@ def test_service_endpoints_enforce_master_data_rbac():
         assert client.post(
             "/api/v1/master-data/services",
             headers=reader_headers,
-            json={"service_name": "Forbidden", "service_category": "Drilling Services", "provider_type": "In House"},
+            json={"service_code": "FORBIDDEN", "service_name": "Forbidden", "service_category": "Drilling Services", "provider_type": "In House"},
         ).status_code == 403
         assert client.patch(
             f"/api/v1/master-data/services/{service['id']}",
@@ -457,5 +461,98 @@ def test_service_endpoints_enforce_master_data_rbac():
         assert client.post(
             "/api/v1/master-data/services/import",
             headers=reader_headers,
-            json={"rows": [{"service_name": "Forbidden", "provider_type": "In House"}]},
+            json={"rows": [{"service_code": "FORBIDDEN", "service_name": "Forbidden", "provider_type": "In House"}]},
         ).status_code == 403
+
+
+@pytest.mark.parametrize('provider', ['In House Services', 'Third Party Services'])
+def test_manual_codes_and_vendor_assignment_are_required_and_unique(provider):
+    with TestClient(app) as client:
+        headers = login(client)
+        vendor = create_vendor(client, headers)
+        payload = dict(service_code=' user-code ', service_name='Manual service',
+                       service_category='Drilling Services', provider_type=provider,
+                       vendor_id=vendor['id'])
+        for field, value in [('service_code', ''), ('service_code', '   '), ('service_code', None), ('vendor_id', None)]:
+            rejected = client.post('/api/v1/master-data/services', headers=headers, json={**payload, field: value})
+            assert rejected.status_code == 422, rejected.text
+        created = client.post('/api/v1/master-data/services', headers=headers, json=payload)
+        assert created.status_code == 201, created.text
+        service = created.json()
+        assert service['service_code'] == 'USER-CODE'
+        assert service['vendor_id'] == vendor['id']
+        duplicate = client.post('/api/v1/master-data/services', headers=headers, json={**payload, 'service_name': 'Different name'})
+        assert duplicate.status_code == 409
+        endpoint = f"/api/v1/master-data/services/{service['id']}"
+        assert client.patch(endpoint, headers=headers, json={'vendor_id': None}).status_code == 422
+        renamed = client.patch(endpoint, headers=headers, json={'service_code': ' new-code '})
+        assert renamed.status_code == 200
+        assert renamed.json()['service_code'] == 'NEW-CODE'
+        second = create_service(client, headers, name='Second service', vendor_id=vendor['id'])
+        assert client.patch(endpoint, headers=headers, json={'service_code': second['service_code'].lower()}).status_code == 409
+        assert client.delete(endpoint, headers=headers).status_code == 200
+        assert client.post('/api/v1/master-data/services', headers=headers, json={**payload, 'service_code': 'new-code', 'service_name': 'Third name'}).status_code == 409
+        # Deleted/foreign vendors are rejected for both provider types.
+        other = create_vendor(client, headers, 'DELETED')
+        assert client.delete(f"/api/v1/master-data/vendors/{other['id']}", headers=headers).status_code == 200
+        assert client.post('/api/v1/master-data/services', headers=headers, json={**payload, 'vendor_id': other['id']}).status_code == 422
+        south = login(client, 'south')
+        foreign = create_vendor(client, south)
+        assert client.post('/api/v1/master-data/services', headers=headers, json={**payload, 'vendor_id': foreign['id']}).status_code == 422
+        # The same manual code is permitted in a separate workspace.
+        assert client.post('/api/v1/master-data/services', headers=south, json={**payload, 'service_code': 'new-code', 'vendor_id': foreign['id']}).status_code == 201
+
+
+def test_vendor_type_round_trips_and_import_preserves_legacy_classification():
+    with TestClient(app) as client:
+        headers = login(client)
+        vendor = create_vendor(client, headers)
+        assert vendor['vendor_type'] == 'Third party'
+        endpoint = f"/api/v1/master-data/vendors/{vendor['id']}"
+        assert client.patch(endpoint, headers=headers, json={'vendor_type': 'Inhouse'}).json()['vendor_type'] == 'Inhouse'
+        assert client.patch(endpoint, headers=headers, json={'vendor_type': 'Unknown'}).status_code == 422
+        assert client.patch(endpoint, headers=headers, json={'vendor_type': None}).status_code == 422
+        imported = client.post('/api/v1/master-data/vendors/import', headers=headers, json={'rows': [
+            {'vendor_code': vendor['vendor_code'], 'vendor_name': 'Internal team'},
+            {'vendor_code': 'IN-02', 'vendor_name': 'Second team', 'vendor_type': 'Inhouse'},
+            {'vendor_code': 'INVALID', 'vendor_name': 'Invalid team', 'vendor_type': 'Invalid'},
+        ]})
+        assert imported.json()['imported_count'] == 2, imported.text
+        assert imported.json()['error_count'] == 1
+        assert client.get(endpoint, headers=headers).json()['vendor_type'] == 'Inhouse'
+        options = client.get('/api/v1/master-data/vendors/options', headers=headers).json()
+        assert all(v['vendor_type'] == 'Inhouse' for v in options)
+        service = create_service(client, headers, vendor_id=vendor['id'])
+        assert client.delete(endpoint, headers=headers).status_code == 409
+        service_endpoint = f"/api/v1/master-data/services/{service['id']}"
+        assert client.delete(service_endpoint, headers=headers).status_code == 200
+        assert client.delete(endpoint, headers=headers).status_code == 200
+        assert client.post(service_endpoint + '/restore', headers=headers).status_code == 409
+        assert client.post('/api/v1/master-data/services/bulk-restore', headers=headers, json={'ids': [service['id']]}).status_code == 409
+        assert client.post(endpoint + '/restore', headers=headers).status_code == 200
+        assert client.post(service_endpoint + '/restore', headers=headers).status_code == 200
+
+
+def test_import_uses_manual_codes_and_reports_invalid_rows_without_partial_updates():
+    with TestClient(app) as client:
+        headers = login(client)
+        vendor = create_vendor(client, headers)
+        base = dict(service_name='Imported internal', provider_type='Inhouse', vendor_code=vendor['vendor_code'])
+        endpoint = '/api/v1/master-data/services/import'
+        result = client.post(endpoint, headers=headers, json={'rows': [
+            {**base, 'service_code': 'manual-01'},
+            {**base, 'service_name': 'Missing code'},
+            {**base, 'service_name': 'Missing vendor', 'service_code': 'manual-02', 'vendor_code': ''},
+            {**base, 'service_name': 'Duplicate code', 'service_code': 'MANUAL-01'},
+            {**base, 'service_name': 'Valid second', 'service_code': 'manual-03'},
+        ]})
+        assert result.json()['imported_count'] == 2, result.text
+        assert result.json()['error_count'] == 3
+        # Name changes update the same record by code; conflicting names roll back.
+        rows = client.get('/api/v1/master-data/services', headers=headers).json()
+        original = next(row for row in rows if row['service_code'] == 'MANUAL-01')
+        assert client.post(endpoint, headers=headers, json={'rows': [{**base, 'service_code': 'manual-01', 'service_name': 'Renamed'}]}).json()['imported_count'] == 1
+        conflict = client.post(endpoint, headers=headers, json={'rows': [{**base, 'service_code': 'manual-01', 'service_name': 'Valid second'}]})
+        assert conflict.json()['error_count'] == 1
+        current = client.get(f"/api/v1/master-data/services/{original['id']}", headers=headers).json()
+        assert current['service_name'] == 'Renamed'

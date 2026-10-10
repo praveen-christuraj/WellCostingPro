@@ -25,7 +25,7 @@ class Service(MasterDataRecord):
         ),
         CheckConstraint(
             "(provider_type = 'Third Party Services' AND vendor_id IS NOT NULL) OR "
-            "(provider_type = 'In House Services' AND vendor_id IS NULL)",
+            "provider_type = 'In House Services'",
             name="ck_services_provider_vendor",
         ),
         # Service names are unique per workspace regardless of letter case, including

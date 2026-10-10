@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+VendorType = Literal["Inhouse", "Third party"]
 VendorStatus = Literal["active", "inactive", "blocked"]
 OrderType = Literal["PO", "SO", "Callout", "Others"]
 OrderStatus = Literal["open", "closed", "cancelled"]
@@ -18,6 +19,7 @@ def _trim(value: Any) -> Any:
 
 
 class VendorCreate(BaseModel):
+    vendor_type: VendorType = "Third party"
     vendor_code: str = Field(min_length=1, max_length=50)
     vendor_name: str = Field(min_length=1, max_length=200)
     category: str = Field(default="", max_length=80)
@@ -45,6 +47,7 @@ class VendorCreate(BaseModel):
 
 
 class VendorUpdate(BaseModel):
+    vendor_type: VendorType | None = None
     vendor_code: str | None = Field(default=None, min_length=1, max_length=50)
     vendor_name: str | None = Field(default=None, min_length=1, max_length=200)
     category: str | None = Field(default=None, max_length=80)
@@ -72,6 +75,7 @@ class VendorUpdate(BaseModel):
 
 
 class VendorOut(BaseModel):
+    vendor_type: VendorType
     id: str
     vendor_code: str
     vendor_name: str
@@ -96,6 +100,7 @@ class VendorOut(BaseModel):
 
 
 class VendorOption(BaseModel):
+    vendor_type: VendorType
     id: str
     vendor_code: str
     vendor_name: str

@@ -34,7 +34,7 @@ export const SERVICE_PROVIDER_TYPES: ServiceProviderType[] = ['In House Services
 // The service_category column is optional so spreadsheets from the legacy
 // register still import; blank/missing categories default to Drilling Services.
 export const SERVICE_IMPORT_HEADERS = [
-  'service_name', 'provider_type', 'vendor_code', 'description',
+  'service_code', 'service_name', 'provider_type', 'vendor_code', 'description',
 ]
 export const SERVICE_OPTIONAL_IMPORT_HEADERS = ['service_category']
 
@@ -59,10 +59,11 @@ export const serviceToForm = (service: Service): ServiceFormState => ({
 })
 
 export const serviceFormToPayload = (form: ServiceFormState) => ({
+  service_code: form.service_code.trim(),
   service_name: form.service_name.trim(),
   service_category: form.service_category,
   provider_type: form.provider_type,
-  vendor_id: form.provider_type === 'Third Party Services' ? form.vendor_id || null : null,
+  vendor_id: form.vendor_id || null,
   description: form.description.trim(),
 })
 

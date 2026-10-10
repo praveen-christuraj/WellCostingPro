@@ -1,12 +1,16 @@
 // Typed contracts and labels for the Vendors and PO/SO Orders tabs.
 // Shapes mirror backend/app/schemas/vendor_master.py.
 
+export type VendorType = 'Inhouse' | 'Third party'
+export const VENDOR_TYPES: VendorType[] = ['Inhouse', 'Third party']
+
 export type VendorStatus = 'active' | 'inactive' | 'blocked'
 export type OrderType = 'PO' | 'SO' | 'Callout' | 'Others'
 export type OrderStatus = 'open' | 'closed' | 'cancelled'
 export type DocumentKind = 'po_copy' | 'signed_copy' | 'amendment_copy' | 'specification' | 'correspondence' | 'other'
 
 export type Vendor = {
+  vendor_type: VendorType
   id: string
   vendor_code: string
   vendor_name: string
@@ -31,6 +35,7 @@ export type Vendor = {
 }
 
 export type VendorOption = {
+  vendor_type: VendorType
   id: string
   vendor_code: string
   vendor_name: string
@@ -163,7 +168,7 @@ export const ACCEPTED_DOCUMENT_EXTENSIONS = '.pdf,.doc,.docx,.xls,.xlsx,.csv,.tx
 export const MAX_DOCUMENT_MB = 15
 
 export const VENDOR_IMPORT_HEADERS = [
-  'vendor_code', 'vendor_name', 'category', 'contact_person', 'email', 'phone',
+  'vendor_code', 'vendor_name', 'vendor_type', 'category', 'contact_person', 'email', 'phone',
   'website', 'country', 'tax_registration_no', 'address', 'status', 'credit_terms_days', 'description',
 ]
 
@@ -195,6 +200,7 @@ export const canPreview = (contentType: string, fileName: string) =>
   contentType === 'application/pdf' || contentType.startsWith('image/') || /\.(png|jpe?g|pdf)$/i.test(fileName)
 
 export const emptyVendorForm = {
+  vendor_type: 'Third party' as VendorType,
   vendor_code: '', vendor_name: '', category: '', contact_person: '', email: '', phone: '',
   website: '', country: '', tax_registration_no: '', address: '', status: 'active' as VendorStatus,
   credit_terms_days: '', description: '',
@@ -203,6 +209,7 @@ export const emptyVendorForm = {
 export type VendorFormState = typeof emptyVendorForm
 
 export const vendorToForm = (vendor: Vendor): VendorFormState => ({
+  vendor_type: vendor.vendor_type,
   vendor_code: vendor.vendor_code,
   vendor_name: vendor.vendor_name,
   category: vendor.category,
@@ -219,6 +226,7 @@ export const vendorToForm = (vendor: Vendor): VendorFormState => ({
 })
 
 export const vendorFormToPayload = (form: VendorFormState) => ({
+  vendor_type: form.vendor_type,
   vendor_code: form.vendor_code.trim(),
   vendor_name: form.vendor_name.trim(),
   category: form.category.trim(),

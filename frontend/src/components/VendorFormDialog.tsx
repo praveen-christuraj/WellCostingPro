@@ -2,6 +2,7 @@ import { Box, Divider, MenuItem, TextField, Typography } from '@mui/material'
 import { ErrorMessage, FormDialog } from './Common'
 import {
   VENDOR_CATEGORIES,
+  VENDOR_TYPES,
   VENDOR_STATUSES,
   vendorFormToPayload,
   type VendorFormState,
@@ -37,6 +38,9 @@ export function VendorFormDialog({ open, title, subtitle, form, setForm, busy, e
   >
     <Box display="grid" gap={2} pt={.5}>
       <SectionTitle>Identification</SectionTitle>
+      <TextField select label="Vendor type" required fullWidth value={form.vendor_type} onChange={event => setForm({ vendor_type: event.target.value as VendorFormState['vendor_type'] })}>
+        {VENDOR_TYPES.map(type => <MenuItem key={type} value={type}>{type}</MenuItem>)}
+      </TextField>
       <Box display="grid" gap={2} gridTemplateColumns={{ xs: '1fr', sm: '1fr 1.6fr' }}>
         <TextField label="Vendor code" required fullWidth value={form.vendor_code} onChange={event => setForm({ vendor_code: event.target.value })} helperText="Upper-cased, unique in this workspace" inputProps={{ maxLength: 50 }}/>
         <TextField label="Vendor / supplier name" required fullWidth value={form.vendor_name} onChange={event => setForm({ vendor_name: event.target.value })} inputProps={{ maxLength: 200 }}/>
