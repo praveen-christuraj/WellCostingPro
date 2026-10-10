@@ -552,7 +552,7 @@ def test_module_dashboard_counts_vendors_orders_and_documents():
 
         # The module dashboard covers the eight master-data types, and exports are audited.
         module_overview = client.get("/api/v1/master-data/overview", headers=headers).json()
-        assert module_overview["module_count"] == 8
+        assert module_overview["module_count"] == 13
         assert {module["key"] for module in module_overview["modules"]} >= {"services", "vendors", "po-so-orders"}
         assert client.post(
             "/api/v1/master-data/export-audit",

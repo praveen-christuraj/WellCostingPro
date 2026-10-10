@@ -11,7 +11,13 @@ import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import { MASTER_DATA_MODULES, type MasterDataModule, type MasterDataModuleKey, type MasterDataRecord } from '../lib/masterData'
 import { vendorToForm, type PoSoOrder, type Vendor, type VendorFormState, type VendorOption, type VendorPayload } from '../lib/vendorMaster'
+import { CONSUMABLE_TYPES, TANGIBLE_CONFIG, type CatalogueOption, type PricedRecord, type TypeConfig } from '../lib/catalogue'
 import { serviceFormToPayload, serviceToForm, type Service, type ServiceFormState } from '../lib/serviceMaster'
+
+// Priced catalogue types with soft delete (fuel has none) and the option lists behind them.
+const DELETABLE_CATALOGUE: TypeConfig[] = [TANGIBLE_CONFIG, ...CONSUMABLE_TYPES.filter(config => !config.fixed)]
+
+const catalogueModuleKeys = (items: DeletedRow[]) => [...new Set(items.filter(item => item.kind === 'catalogue').map(item => item.module_key))]
 
 const moduleFor = (key: MasterDataModuleKey): MasterDataModule =>
   MASTER_DATA_MODULES.find(module => module.key === key) ?? MASTER_DATA_MODULES[0]
@@ -19,7 +25,7 @@ const moduleFor = (key: MasterDataModuleKey): MasterDataModule =>
 // One row shape for every soft-deleted record in the module, whatever its table.
 type DeletedRow = {
   id: string
-  kind: 'reference' | 'services' | 'vendors' | 'po-so'
+  kind: 'reference' | 'services' | 'vendors' | 'po-so' | 'catalogue'
   module_key: string
   module_label: string
   code: string
@@ -46,6 +52,22 @@ const vendorRow = (vendor: Vendor): DeletedRow => ({
   id: vendor.id, kind: 'vendors', module_key: 'vendors', module_label: 'Vendors',
   code: vendor.vendor_code, name: vendor.vendor_name, symbol: null, description: vendor.description,
   is_deleted: vendor.is_deleted, deleted_at: vendor.deleted_at, created_at: vendor.created_at, updated_at: vendor.updated_at,
+})
+
+// module_key is the API path segment ('tangibles', 'drill-bits', ..., 'catalogue-options'),
+// so restore and delete actions for each group go straight to that module's endpoints.
+const catalogueRow = (record: PricedRecord, config: TypeConfig): DeletedRow => ({
+  id: record.id, kind: 'catalogue', module_key: config.key, module_label: config.label,
+  code: String(record[config.codeKey] ?? ''), name: String(record[config.nameKey] ?? ''), symbol: null,
+  description: record.description ?? '', is_deleted: record.is_deleted, deleted_at: record.deleted_at,
+  created_at: record.created_at, updated_at: record.updated_at,
+})
+
+const optionRow = (option: CatalogueOption): DeletedRow => ({
+  id: option.id, kind: 'catalogue', module_key: 'catalogue-options', module_label: option.list_label,
+  code: option.list_label, name: option.value, symbol: null,
+  description: option.parent_value ? `Under ${option.parent_value}` : '',
+  is_deleted: option.is_deleted, deleted_at: option.deleted_at, created_at: option.created_at, updated_at: option.updated_at,
 })
 
 const orderRow = (order: PoSoOrder): DeletedRow => ({
@@ -81,7 +103,7 @@ export default function DeletedMasterData() {
     setLoading(true)
     setError('')
     try {
-      const [referenceGroups, deletedServices, deletedVendors, deletedOrders, currentVendorOptions] = await Promise.all([
+      const [referenceGroups, deletedServices, deletedVendors, deletedOrders, currentVendorOptions, catalogueGroups, deletedOptions] = await Promise.all([
         Promise.all(MASTER_DATA_MODULES.map(async module => {
           const deleted = await api<MasterDataRecord[]>(`/master-data/${module.key}/deleted`)
           return deleted.map(record => referenceRow(record, module))
@@ -90,6 +112,11 @@ export default function DeletedMasterData() {
         api<Vendor[]>('/master-data/vendors/deleted'),
         api<PoSoOrder[]>('/master-data/po-so-orders/deleted'),
         api<VendorOption[]>('/master-data/vendors/options'),
+        Promise.all(DELETABLE_CATALOGUE.map(async config => {
+          const deleted = await api<PricedRecord[]>(`/master-data/${config.key}/deleted`)
+          return deleted.map(record => catalogueRow(record, config))
+        })),
+        api<CatalogueOption[]>('/master-data/catalogue-options?deleted=true'),
       ])
       setServices(deletedServices)
       setVendors(deletedVendors)
@@ -99,6 +126,8 @@ export default function DeletedMasterData() {
         ...deletedServices.map(serviceRow),
         ...deletedVendors.map(vendorRow),
         ...deletedOrders.map(orderRow),
+        ...catalogueGroups.flat(),
+        ...deletedOptions.map(optionRow),
       ].sort((left, right) => new Date(right.deleted_at ?? 0).getTime() - new Date(left.deleted_at ?? 0).getTime()))
       setSelectedRows([])
     } catch (caught) {
@@ -184,6 +213,7 @@ export default function DeletedMasterData() {
     if (record.kind === 'services') await api(`/master-data/services/${record.id}/restore`, { method: 'POST' })
     else if (record.kind === 'vendors') await api(`/master-data/vendors/${record.id}/restore`, { method: 'POST' })
     else if (record.kind === 'po-so') await api(`/master-data/po-so-orders/${record.id}/restore`, { method: 'POST' })
+    else if (record.kind === 'catalogue') await api(`/master-data/${record.module_key}/${record.id}/restore`, { method: 'POST' })
     else await api(`/master-data/${record.module_key}/${record.id}/restore`, { method: 'POST' })
   }
 
@@ -218,6 +248,10 @@ export default function DeletedMasterData() {
         }
         if (groups['po-so'].length) {
           await api('/master-data/po-so-orders/bulk-restore', { method: 'POST', body: body({ ids: groups['po-so'].map(item => item.id) }) })
+        }
+        // Catalogue values are restored per list: a removed subcategory needs its category back first.
+        for (const moduleKey of catalogueModuleKeys(targets)) {
+          await api(`/master-data/${moduleKey}/bulk-restore`, { method: 'POST', body: body({ ids: targets.filter(item => item.kind === 'catalogue' && item.module_key === moduleKey).map(item => item.id) }) })
         }
       }
       setNotice(`${targets.length} ${targets.length === 1 ? 'entry was' : 'entries were'} restored to active master data.`)
@@ -269,6 +303,9 @@ export default function DeletedMasterData() {
         if (groups.vendors.length) {
           await api('/master-data/vendors/bulk-permanent-delete', { method: 'POST', body: body({ ids: groups.vendors.map(item => item.id) }) })
         }
+        for (const moduleKey of catalogueModuleKeys(targets)) {
+          await api(`/master-data/${moduleKey}/bulk-permanent-delete`, { method: 'POST', body: body({ ids: targets.filter(item => item.kind === 'catalogue' && item.module_key === moduleKey).map(item => item.id) }) })
+        }
       }
       setPermanentOpen(false)
       setPermanentRecord(null)
@@ -299,7 +336,7 @@ export default function DeletedMasterData() {
     {
       headerName: 'ACTIONS', width: 300, minWidth: 300, maxWidth: 300, flex: 0, sortable: false,
       cellRenderer: ({ data }: { data: DeletedRow }) => <Box display="flex" alignItems="center" height="100%" gap={.2}>
-        {can('master-data:update') && data.kind !== 'po-so' && <Button size="small" onClick={() => openEdit(data)} aria-label={`Edit ${data.code}`} startIcon={<EditOutlined sx={{ fontSize: 15 }}/>}>Edit</Button>}
+        {can('master-data:update') && (data.kind === 'reference' || data.kind === 'services' || data.kind === 'vendors') && <Button size="small" onClick={() => openEdit(data)} aria-label={`Edit ${data.code}`} startIcon={<EditOutlined sx={{ fontSize: 15 }}/>}>Edit</Button>}
         {can('master-data:restore') && <Button size="small" onClick={() => void restore(data)} disabled={restoring} aria-label={`Restore ${data.code}`} startIcon={<RestoreOutlined sx={{ fontSize: 15 }}/>}>Restore</Button>}
         {can('master-data:permanent-delete') && <Tooltip title={data.kind === 'vendors' ? 'Its PO/SO orders and linked Services must be permanently deleted first' : ''}>
           <span><Button size="small" color="error" onClick={() => openPermanentDelete(data)} aria-label={`Permanently delete ${data.code}`} startIcon={<DeleteForeverOutlined sx={{ fontSize: 15 }}/>}>Delete</Button></span>
@@ -325,7 +362,7 @@ export default function DeletedMasterData() {
       <Box>
         <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>Deleted master data</Typography>
         <Typography color="text.secondary" fontSize={12} mt={.35}>
-          {rows.length} deleted {rows.length === 1 ? 'entry' : 'entries'} across reference data, services, vendors and PO/SO orders. Use row checkboxes or the header checkbox to select entries for bulk actions.
+          {rows.length} deleted {rows.length === 1 ? 'entry' : 'entries'} across reference data, services, vendors, PO/SO orders and catalogue data. Use row checkboxes or the header checkbox to select entries for bulk actions.
         </Typography>
       </Box>
       <Box display="flex" gap={1} flexWrap="wrap">

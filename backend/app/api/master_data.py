@@ -21,6 +21,7 @@ from app.models import (
     UnitOfMeasurement,
     Vendor,
 )
+from app.models.catalogue import CementAdditive, DrillBit, FuelType, MudChemical, Tangible
 from app.services import audit
 from app.schemas.master_data import (
     MasterDataActivity,
@@ -100,9 +101,26 @@ EXTENDED_MODULES: dict[str, tuple[Any, str]] = {
     "services": (Service, "Services"),
     "vendors": (Vendor, "Vendors"),
     "po-so-orders": (PurchaseOrder, "PO/SO Orders"),
+    "tangibles": (Tangible, "Tangibles"),
+    "drill-bits": (DrillBit, "Drill Bits"),
+    "mud-chemicals": (MudChemical, "Mud Chemicals"),
+    "cement-additives": (CementAdditive, "Cement Additives"),
+    "fuel-types": (FuelType, "Fuel"),
 }
 
-AUDIT_ENTITY_TYPES = ("master_data", "service", "vendor", "po_so_order", "po_so_document")
+AUDIT_ENTITY_TYPES = (
+    "master_data",
+    "service",
+    "vendor",
+    "po_so_order",
+    "po_so_document",
+    "tangible",
+    "drill_bit",
+    "mud_chemical",
+    "cement_additive",
+    "fuel_type",
+    "catalogue_option",
+)
 
 
 class MasterDataAction:
@@ -403,6 +421,8 @@ def audit_export(data: MasterDataExportAudit, request: Request, db: Db, user: Cu
             module_label = config["label"]
         elif data.module in EXTENDED_MODULES:
             module_label = EXTENDED_MODULES[data.module][1]
+        elif data.module == "catalogue-options":
+            module_label = "Catalogue lists"
         else:
             raise HTTPException(status_code=404, detail="Master data module not found")
     else:
