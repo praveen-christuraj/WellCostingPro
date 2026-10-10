@@ -6,10 +6,12 @@ import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading } from '../components/Common'
 import { VendorFormDialog } from '../components/VendorFormDialog'
+import { ServiceFormDialog } from '../components/ServiceFormDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import { MASTER_DATA_MODULES, type MasterDataModule, type MasterDataModuleKey, type MasterDataRecord } from '../lib/masterData'
-import { vendorToForm, type PoSoOrder, type Vendor, type VendorFormState, type VendorPayload } from '../lib/vendorMaster'
+import { vendorToForm, type PoSoOrder, type Vendor, type VendorFormState, type VendorOption, type VendorPayload } from '../lib/vendorMaster'
+import { serviceFormToPayload, serviceToForm, type Service, type ServiceFormState } from '../lib/serviceMaster'
 
 const moduleFor = (key: MasterDataModuleKey): MasterDataModule =>
   MASTER_DATA_MODULES.find(module => module.key === key) ?? MASTER_DATA_MODULES[0]
@@ -17,7 +19,7 @@ const moduleFor = (key: MasterDataModuleKey): MasterDataModule =>
 // One row shape for every soft-deleted record in the module, whatever its table.
 type DeletedRow = {
   id: string
-  kind: 'reference' | 'vendors' | 'po-so'
+  kind: 'reference' | 'services' | 'vendors' | 'po-so'
   module_key: string
   module_label: string
   code: string
@@ -32,6 +34,12 @@ type DeletedRow = {
 
 const referenceRow = (record: MasterDataRecord, module: MasterDataModule): DeletedRow => ({
   ...record, kind: 'reference', module_key: module.key, module_label: module.label,
+})
+
+const serviceRow = (service: Service): DeletedRow => ({
+  id: service.id, kind: 'services', module_key: 'services', module_label: 'Services',
+  code: service.service_code, name: service.service_name, symbol: null, description: service.description,
+  is_deleted: service.is_deleted, deleted_at: service.deleted_at, created_at: service.created_at, updated_at: service.updated_at,
 })
 
 const vendorRow = (vendor: Vendor): DeletedRow => ({
@@ -51,6 +59,8 @@ export default function DeletedMasterData() {
   const { can } = useAuth()
   const [rows, setRows] = useState<DeletedRow[]>([])
   const [vendors, setVendors] = useState<Vendor[]>([])
+  const [services, setServices] = useState<Service[]>([])
+  const [vendorOptions, setVendorOptions] = useState<VendorOption[]>([])
   const [selectedRows, setSelectedRows] = useState<DeletedRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -58,6 +68,7 @@ export default function DeletedMasterData() {
   const [editRecord, setEditRecord] = useState<DeletedRow | null>(null)
   const [form, setForm] = useState({ code: '', name: '', symbol: '', description: '' })
   const [vendorForm, setVendorForm] = useState<VendorFormState | null>(null)
+  const [serviceForm, setServiceForm] = useState<ServiceFormState | null>(null)
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
   const [permanentRecord, setPermanentRecord] = useState<DeletedRow | null>(null)
@@ -70,17 +81,22 @@ export default function DeletedMasterData() {
     setLoading(true)
     setError('')
     try {
-      const [referenceGroups, deletedVendors, deletedOrders] = await Promise.all([
+      const [referenceGroups, deletedServices, deletedVendors, deletedOrders, currentVendorOptions] = await Promise.all([
         Promise.all(MASTER_DATA_MODULES.map(async module => {
           const deleted = await api<MasterDataRecord[]>(`/master-data/${module.key}/deleted`)
           return deleted.map(record => referenceRow(record, module))
         })),
+        api<Service[]>('/master-data/services/deleted'),
         api<Vendor[]>('/master-data/vendors/deleted'),
         api<PoSoOrder[]>('/master-data/po-so-orders/deleted'),
+        api<VendorOption[]>('/master-data/vendors/options'),
       ])
+      setServices(deletedServices)
       setVendors(deletedVendors)
+      setVendorOptions(currentVendorOptions)
       setRows([
         ...referenceGroups.flat(),
+        ...deletedServices.map(serviceRow),
         ...deletedVendors.map(vendorRow),
         ...deletedOrders.map(orderRow),
       ].sort((left, right) => new Date(right.deleted_at ?? 0).getTime() - new Date(left.deleted_at ?? 0).getTime()))
@@ -100,9 +116,17 @@ export default function DeletedMasterData() {
     if (record.kind === 'vendors') {
       const vendor = vendors.find(item => item.id === record.id)
       if (vendor) setVendorForm(vendorToForm(vendor))
+      setServiceForm(null)
+      return
+    }
+    if (record.kind === 'services') {
+      const service = services.find(item => item.id === record.id)
+      if (service) setServiceForm(serviceToForm(service))
+      setVendorForm(null)
       return
     }
     setVendorForm(null)
+    setServiceForm(null)
     setForm({ code: record.code, name: record.name, symbol: record.symbol ?? '', description: record.description ?? '' })
   }
 
@@ -128,6 +152,11 @@ export default function DeletedMasterData() {
           description: vendorForm.description.trim(),
         }
         await api(`/master-data/vendors/${editRecord.id}`, { method: 'PATCH', body: body(payload) })
+      } else if (editRecord.kind === 'services' && serviceForm) {
+        await api(`/master-data/services/${editRecord.id}`, {
+          method: 'PATCH',
+          body: body(serviceFormToPayload(serviceForm)),
+        })
       } else {
         const module = moduleFor(editRecord.module_key as MasterDataModuleKey)
         const payload = {
@@ -140,6 +169,7 @@ export default function DeletedMasterData() {
       }
       setEditRecord(null)
       setVendorForm(null)
+      setServiceForm(null)
       setNotice('Deleted entry updated. Restore it when it is ready to be used again.')
       await load()
     } catch (caught) {
@@ -150,7 +180,8 @@ export default function DeletedMasterData() {
   }
 
   const restoreOne = async (record: DeletedRow) => {
-    if (record.kind === 'vendors') await api(`/master-data/vendors/${record.id}/restore`, { method: 'POST' })
+    if (record.kind === 'services') await api(`/master-data/services/${record.id}/restore`, { method: 'POST' })
+    else if (record.kind === 'vendors') await api(`/master-data/vendors/${record.id}/restore`, { method: 'POST' })
     else if (record.kind === 'po-so') await api(`/master-data/po-so-orders/${record.id}/restore`, { method: 'POST' })
     else await api(`/master-data/${record.module_key}/${record.id}/restore`, { method: 'POST' })
   }
@@ -167,6 +198,7 @@ export default function DeletedMasterData() {
         // Bulk endpoints exist per table, so group the selection and send each group.
         const groups = {
           reference: targets.filter(item => item.kind === 'reference'),
+          services: targets.filter(item => item.kind === 'services'),
           vendors: targets.filter(item => item.kind === 'vendors'),
           'po-so': targets.filter(item => item.kind === 'po-so'),
         }
@@ -176,8 +208,12 @@ export default function DeletedMasterData() {
             body: body({ records: groups.reference.map(item => ({ module: item.module_key, id: item.id })) }),
           })
         }
+        // Restore parent vendors before services that may reference them.
         if (groups.vendors.length) {
           await api('/master-data/vendors/bulk-restore', { method: 'POST', body: body({ ids: groups.vendors.map(item => item.id) }) })
+        }
+        if (groups.services.length) {
+          await api('/master-data/services/bulk-restore', { method: 'POST', body: body({ ids: groups.services.map(item => item.id) }) })
         }
         if (groups['po-so'].length) {
           await api('/master-data/po-so-orders/bulk-restore', { method: 'POST', body: body({ ids: groups['po-so'].map(item => item.id) }) })
@@ -205,12 +241,14 @@ export default function DeletedMasterData() {
     const targets = permanentRecord ? [permanentRecord] : selectedRows
     try {
       if (permanentRecord) {
-        if (permanentRecord.kind === 'vendors') await api(`/master-data/vendors/${permanentRecord.id}/permanent`, { method: 'DELETE' })
+        if (permanentRecord.kind === 'services') await api(`/master-data/services/${permanentRecord.id}/permanent`, { method: 'DELETE' })
+        else if (permanentRecord.kind === 'vendors') await api(`/master-data/vendors/${permanentRecord.id}/permanent`, { method: 'DELETE' })
         else if (permanentRecord.kind === 'po-so') await api(`/master-data/po-so-orders/${permanentRecord.id}/permanent`, { method: 'DELETE' })
         else await api(`/master-data/${permanentRecord.module_key}/${permanentRecord.id}/permanent`, { method: 'DELETE' })
       } else {
         const groups = {
           reference: targets.filter(item => item.kind === 'reference'),
+          services: targets.filter(item => item.kind === 'services'),
           vendors: targets.filter(item => item.kind === 'vendors'),
           'po-so': targets.filter(item => item.kind === 'po-so'),
         }
@@ -220,11 +258,15 @@ export default function DeletedMasterData() {
             body: body({ records: groups.reference.map(item => ({ module: item.module_key, id: item.id })) }),
           })
         }
-        if (groups.vendors.length) {
-          await api('/master-data/vendors/bulk-permanent-delete', { method: 'POST', body: body({ ids: groups.vendors.map(item => item.id) }) })
+        if (groups.services.length) {
+          await api('/master-data/services/bulk-permanent-delete', { method: 'POST', body: body({ ids: groups.services.map(item => item.id) }) })
         }
+        // Purge dependent records before their vendors so foreign-key custody is preserved.
         if (groups['po-so'].length) {
           await api('/master-data/po-so-orders/bulk-permanent-delete', { method: 'POST', body: body({ ids: groups['po-so'].map(item => item.id) }) })
+        }
+        if (groups.vendors.length) {
+          await api('/master-data/vendors/bulk-permanent-delete', { method: 'POST', body: body({ ids: groups.vendors.map(item => item.id) }) })
         }
       }
       setPermanentOpen(false)
@@ -258,7 +300,7 @@ export default function DeletedMasterData() {
       cellRenderer: ({ data }: { data: DeletedRow }) => <Box display="flex" alignItems="center" height="100%" gap={.2}>
         {can('master-data:update') && data.kind !== 'po-so' && <Button size="small" onClick={() => openEdit(data)} aria-label={`Edit ${data.code}`} startIcon={<EditOutlined sx={{ fontSize: 15 }}/>}>Edit</Button>}
         {can('master-data:restore') && <Button size="small" onClick={() => void restore(data)} disabled={restoring} aria-label={`Restore ${data.code}`} startIcon={<RestoreOutlined sx={{ fontSize: 15 }}/>}>Restore</Button>}
-        {can('master-data:permanent-delete') && <Tooltip title={data.kind === 'vendors' ? 'Its PO/SO orders must be permanently deleted first' : ''}>
+        {can('master-data:permanent-delete') && <Tooltip title={data.kind === 'vendors' ? 'Its PO/SO orders and linked Services must be permanently deleted first' : ''}>
           <span><Button size="small" color="error" onClick={() => openPermanentDelete(data)} aria-label={`Permanently delete ${data.code}`} startIcon={<DeleteForeverOutlined sx={{ fontSize: 15 }}/>}>Delete</Button></span>
         </Tooltip>}
       </Box>,
@@ -282,7 +324,7 @@ export default function DeletedMasterData() {
       <Box>
         <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>Deleted master data</Typography>
         <Typography color="text.secondary" fontSize={12} mt={.35}>
-          {rows.length} deleted {rows.length === 1 ? 'entry' : 'entries'} across the reference lists, vendors and PO/SO orders. Use row checkboxes or the header checkbox to select entries for bulk actions.
+          {rows.length} deleted {rows.length === 1 ? 'entry' : 'entries'} across reference data, services, vendors and PO/SO orders. Use row checkboxes or the header checkbox to select entries for bulk actions.
         </Typography>
       </Box>
       <Box display="flex" gap={1} flexWrap="wrap">
@@ -307,7 +349,7 @@ export default function DeletedMasterData() {
     />}
 
     <FormDialog
-      open={!!editRecord && editRecord.kind !== 'vendors'}
+      open={!!editRecord && editRecord.kind !== 'vendors' && editRecord.kind !== 'services'}
       title={`Edit deleted ${editModule?.label ?? 'master data'} entry`}
       subtitle="Changes are saved while the entry remains in Deleted Entries. Restore it separately when ready."
       onClose={() => { if (!saving) setEditRecord(null) }}
@@ -323,6 +365,19 @@ export default function DeletedMasterData() {
         <ErrorMessage message={formError}/>
       </Box>
     </FormDialog>
+
+    {serviceForm && <ServiceFormDialog
+      open={!!editRecord && editRecord.kind === 'services'}
+      title={`Edit deleted service ${editRecord?.code ?? ''}`}
+      subtitle="Changes are saved while the service remains in Deleted Entries. Restore it separately when ready."
+      form={serviceForm}
+      setForm={patch => setServiceForm(current => (current ? { ...current, ...patch } : current))}
+      vendors={vendorOptions}
+      busy={saving}
+      error={formError}
+      onClose={() => { if (!saving) { setEditRecord(null); setServiceForm(null) } }}
+      onSubmit={() => void saveEdit()}
+    />}
 
     {vendorForm && <VendorFormDialog
       open={!!editRecord && editRecord.kind === 'vendors'}

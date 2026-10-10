@@ -8,7 +8,9 @@ import { ErrorMessage, PageHeading, Tag } from '../components/Common'
 
 // Vendors and PO/SO Orders have their own pages; the reference lists share one.
 const modulePath = (key: string) =>
-  key === 'vendors' || key === 'po-so-orders' ? `/master-data/${key}` : `/master-data/records?module=${key}`
+  key === 'vendors' || key === 'po-so-orders' || key === 'services'
+    ? `/master-data/${key}`
+    : `/master-data/records?module=${key}`
 
 function activityTone(action: string): 'neutral' | 'success' | 'info' | 'warning' {
   if (action === 'create' || action === 'restore' || action === 'import') return 'success'
@@ -48,7 +50,7 @@ export default function MasterDataOverview() {
     <PageHeading
       eyebrow="MASTER DATA MANAGEMENT / OVERVIEW"
       title="Master Data Management"
-      subtitle="Workspace-wide reference data: units, currencies, drilling phases, hole sections, activities, vendors, and their PO/SO orders with attachments."
+      subtitle="Workspace-wide reference data: units, currencies, well activities, drilling and completion services, vendors, and their PO/SO orders with attachments."
       action={<Box display="flex" gap={1} flexWrap="wrap">
         <Button component={RouterLink} to="/master-data/deleted" variant="outlined" startIcon={<DeleteOutlineRounded/>}>Deleted entries</Button>
         <Button component={RouterLink} to="/master-data/records" variant="contained" endIcon={<ArrowForwardRounded/>}>Manage master data</Button>

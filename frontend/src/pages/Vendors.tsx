@@ -233,7 +233,7 @@ export default function Vendors() {
     <FormDialog
       open={deleteOpen}
       title="Move vendors to deleted entries?"
-      subtitle="This is a soft delete. Vendors with active PO/SO orders stay until those orders are removed."
+      subtitle="This is a soft delete. Vendors with active PO/SO orders or active service assignments stay until those records are moved to deleted entries."
       onClose={() => { if (!deleting) { setDeleteOpen(false); setDeleteRecord(null) } }}
       onSubmit={() => void confirmDelete()}
       busy={deleting}

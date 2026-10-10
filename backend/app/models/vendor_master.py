@@ -38,6 +38,7 @@ DOCUMENT_KINDS = (
 )
 VENDOR_CATEGORIES = (
     "Drilling",
+    "Completions",
     "Well Services",
     "Cementing",
     "Mud & Chemicals",
