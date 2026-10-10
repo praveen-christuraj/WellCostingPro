@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     access_token_minutes: int = 15
     refresh_token_days: int = 7
     secure_cookies: bool = False
+    # Vendors/PO-SO attachments are stored in the workspace database; this caps one file.
+    document_max_size_mb: int = 15
     cors_origins: str = "http://localhost:5173"
     # First-run administrator bootstrap. Ask at startup when the database has no owner.
     bootstrap_admin_on_startup: bool = True

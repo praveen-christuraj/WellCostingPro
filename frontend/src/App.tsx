@@ -14,6 +14,8 @@ const AuditLog = lazy(() => import('./pages/AuditLog'))
 const MasterDataOverview = lazy(() => import('./pages/MasterDataOverview'))
 const MasterDataRecords = lazy(() => import('./pages/MasterDataRecords'))
 const DeletedMasterData = lazy(() => import('./pages/DeletedMasterData'))
+const Vendors = lazy(() => import('./pages/Vendors'))
+const PoSoOrders = lazy(() => import('./pages/PoSoOrders'))
 
 function Guard({ permission, children }: { permission: string | string[]; children: ReactNode }) {
   const { can } = useAuth()
@@ -41,6 +43,8 @@ export default function App() {
           <Route path="audit" element={<Guard permission="audit:read"><AuditLog/></Guard>}/>
           <Route path="master-data" element={<Guard permission="master-data:read"><MasterDataOverview/></Guard>}/>
           <Route path="master-data/records" element={<Guard permission="master-data:read"><MasterDataRecords/></Guard>}/>
+          <Route path="master-data/vendors" element={<Guard permission="master-data:read"><Vendors/></Guard>}/>
+          <Route path="master-data/po-so-orders" element={<Guard permission="master-data:read"><PoSoOrders/></Guard>}/>
           <Route path="master-data/deleted" element={<Guard permission="master-data:read"><DeletedMasterData/></Guard>}/>
           <Route path="*" element={<Navigate to="/" replace/>}/>
         </Route>
