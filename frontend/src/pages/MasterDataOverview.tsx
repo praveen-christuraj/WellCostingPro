@@ -7,10 +7,14 @@ import type { MasterDataActivity, MasterDataOverview as OverviewData } from '../
 import { ErrorMessage, PageHeading, Tag } from '../components/Common'
 
 // Vendors and PO/SO Orders have their own pages; the reference lists share one.
-const modulePath = (key: string) =>
-  key === 'vendors' || key === 'po-so-orders' || key === 'services'
-    ? `/master-data/${key}`
-    : `/master-data/records?module=${key}`
+const CONSUMABLE_KEYS = ['mud-chemicals', 'cement-additives', 'fuel-types', 'drill-bits']
+
+const modulePath = (key: string) => {
+  if (key === 'vendors' || key === 'po-so-orders' || key === 'services') return `/master-data/${key}`
+  if (key === 'tangibles') return '/master-data/tangibles'
+  if (CONSUMABLE_KEYS.includes(key)) return `/master-data/consumables?type=${key}`
+  return `/master-data/records?module=${key}`
+}
 
 function activityTone(action: string): 'neutral' | 'success' | 'info' | 'warning' {
   if (action === 'create' || action === 'restore' || action === 'import') return 'success'

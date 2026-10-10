@@ -10,6 +10,9 @@ export const MASTER_DATA_TABS = [
   { key: 'services', label: 'Services', path: '/master-data/services' },
   { key: 'vendors', label: 'Vendors', path: '/master-data/vendors' },
   { key: 'po-so-orders', label: 'PO/SO Orders', path: '/master-data/po-so-orders' },
+  { key: 'tangibles', label: 'Tangibles', path: '/master-data/tangibles' },
+  { key: 'consumables', label: 'Consumables', path: '/master-data/consumables?type=mud-chemicals' },
+  { key: 'catalogue-lists', label: 'Catalogue Lists', path: '/master-data/catalogue-lists' },
 ] as const
 
 export function MasterDataTabs({ active }: { active: string }) {

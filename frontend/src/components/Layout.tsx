@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AppBar, Avatar, Box, Button, Divider, IconButton, Menu, MenuItem, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
-import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined } from '@mui/icons-material'
+import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined } from '@mui/icons-material'
 import Brand from './Brand'
 import { FormDialog, ErrorMessage } from './Common'
 import { api, body } from '../lib/api'
@@ -25,6 +25,9 @@ const modules: NavModule[] = [
     { label: 'Services', path: '/master-data/services', icon: BuildOutlined, permission: 'master-data:read' },
     { label: 'Vendors', path: '/master-data/vendors', icon: StorefrontOutlined, permission: 'master-data:read' },
     { label: 'PO/SO Orders', path: '/master-data/po-so-orders', icon: DescriptionOutlined, permission: 'master-data:read' },
+    { label: 'Tangibles', path: '/master-data/tangibles', icon: PrecisionManufacturingOutlined, permission: 'master-data:read' },
+    { label: 'Consumables', path: '/master-data/consumables', icon: OpacityOutlined, permission: 'master-data:read' },
+    { label: 'Catalogue lists', path: '/master-data/catalogue-lists', icon: ListAltOutlined, permission: 'master-data:read' },
     { label: 'Deleted entries', path: '/master-data/deleted', icon: DeleteOutlineRounded, permission: 'master-data:read' },
   ] },
   { label: 'Auditing', icon: HistoryOutlined, items: [

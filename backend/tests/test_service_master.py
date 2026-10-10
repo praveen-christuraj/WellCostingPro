@@ -278,7 +278,7 @@ def test_services_soft_delete_restore_bulk_actions_and_audit_are_scoped():
         assert export.status_code == 204, export.text
 
         overview = client.get("/api/v1/master-data/overview", headers=headers).json()
-        assert overview["module_count"] == 8
+        assert overview["module_count"] == 13
         services_stat = next(item for item in overview["modules"] if item["key"] == "services")
         assert services_stat["active_count"] == 1
         assert services_stat["deleted_count"] == 0
