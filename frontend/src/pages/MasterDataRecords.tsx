@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useSearchParams } from 'react-router-dom'
 import { AddRounded, DeleteOutlineRounded, EditOutlined } from '@mui/icons-material'
-import { Alert, Box, Button, CircularProgress, Paper, Tab, Tabs, TextField, Typography } from '@mui/material'
+import { Alert, Box, Button, CircularProgress, Paper, TextField, Typography } from '@mui/material'
 import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading } from '../components/Common'
 import { ImportDialog } from '../components/ImportDialog'
+import { MasterDataTabs } from '../components/MasterDataTabs'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import type { ImportRow } from '../lib/export'
@@ -16,7 +17,7 @@ const moduleFor = (key: string | null): MasterDataModule =>
 
 export default function MasterDataRecords() {
   const { can } = useAuth()
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
   const currentModule = moduleFor(searchParams.get('module'))
   const moduleKey: MasterDataModuleKey = currentModule.key
   const [rows, setRows] = useState<MasterDataRecord[]>([])
@@ -50,14 +51,6 @@ export default function MasterDataRecords() {
   }, [moduleKey])
 
   useEffect(() => { void load() }, [load])
-
-  const changeModule = (_event: React.SyntheticEvent, key: MasterDataModuleKey) => {
-    const next = new URLSearchParams(searchParams)
-    next.set('module', key)
-    setSearchParams(next, { replace: true })
-    setSelectedRows([])
-    setNotice('')
-  }
 
   const openCreate = () => {
     setFormRecord(null)
@@ -182,17 +175,7 @@ export default function MasterDataRecords() {
     />
 
     <Paper variant="outlined" sx={{ borderRadius: 2, borderColor: 'divider', overflow: 'hidden' }}>
-      <Tabs
-        value={moduleKey}
-        onChange={changeModule}
-        variant="scrollable"
-        scrollButtons="auto"
-        allowScrollButtonsMobile
-        aria-label="Master data types"
-        sx={{ px: { xs: 1, sm: 2 }, borderBottom: '1px solid', borderColor: 'divider' }}
-      >
-        {MASTER_DATA_MODULES.map(module => <Tab key={module.key} value={module.key} label={module.label}/>) }
-      </Tabs>
+      <MasterDataTabs active={moduleKey}/>
 
       <Box sx={{ p: { xs: 1.5, sm: 2.5 } }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap" mb={1.5}>

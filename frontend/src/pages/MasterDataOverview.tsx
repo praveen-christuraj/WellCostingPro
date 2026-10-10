@@ -6,6 +6,10 @@ import { api } from '../lib/api'
 import type { MasterDataActivity, MasterDataOverview as OverviewData } from '../lib/masterData'
 import { ErrorMessage, PageHeading, Tag } from '../components/Common'
 
+// Vendors and PO/SO Orders have their own pages; the reference lists share one.
+const modulePath = (key: string) =>
+  key === 'vendors' || key === 'po-so-orders' ? `/master-data/${key}` : `/master-data/records?module=${key}`
+
 function activityTone(action: string): 'neutral' | 'success' | 'info' | 'warning' {
   if (action === 'create' || action === 'restore' || action === 'import') return 'success'
   if (action === 'soft_delete' || action === 'permanent_delete') return 'warning'
@@ -44,7 +48,7 @@ export default function MasterDataOverview() {
     <PageHeading
       eyebrow="MASTER DATA MANAGEMENT / OVERVIEW"
       title="Master Data Management"
-      subtitle="Workspace-wide reference data for units, currencies, drilling phases, hole sections, and activities."
+      subtitle="Workspace-wide reference data: units, currencies, drilling phases, hole sections, activities, vendors, and their PO/SO orders with attachments."
       action={<Box display="flex" gap={1} flexWrap="wrap">
         <Button component={RouterLink} to="/master-data/deleted" variant="outlined" startIcon={<DeleteOutlineRounded/>}>Deleted entries</Button>
         <Button component={RouterLink} to="/master-data/records" variant="contained" endIcon={<ArrowForwardRounded/>}>Manage master data</Button>
@@ -69,7 +73,7 @@ export default function MasterDataOverview() {
           <Box className="stat-icon" sx={{ color: 'secondary.main', bgcolor: 'var(--surface-accent)' }}><LibraryBooksOutlined sx={{ fontSize: 21 }}/></Box>
           <Typography className="stat-value">{data.module_count}</Typography>
           <Typography fontWeight={700} fontSize={13}>Reference data types</Typography>
-          <Typography color="text.secondary" fontSize={11.5} mt={.5}>UOM, Currency, Phases, Hole Sections, Activities</Typography>
+          <Typography color="text.secondary" fontSize={11.5} mt={.5}>Reference lists, vendors, and PO/SO orders</Typography>
         </Paper>
       </Box>
 
@@ -88,7 +92,7 @@ export default function MasterDataOverview() {
               <Typography fontSize={12.5} fontWeight={700}>{module.label}</Typography>
               <Typography color="text.secondary" fontSize={11}>{module.active_count} active · {module.deleted_count} deleted</Typography>
             </Box>
-            <Button component={RouterLink} to={`/master-data/records?module=${module.key}`} size="small" endIcon={<ArrowForwardRounded sx={{ fontSize: 16 }}/>}>Open</Button>
+            <Button component={RouterLink} to={modulePath(module.key)} size="small" endIcon={<ArrowForwardRounded sx={{ fontSize: 16 }}/>}>Open</Button>
           </Box>)}
         </Paper>
 

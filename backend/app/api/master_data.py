@@ -10,7 +10,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import Current, Db, require
-from app.models import Activity, AuditLog, Currency, HoleSection, Phase, UnitOfMeasurement
+from app.models import (
+    Activity,
+    AuditLog,
+    Currency,
+    HoleSection,
+    Phase,
+    PurchaseOrder,
+    UnitOfMeasurement,
+    Vendor,
+)
 from app.services import audit
 from app.schemas.master_data import (
     MasterDataActivity,
@@ -82,6 +91,16 @@ MODULES: dict[str, dict[str, Any]] = {
         "symbol_max": 0,
     },
 }
+
+
+# Vendors and PO/SO Orders belong to this module but have their own richer
+# endpoints (see app/api/vendor_master.py); they still appear on the dashboard.
+EXTENDED_MODULES: dict[str, tuple[Any, str]] = {
+    "vendors": (Vendor, "Vendors"),
+    "po-so-orders": (PurchaseOrder, "PO/SO Orders"),
+}
+
+AUDIT_ENTITY_TYPES = ("master_data", "vendor", "po_so_order", "po_so_document")
 
 
 class MasterDataAction:
@@ -322,16 +341,43 @@ def overview(db: Db, user: Current) -> MasterDataOverview:
             )
         )
 
+    for key, (model, label) in EXTENDED_MODULES.items():
+        active_count = db.scalar(
+            select(func.count(model.id)).where(
+                model.organization_id == user.organization_id,
+                model.is_deleted.is_(False),
+            )
+        ) or 0
+        deleted_count = db.scalar(
+            select(func.count(model.id)).where(
+                model.organization_id == user.organization_id,
+                model.is_deleted.is_(True),
+            )
+        ) or 0
+        active_total += active_count
+        deleted_total += deleted_count
+        modules.append(
+            MasterDataModuleStats(
+                key=key,
+                label=label,
+                active_count=active_count,
+                deleted_count=deleted_count,
+            )
+        )
+
     recent = db.scalars(
         select(AuditLog)
-        .where(AuditLog.organization_id == user.organization_id, AuditLog.entity_type == "master_data")
+        .where(
+            AuditLog.organization_id == user.organization_id,
+            AuditLog.entity_type.in_(AUDIT_ENTITY_TYPES),
+        )
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .limit(8)
     ).all()
     return MasterDataOverview(
         active_records=active_total,
         deleted_records=deleted_total,
-        module_count=len(MODULES),
+        module_count=len(MODULES) + len(EXTENDED_MODULES),
         modules=modules,
         recent_activity=[
             MasterDataActivity(
@@ -351,9 +397,12 @@ def audit_export(data: MasterDataExportAudit, request: Request, db: Db, user: Cu
     """Record a client-side CSV/XLSX/PDF export in the audit trail."""
     if data.module != "all":
         config = MODULES.get(data.module)
-        if config is None:
+        if config is not None:
+            module_label = config["label"]
+        elif data.module in EXTENDED_MODULES:
+            module_label = EXTENDED_MODULES[data.module][1]
+        else:
             raise HTTPException(status_code=404, detail="Master data module not found")
-        module_label = config["label"]
     else:
         module_label = "All master data"
     inclusion = "including deleted entries" if data.include_deleted else "active entries only"

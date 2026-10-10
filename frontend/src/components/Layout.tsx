@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AppBar, Avatar, Box, Button, Divider, IconButton, Menu, MenuItem, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
-import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined } from '@mui/icons-material'
+import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined } from '@mui/icons-material'
 import Brand from './Brand'
 import { FormDialog, ErrorMessage } from './Common'
 import { api, body } from '../lib/api'
@@ -22,6 +22,8 @@ const modules: NavModule[] = [
   { label: 'Master Data Management', icon: DataObjectOutlined, items: [
     { label: 'Overview', path: '/master-data', icon: DataObjectOutlined, permission: 'master-data:read' },
     { label: 'Master data', path: '/master-data/records', icon: TableChartOutlined, permission: 'master-data:read' },
+    { label: 'Vendors', path: '/master-data/vendors', icon: StorefrontOutlined, permission: 'master-data:read' },
+    { label: 'PO/SO Orders', path: '/master-data/po-so-orders', icon: DescriptionOutlined, permission: 'master-data:read' },
     { label: 'Deleted entries', path: '/master-data/deleted', icon: DeleteOutlineRounded, permission: 'master-data:read' },
   ] },
   { label: 'Auditing', icon: HistoryOutlined, items: [

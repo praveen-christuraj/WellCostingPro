@@ -25,6 +25,8 @@ CAPABILITIES = {resource: actions for resource, actions in {
     "audit": ("read",),
     "master-data": (
         "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
+        # Vendors and PO/SO Orders keep scanned copies; document custody is separately grantable.
+        "document-upload", "document-download", "document-delete",
     ),
 }.items()}
 
