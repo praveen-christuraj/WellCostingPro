@@ -550,10 +550,10 @@ def test_module_dashboard_counts_vendors_orders_and_documents():
         activity = client.get("/api/v1/master-data/vendor-po/activity", headers=headers).json()
         assert activity and activity[0]["entity_label"].startswith(("Vendors", "PO/SO"))
 
-        # The module dashboard covers the seven master-data types, and exports are audited.
+        # The module dashboard covers the eight master-data types, and exports are audited.
         module_overview = client.get("/api/v1/master-data/overview", headers=headers).json()
-        assert module_overview["module_count"] == 7
-        assert {module["key"] for module in module_overview["modules"]} >= {"vendors", "po-so-orders"}
+        assert module_overview["module_count"] == 8
+        assert {module["key"] for module in module_overview["modules"]} >= {"services", "vendors", "po-so-orders"}
         assert client.post(
             "/api/v1/master-data/export-audit",
             json={"module": "po-so-orders", "format": "xlsx", "record_count": 1, "include_deleted": False},

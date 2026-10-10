@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import Current, Db, require
 from app.core.config import get_settings
 from app.models import AuditLog
+from app.models.service_master import Service
 from app.models.vendor_master import (
     DOCUMENT_KINDS,
     ORDER_STATUSES,
@@ -338,6 +339,22 @@ def _vendor_stats(db: Session, organization_id: str) -> tuple[dict[str, int], di
         {vendor_id: count for vendor_id, count in document_rows},
         {vendor_id: latest for vendor_id, _, latest in order_rows},
     )
+
+
+def _service_count_for_vendor(
+    db: Session,
+    organization_id: str,
+    vendor_id: str,
+    *,
+    active_only: bool,
+) -> int:
+    statement = select(func.count(Service.id)).where(
+        Service.organization_id == organization_id,
+        Service.vendor_id == vendor_id,
+    )
+    if active_only:
+        statement = statement.where(Service.is_deleted.is_(False))
+    return db.scalar(statement) or 0
 
 
 def _vendor_out(
@@ -931,6 +948,18 @@ def soft_delete_vendor(vendor_id: str, request: Request, db: Db, user: Current) 
                 f"{'order' if live_orders == 1 else 'orders'}. Move them to deleted entries first."
             ),
         )
+    active_services = _service_count_for_vendor(
+        db, user.organization_id, vendor.id, active_only=True
+    )
+    if active_services:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Vendor {vendor.vendor_code} is still assigned to {active_services} active "
+                f"service {'record' if active_services == 1 else 'records'}. "
+                "Move those services to deleted entries first."
+            ),
+        )
     vendor.is_deleted = True
     vendor.deleted_at = datetime.now(timezone.utc)
     _audit(
@@ -994,6 +1023,17 @@ def permanently_delete_vendor(vendor_id: str, request: Request, db: Db, user: Cu
             status_code=409,
             detail=f"Vendor {vendor.vendor_code} still holds {remaining} PO/SO order rows. Permanently delete those first.",
         )
+    remaining_services = _service_count_for_vendor(
+        db, user.organization_id, vendor.id, active_only=False
+    )
+    if remaining_services:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Vendor {vendor.vendor_code} is still referenced by {remaining_services} service "
+                f"{'record' if remaining_services == 1 else 'records'}. Permanently delete those services first."
+            ),
+        )
     _audit(
         db,
         user=user,
@@ -1051,6 +1091,18 @@ def bulk_soft_delete_vendors(
         raise HTTPException(
             status_code=409,
             detail=f"These vendors still have active PO/SO orders: {', '.join(sorted(blocked))}",
+        )
+    blocked_services = [
+        vendor.vendor_code
+        for vendor in vendors
+        if _service_count_for_vendor(
+            db, user.organization_id, vendor.id, active_only=True
+        )
+    ]
+    if blocked_services:
+        raise HTTPException(
+            status_code=409,
+            detail=f"These vendors are still assigned to active services: {', '.join(sorted(blocked_services))}",
         )
     deleted_at = datetime.now(timezone.utc)
     for vendor in vendors:
@@ -1113,6 +1165,14 @@ def bulk_permanent_delete_vendors(
             raise HTTPException(
                 status_code=409,
                 detail=f"Vendor {vendor.vendor_code} still holds {remaining} PO/SO order rows",
+            )
+        remaining_services = _service_count_for_vendor(
+            db, user.organization_id, vendor.id, active_only=False
+        )
+        if remaining_services:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Vendor {vendor.vendor_code} is still referenced by {remaining_services} service rows",
             )
     for vendor in vendors:
         _audit(

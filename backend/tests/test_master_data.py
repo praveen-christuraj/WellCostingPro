@@ -316,10 +316,10 @@ def test_overview_and_read_permissions_are_workspace_scoped():
         summary = client.get("/api/v1/master-data/overview", headers=owner_headers)
         assert summary.status_code == 200, summary.text
         payload = summary.json()
-        assert payload["module_count"] == 7  # five reference lists plus Vendors and PO/SO Orders
+        assert payload["module_count"] == 8  # five reference lists, Services, Vendors, and PO/SO Orders
         assert payload["active_records"] == 1
         assert {module["key"] for module in payload["modules"]} == {
-            "uom", "currencies", "phases", "hole-sections", "activities", "vendors", "po-so-orders",
+            "uom", "currencies", "phases", "hole-sections", "activities", "services", "vendors", "po-so-orders",
         }
         assert next(item for item in payload["modules"] if item["key"] == "phases")["active_count"] == 1
         assert payload["recent_activity"]

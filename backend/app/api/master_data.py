@@ -17,6 +17,7 @@ from app.models import (
     HoleSection,
     Phase,
     PurchaseOrder,
+    Service,
     UnitOfMeasurement,
     Vendor,
 )
@@ -93,14 +94,15 @@ MODULES: dict[str, dict[str, Any]] = {
 }
 
 
-# Vendors and PO/SO Orders belong to this module but have their own richer
-# endpoints (see app/api/vendor_master.py); they still appear on the dashboard.
+# Services, Vendors, and PO/SO Orders have richer typed endpoints; they still
+# appear in the shared Master Data dashboard and export-audit registry.
 EXTENDED_MODULES: dict[str, tuple[Any, str]] = {
+    "services": (Service, "Services"),
     "vendors": (Vendor, "Vendors"),
     "po-so-orders": (PurchaseOrder, "PO/SO Orders"),
 }
 
-AUDIT_ENTITY_TYPES = ("master_data", "vendor", "po_so_order", "po_so_document")
+AUDIT_ENTITY_TYPES = ("master_data", "service", "vendor", "po_so_order", "po_so_document")
 
 
 class MasterDataAction:

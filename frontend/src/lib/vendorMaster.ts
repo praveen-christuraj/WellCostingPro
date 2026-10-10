@@ -136,7 +136,7 @@ export const VENDOR_STATUSES: { value: VendorStatus; label: string; hint: string
 ]
 
 export const VENDOR_CATEGORIES = [
-  'Drilling', 'Well Services', 'Cementing', 'Mud & Chemicals', 'Casing & Tubulars', 'Bits & Tools',
+  'Drilling', 'Completions', 'Well Services', 'Cementing', 'Mud & Chemicals', 'Casing & Tubulars', 'Bits & Tools',
   'Logistics & Transport', 'Equipment Rental', 'Catering & Camps', 'Inspection & Testing',
   'Engineering Services', 'Other',
 ]

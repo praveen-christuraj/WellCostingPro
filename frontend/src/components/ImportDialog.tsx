@@ -5,12 +5,13 @@ import { FormDialog } from './Common'
 import { downloadTemplate, parseImportFile, type ImportRow } from '../lib/export'
 
 // Standard import flow for list pages: xlsx/csv file, row preview, row-level errors near the source.
-export function ImportDialog({ open, onClose, title, subtitle, headers, sample, templateName, onRows }: {
+export function ImportDialog({ open, onClose, title, subtitle, headers, optionalHeaders = [], sample, templateName, onRows }: {
   open: boolean
   onClose: () => void
   title: string
   subtitle?: string
   headers: string[]
+  optionalHeaders?: string[]
   sample?: ImportRow
   templateName: string
   onRows: (rows: ImportRow[]) => Promise<string[]>
@@ -20,6 +21,7 @@ export function ImportDialog({ open, onClose, title, subtitle, headers, sample, 
   const [errors, setErrors] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [parsing, setParsing] = useState(false)
+  const displayHeaders = [...headers, ...optionalHeaders.filter(header => !headers.includes(header))]
 
   const reset = () => { setFileName(''); setRows([]); setErrors([]); setBusy(false); setParsing(false) }
   const close = () => { if (!busy) { reset(); onClose() } }
@@ -59,13 +61,13 @@ export function ImportDialog({ open, onClose, title, subtitle, headers, sample, 
           Choose file (.xlsx or .csv)
           <input hidden type="file" accept=".xlsx,.xls,.csv" onChange={e => { pick(e.target.files?.[0]); e.target.value = '' }}/>
         </Button>
-        <Button color="inherit" startIcon={<GetAppRounded sx={{ fontSize: 18 }}/>} onClick={() => downloadTemplate(templateName, headers, sample)} disabled={busy}>Download template</Button>
+        <Button color="inherit" startIcon={<GetAppRounded sx={{ fontSize: 18 }}/>} onClick={() => downloadTemplate(templateName, displayHeaders, sample)} disabled={busy}>Download template</Button>
       </Box>
       {fileName && <Box display="flex" alignItems="center" gap={1}><DescriptionOutlined sx={{ fontSize: 17, color: 'text.secondary' }}/><Typography fontSize={12.5} fontWeight={700}>{fileName}</Typography><Typography fontSize={12} color="text.secondary">· {rows.length} rows detected</Typography></Box>}
       {rows.length > 0 && <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, maxHeight: 260, overflow: 'auto' }}>
         <Table size="small" stickyHeader>
-          <TableHead><TableRow>{headers.map(h => <TableCell key={h} sx={{ fontWeight: 800, fontSize: 11, bgcolor: 'background.paper' }}>{h}</TableCell>)}</TableRow></TableHead>
-          <TableBody>{rows.slice(0, 50).map((row, i) => <TableRow key={i}>{headers.map(h => <TableCell key={h} sx={{ fontSize: 12, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row[h] || '—'}</TableCell>)}</TableRow>)}</TableBody>
+          <TableHead><TableRow>{displayHeaders.map(h => <TableCell key={h} sx={{ fontWeight: 800, fontSize: 11, bgcolor: 'background.paper' }}>{h}{optionalHeaders.includes(h) ? ' (optional)' : ''}</TableCell>)}</TableRow></TableHead>
+          <TableBody>{rows.slice(0, 50).map((row, i) => <TableRow key={i}>{displayHeaders.map(h => <TableCell key={h} sx={{ fontSize: 12, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row[h] || '—'}</TableCell>)}</TableRow>)}</TableBody>
         </Table>
         {rows.length > 50 && <Typography fontSize={11} color="text.secondary" sx={{ p: 1.2 }}>Preview shows the first 50 of {rows.length} rows.</Typography>}
       </Box>}

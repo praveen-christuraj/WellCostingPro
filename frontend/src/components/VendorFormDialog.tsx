@@ -42,7 +42,7 @@ export function VendorFormDialog({ open, title, subtitle, form, setForm, busy, e
         <TextField label="Vendor / supplier name" required fullWidth value={form.vendor_name} onChange={event => setForm({ vendor_name: event.target.value })} inputProps={{ maxLength: 200 }}/>
       </Box>
       <Box display="grid" gap={2} gridTemplateColumns={{ xs: '1fr', sm: '1fr 1fr' }}>
-        <TextField select label="Category" fullWidth value={form.category} onChange={event => setForm({ category: event.target.value })} helperText="Pick a common category or type your own">
+        <TextField select label="Category" fullWidth value={form.category} onChange={event => setForm({ category: event.target.value })} helperText="Choose the vendor's primary service or supply category.">
           <MenuItem value="">Not categorized</MenuItem>
           {VENDOR_CATEGORIES.map(category => <MenuItem key={category} value={category}>{category}</MenuItem>)}
         </TextField>
