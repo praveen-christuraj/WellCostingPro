@@ -2,7 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth, audit, master_data, rbac, service_master, vendor_master
+from app.api import auth, audit, master_data, rbac, rig_well, service_master, vendor_master
 from app.api.catalogue_items import ITEM_ROUTERS, catalogue_error_handler
 from app.api.catalogue_options import router as catalogue_options_router
 from app.services.catalogue import CatalogueError
@@ -32,6 +32,7 @@ app.include_router(rbac.router, prefix="/api/v1")
 # /master-data/{module} routes so dynamic paths do not shadow them.
 app.include_router(vendor_master.router, prefix="/api/v1")
 app.include_router(service_master.router, prefix="/api/v1")
+app.include_router(rig_well.router, prefix="/api/v1")
 # Tangibles, consumables and catalogue lists are registered before the generic routes too.
 app.include_router(catalogue_options_router, prefix="/api/v1")
 for catalogue_router in ITEM_ROUTERS.values():

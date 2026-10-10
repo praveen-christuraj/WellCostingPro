@@ -234,7 +234,10 @@ def _commit(db: Session) -> None:
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        raise HTTPException(status_code=409, detail="A record with this code already exists in this workspace") from error
+        raise HTTPException(
+            status_code=409,
+            detail="This record is in use by workspace data or conflicts with an existing value",
+        ) from error
 
 
 def _record_for_user(

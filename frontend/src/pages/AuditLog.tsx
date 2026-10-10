@@ -8,7 +8,7 @@ import { ErrorMessage, PageHeading, Tag } from '../components/Common'
 import { DataTable } from '../components/DataTable'
 
 const ACTIONS = ['login', 'login_failed', 'logout', 'create', 'update', 'delete', 'soft_delete', 'restore', 'permanent_delete', 'import', 'export', 'assign']
-const ENTITIES = ['auth', 'user', 'role', 'permission', 'master_data']
+const ENTITIES = ['auth', 'user', 'role', 'permission', 'master_data', 'rig', 'well', 'well_configuration', 'well_sub_activity', 'rig_well_export', 'rig_well_deleted']
 
 // Auditing module: read-only action trail with server-side filters and export.
 export default function AuditLog() {
