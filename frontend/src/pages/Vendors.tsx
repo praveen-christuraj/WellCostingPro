@@ -141,6 +141,7 @@ export default function Vendors() {
 
   const columns = useMemo<ColDef<Vendor>[]>(() => [
     { headerName: 'CODE', field: 'vendor_code', minWidth: 120, flex: .7 },
+    { headerName: 'VENDOR TYPE', field: 'vendor_type', minWidth: 140 },
     { headerName: 'VENDOR NAME', field: 'vendor_name', minWidth: 200, flex: 1.3 },
     { headerName: 'CATEGORY', field: 'category', minWidth: 130, flex: .8, valueFormatter: params => params.value || '—' },
     { headerName: 'CONTACT', field: 'contact_person', minWidth: 140, flex: .9, valueFormatter: params => params.value || '—' },
@@ -254,9 +255,10 @@ export default function Vendors() {
       onClose={() => setImportOpen(false)}
       title="Import vendors"
       subtitle="Preview and validate rows before adding or updating vendors. Existing codes are updated; matching deleted entries are restored. Legacy headers (vendor_code, vendor_name, contact, description) are accepted."
-      headers={VENDOR_IMPORT_HEADERS}
+      headers={VENDOR_IMPORT_HEADERS.filter(header => header !== 'vendor_type')}
+      optionalHeaders={['vendor_type']}
       sample={{
-        vendor_code: 'VEND-01', vendor_name: 'Acme Drilling Services', category: 'Drilling',
+        vendor_type: 'Third party', vendor_code: 'VEND-01', vendor_name: 'Acme Drilling Services', category: 'Drilling',
         contact_person: 'Ada Lovelace', email: 'ada@acme.example', phone: '+971 50 000 0000',
         website: 'acme.example', country: 'UAE', tax_registration_no: 'TRN-100200300',
         address: 'Unit 12, Industrial Area', status: 'active', credit_terms_days: '30',

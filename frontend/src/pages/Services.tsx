@@ -169,7 +169,7 @@ export default function Services() {
       headerName: 'VENDOR / PROVIDER', field: 'vendor_name', minWidth: 190, flex: 1,
       valueFormatter: params => params.data?.vendor_name
         ? `${params.data.vendor_code ? `${params.data.vendor_code} — ` : ''}${params.data.vendor_name}`
-        : '—',
+        : 'Vendor assignment required',
     },
     { headerName: 'DESCRIPTION', field: 'description', minWidth: 190, flex: 1.2, valueFormatter: params => params.value || '—' },
     { headerName: 'UPDATED', field: 'updated_at', minWidth: 135, valueFormatter: params => params.value ? new Date(params.value).toLocaleDateString() : '' },
@@ -212,7 +212,7 @@ export default function Services() {
           <Box>
             <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>Service register</Typography>
             <Typography color="text.secondary" fontSize={12} mt={.35}>
-              {rows.length} active {rows.length === 1 ? 'service' : 'services'}. Service codes are assigned automatically; third-party services require a vendor.
+              {rows.length} active {rows.length === 1 ? 'service' : 'services'}. Enter service codes manually and select a vendor for both provider types.
             </Typography>
           </Box>
           {can('master-data:delete') && <Button
@@ -275,10 +275,11 @@ export default function Services() {
       open={importOpen}
       onClose={() => setImportOpen(false)}
       title="Import services"
-      subtitle="Preview rows before import. Service codes are assigned automatically; existing names are updated and deleted matches are restored. The category column is optional for legacy spreadsheets and defaults to Drilling Services; legacy Inhouse and 3rd Party labels are accepted."
+      subtitle="Preview rows before import. Service codes and vendors are required. Existing codes are updated and deleted matches are restored. The category column is optional for legacy spreadsheets and defaults to Drilling Services; legacy Inhouse and 3rd Party labels are accepted."
       headers={SERVICE_IMPORT_HEADERS}
       optionalHeaders={SERVICE_OPTIONAL_IMPORT_HEADERS}
       sample={{
+        service_code: 'MUD-LOG',
         service_name: 'Mud Logging',
         service_category: 'Drilling Services',
         provider_type: 'Third Party Services',

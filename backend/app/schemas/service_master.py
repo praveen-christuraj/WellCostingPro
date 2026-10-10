@@ -61,6 +61,7 @@ def _trim(value: Any) -> Any:
 
 
 class ServiceCreate(BaseModel):
+    service_code: str = Field(min_length=1, max_length=50)
     service_name: str = Field(min_length=1, max_length=200)
     service_category: ServiceCategory
     provider_type: ServiceProviderType
@@ -69,7 +70,7 @@ class ServiceCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    @field_validator("service_name", "description", mode="before")
+    @field_validator("service_code", "service_name", "description", mode="before")
     @classmethod
     def trim_text(cls, value: Any) -> Any:
         return _trim(value)
@@ -91,6 +92,7 @@ class ServiceCreate(BaseModel):
 
 
 class ServiceUpdate(BaseModel):
+    service_code: str | None = Field(default=None, min_length=1, max_length=50)
     service_name: str | None = Field(default=None, min_length=1, max_length=200)
     service_category: ServiceCategory | None = None
     provider_type: ServiceProviderType | None = None
@@ -99,7 +101,7 @@ class ServiceUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    @field_validator("service_name", "description", mode="before")
+    @field_validator("service_code", "service_name", "description", mode="before")
     @classmethod
     def trim_text(cls, value: Any) -> Any:
         return _trim(value)

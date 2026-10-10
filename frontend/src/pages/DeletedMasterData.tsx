@@ -137,6 +137,7 @@ export default function DeletedMasterData() {
     try {
       if (editRecord.kind === 'vendors' && vendorForm) {
         const payload: VendorPayload = {
+          vendor_type: vendorForm.vendor_type,
           vendor_code: vendorForm.vendor_code.trim(),
           vendor_name: vendorForm.vendor_name.trim(),
           category: vendorForm.category.trim(),

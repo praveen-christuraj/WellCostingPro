@@ -89,6 +89,7 @@ DOCUMENT_KIND_LABELS = {
 }
 
 VENDOR_IMPORT_ALIASES = {
+    "vendor_type": ("vendor_type", "vendor type"),
     "vendor_code": ("vendor_code", "code", "vendor code", "supplier_code"),
     "vendor_name": ("vendor_name", "name", "vendor name", "supplier_name"),
     "category": ("category", "vendor_category", "type"),
@@ -368,6 +369,7 @@ def _vendor_out(
         id=vendor.id,
         vendor_code=vendor.vendor_code,
         vendor_name=vendor.vendor_name,
+        vendor_type=vendor.vendor_type,
         category=vendor.category or "",
         contact_person=vendor.contact_person or "",
         email=vendor.email or "",
@@ -740,6 +742,7 @@ def vendor_options(db: Db, user: Current) -> list[VendorOption]:
             id=vendor.id,
             vendor_code=vendor.vendor_code,
             vendor_name=vendor.vendor_name,
+            vendor_type=vendor.vendor_type,
             status=vendor.status,
             order_count=orders.get(vendor.id, 0),
             label=f"{vendor.vendor_code} — {vendor.vendor_name}",
@@ -800,7 +803,7 @@ def get_vendor(vendor_id: str, db: Db, user: Current) -> VendorOut:
 
 # Every editable vendor column; partial updates are validated against the whole record.
 VENDOR_FIELDS = (
-    "vendor_code", "vendor_name", "category", "contact_person", "email", "phone",
+    "vendor_code", "vendor_name", "vendor_type", "category", "contact_person", "email", "phone",
     "website", "country", "tax_registration_no", "address", "status",
     "credit_terms_days", "description",
 )
@@ -817,6 +820,8 @@ def _vendor_values(payload: dict[str, Any]) -> dict[str, Any]:
     if not name:
         raise ValueError("Vendor name is required")
     values["vendor_name"] = name
+    if values.get("vendor_type") not in ("Inhouse", "Third party"):
+        raise ValueError("Vendor type must be Inhouse or Third party")
     values["email"] = _check_email(str(values.get("email") or "").strip())
     values["website"] = _check_website(str(values.get("website") or "").strip())
     status = values.get("status") or "active"
@@ -1205,6 +1210,11 @@ def import_vendors(
 
     for row_number, row in enumerate(data.rows, start=1):
         normalized = _normalize_import_row(row, VENDOR_IMPORT_ALIASES)
+        # Older spreadsheets have no type column; preserve the existing classification.
+        if "vendor_type" not in normalized:
+            existing = _duplicate_vendor(db, user.organization_id, str(normalized.get("vendor_code") or "").strip().upper())
+            if existing:
+                normalized["vendor_type"] = existing.vendor_type
         status_text = str(normalized.get("status") or "").strip().lower()
         if status_text:
             if status_text not in VENDOR_STATUS_ALIASES:

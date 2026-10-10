@@ -14,6 +14,7 @@ from datetime import date
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     ForeignKey,
     Integer,
@@ -57,9 +58,13 @@ class Vendor(MasterDataRecord):
     """A supplier the workspace buys from. Parents every PO/SO order."""
 
     __tablename__ = "vendors"
-    __table_args__ = (UniqueConstraint("organization_id", "vendor_code", name="uq_vendors_org_code"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "vendor_code", name="uq_vendors_org_code"),
+        CheckConstraint("vendor_type IN ('Inhouse', 'Third party')", name="ck_vendors_type"),
+    )
 
     vendor_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    vendor_type: Mapped[str] = mapped_column(String(20), nullable=False, default="Third party", server_default="Third party")
     vendor_name: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str] = mapped_column(String(80), default="", server_default="")
     contact_person: Mapped[str] = mapped_column(String(150), default="", server_default="")

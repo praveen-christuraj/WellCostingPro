@@ -1,6 +1,5 @@
 """Tenant-scoped Services register APIs for Master Data Management."""
 
-import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -37,17 +36,11 @@ class ServiceAction:
     PERMANENT_DELETE = "permanent_delete"
 
 
-def _service_code(db: Session, organization_id: str) -> str:
-    """Generate the next workspace-scoped service code without reusing deleted rows."""
-    highest = 0
-    codes = db.scalars(
-        select(Service.service_code).where(Service.organization_id == organization_id)
-    ).all()
-    for code in codes:
-        match = re.fullmatch(r"SVC-(\d+)", code, flags=re.IGNORECASE)
-        if match:
-            highest = max(highest, int(match.group(1)))
-    return f"SVC-{highest + 1:04d}"
+def _service_code_exists(db: Session, organization_id: str, code: str, *, exclude_id: str | None = None) -> Service | None:
+    statement = select(Service).where(Service.organization_id == organization_id, func.upper(Service.service_code) == code)
+    if exclude_id:
+        statement = statement.where(Service.id != exclude_id)
+    return db.scalar(statement)
 
 
 def _service_out(service: Service) -> ServiceOut:
@@ -114,17 +107,12 @@ def _vendor_for_service(
     db: Session,
     *,
     organization_id: str,
-    provider_type: str,
     vendor_id: str | None,
     allow_deleted_existing: bool = False,
     existing_vendor_id: str | None = None,
-) -> Vendor | None:
-    if provider_type == "In House Services":
-        if vendor_id:
-            raise ValueError("In House Services cannot be assigned to an external vendor")
-        return None
+) -> Vendor:
     if not vendor_id:
-        raise ValueError("Select a service provider for Third Party Services")
+        raise ValueError("Select a vendor for every service")
 
     vendor = db.scalar(
         select(Vendor).where(
@@ -161,16 +149,16 @@ def _validate_service_payload(
     vendor = _vendor_for_service(
         db,
         organization_id=organization_id,
-        provider_type=payload["provider_type"],
         vendor_id=payload.get("vendor_id"),
         allow_deleted_existing=bool(service and service.is_deleted),
         existing_vendor_id=service.vendor_id if service else None,
     )
     return {
+        "service_code": payload["service_code"].strip().upper(),
         "service_name": payload["service_name"].strip(),
         "service_category": payload["service_category"],
         "provider_type": payload["provider_type"],
-        "vendor_id": vendor.id if vendor else None,
+        "vendor_id": vendor.id,
         "description": payload.get("description", "").strip() if payload.get("description") else "",
     }
 
@@ -198,7 +186,7 @@ def _commit(db: Session) -> None:
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="A service with this name or generated code already exists in this workspace",
+            detail="A service with this name or code already exists in this workspace",
         ) from error
 
 
@@ -209,14 +197,14 @@ def _flush(db: Session) -> None:
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="A service with this name or generated code already exists in this workspace",
+            detail="A service with this name or code already exists in this workspace",
         ) from error
 
 
 def _get_vendor_reference(db: Session, organization_id: str, reference: Any) -> Vendor:
     text_reference = str(reference or "").strip()
     if not text_reference:
-        raise ValueError("Service Provider (vendor_code) is required for Third Party Services")
+        raise ValueError("Service Provider (vendor_code) is required for every service")
 
     vendor = db.scalar(
         select(Vendor).where(
@@ -268,6 +256,7 @@ def _normalize_import_row(row: dict[str, Any]) -> dict[str, Any]:
         return None
 
     return {
+        "service_code": first("service_code", "code"),
         "service_name": first("service_name", "name", "service"),
         # The legacy Services tab did not carry this category; its records keep
         # working on import by defaulting to the drilling-services catalogue.
@@ -311,8 +300,6 @@ def _services_for_ids(
 
 
 def _ensure_restorable_vendor(db: Session, service: Service, organization_id: str) -> None:
-    if service.provider_type != "Third Party Services":
-        return
     vendor = db.scalar(
         select(Vendor).where(
             Vendor.id == service.vendor_id,
@@ -323,7 +310,7 @@ def _ensure_restorable_vendor(db: Session, service: Service, organization_id: st
     if vendor is None:
         raise HTTPException(
             status_code=409,
-            detail=f"Restore the service's vendor ({service.vendor_id}) before restoring this service",
+            detail="Select or restore the service's vendor before restoring this service",
         )
 
 
@@ -424,6 +411,8 @@ def create_service(data: ServiceCreate, request: Request, db: Db, user: Current)
         values = _validate_service_payload(db, organization_id=user.organization_id, payload=payload)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    if _service_code_exists(db, user.organization_id, values["service_code"]):
+        raise HTTPException(status_code=409, detail="Service code already exists in this workspace")
     existing = _service_name_exists(db, user.organization_id, values["service_name"])
     if existing:
         raise HTTPException(
@@ -433,7 +422,6 @@ def create_service(data: ServiceCreate, request: Request, db: Db, user: Current)
 
     service = Service(
         organization_id=user.organization_id,
-        service_code=_service_code(db, user.organization_id),
         **values,
     )
     db.add(service)
@@ -464,6 +452,7 @@ def update_service(
     if not supplied:
         raise HTTPException(status_code=422, detail="Provide at least one field to update")
     merged = {
+        "service_code": service.service_code,
         "service_name": service.service_name,
         "service_category": service.service_category,
         "provider_type": service.provider_type,
@@ -484,6 +473,8 @@ def update_service(
             raise HTTPException(status_code=422, detail=_validation_message(error)) from error
         raise HTTPException(status_code=422, detail=str(error)) from error
 
+    if _service_code_exists(db, user.organization_id, values["service_code"], exclude_id=service.id):
+        raise HTTPException(status_code=409, detail="Service code already exists in this workspace")
     duplicate = _service_name_exists(
         db, user.organization_id, values["service_name"], exclude_id=service.id
     )
@@ -645,20 +636,18 @@ def import_services(
     imported = 0
     errors: list[str] = []
     seen_names: set[str] = set()
+    seen_codes: set[str] = set()
 
     for row_number, row in enumerate(data.rows, start=1):
         try:
             normalized = _normalize_import_row(row)
             provider_type = normalize_provider_type(normalized.get("provider_type"))
-            vendor_id = None
             vendor_reference = normalized.get("vendor_reference")
-            if provider_type == "Third Party Services":
-                vendor_id = _get_vendor_reference(db, user.organization_id, vendor_reference).id
-            elif vendor_reference:
-                raise ValueError("A vendor can only be assigned to Third Party Services")
+            vendor_id = _get_vendor_reference(db, user.organization_id, vendor_reference).id
 
             payload = ServiceCreate.model_validate(
                 {
+                    "service_code": normalized.get("service_code"),
                     "service_name": normalized.get("service_name"),
                     "service_category": normalized.get("service_category"),
                     "provider_type": provider_type,
@@ -675,13 +664,15 @@ def import_services(
             if name_key in seen_names:
                 raise ValueError("duplicate service name in this import file")
             seen_names.add(name_key)
+            if values["service_code"] in seen_codes:
+                raise ValueError("duplicate service code in this import file")
+            seen_codes.add(values["service_code"])
 
             with db.begin_nested():
-                service = _service_name_exists(db, user.organization_id, values["service_name"])
+                service = _service_code_exists(db, user.organization_id, values["service_code"])
                 if service is None:
                     service = Service(
                         organization_id=user.organization_id,
-                        service_code=_service_code(db, user.organization_id),
                         **values,
                     )
                     db.add(service)
