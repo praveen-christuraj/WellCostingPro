@@ -92,10 +92,13 @@ export type Afe = {
   service_count: number
   consumable_count: number
   tangible_count: number
-  services_total: string
-  consumables_total: string
-  tangibles_total: string
-  total_cost: string
+  // Converted figures in the standard currency. Null while a conversion rate is still missing.
+  services_total: string | null
+  consumables_total: string | null
+  tangibles_total: string | null
+  total_cost: string | null
+  standard_currency: string
+  conversion_pending: boolean
   totals_by_currency: CurrencyTotal[]
   warning_count: number
   is_deleted: boolean
@@ -200,18 +203,29 @@ export type SectionSummary = {
   hole_section_id: string | null
   label: string
   planned_days: string
-  services: string
-  consumables: string
-  tangibles: string
-  total: string
+  services: string | null
+  consumables: string | null
+  tangibles: string | null
+  total: string | null
+}
+
+export type CurrencySetup = {
+  standard_currency: string
+  currencies: string[]
+  multi_currency: boolean
+  converted: boolean
+  standard_missing: boolean
+  missing_rates: string[]
+  exchange_rates: { currency_code: string; rate: string }[]
 }
 
 export type EstimateSummary = {
-  services_total: string
-  consumables_total: string
-  tangibles_total: string
-  total: string
+  services_total: string | null
+  consumables_total: string | null
+  tangibles_total: string | null
+  total: string | null
   totals_by_currency: CurrencyTotal[]
+  currency: CurrencySetup
   by_section: SectionSummary[]
   warnings: string[]
 }
@@ -262,6 +276,7 @@ export type AfeOverview = {
   wells_with_afes: number
   totals_by_currency: CurrencyTotal[]
   approved_by_currency: CurrencyTotal[]
+  conversion_pending_afes: number
   statuses: { status: AfeStatus; label: string; count: number }[]
   top_wells: { well_id: string; label: string; total: string; currency: string }[]
   warning_afes: number
@@ -337,10 +352,15 @@ export type TangibleLineInput = {
   remarks: string
 }
 
+export type ExchangeRateInput = { currency_code: string; rate: string }
+
 export type EstimateInput = {
   services: ServiceLineInput[]
   consumables: ConsumableLineInput[]
   tangibles: TangibleLineInput[]
+  // Used only when the estimate mixes currencies. Each rate is units of the standard currency per one foreign unit.
+  standard_currency: string
+  exchange_rates: ExchangeRateInput[]
 }
 
 export const newKey = (): string =>
@@ -369,6 +389,8 @@ export function emptyTangibleLine(): TangibleLineInput {
 // Converts a saved or previewed estimate back into request shape, so the editor can resume it exactly.
 export function estimateToInput(estimate: AfeEstimate): EstimateInput {
   return {
+    standard_currency: estimate.summary.currency.standard_currency,
+    exchange_rates: estimate.summary.currency.exchange_rates.map(rate => ({ currency_code: rate.currency_code, rate: rate.rate })),
     services: estimate.services.map(line => ({
       client_key: line.client_key ?? line.id ?? newKey(),
       service_id: line.service_id,
@@ -437,6 +459,13 @@ export function amountText(value: string | number | null | undefined, currency =
 export function totalsText(totals: CurrencyTotal[]): string {
   if (!totals.length) return '—'
   return totals.map(item => amountText(item.amount, item.currency)).join(' · ')
+}
+
+// The AFE total in its standard currency, or a plain notice while a conversion rate is missing.
+export function afeTotalText(afe: Pick<Afe, 'total_cost' | 'standard_currency' | 'totals_by_currency' | 'conversion_pending'>): string {
+  if (afe.conversion_pending) return 'Pending conversion'
+  if (afe.total_cost === null) return '—'
+  return afe.standard_currency ? amountText(afe.total_cost, afe.standard_currency) : totalsText(afe.totals_by_currency)
 }
 
 export function daysText(value: string | number | null | undefined): string {

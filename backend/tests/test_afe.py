@@ -171,6 +171,11 @@ def _configure_well(client, headers, well_id, master):
     payload = {"depth_unit": "m", "sections": [section(master["hole_1"], "0", "100", "10"), section(master["hole_2"], "100", "500", "30")]}
     saved = client.put(f"/api/v1/rig-well/wells/{well_id}/configuration", headers=headers, json=payload)
     assert saved.status_code == 200, saved.text
+    # An AFE needs the plan marked Configured, which is a separate sign-off from saving the plan.
+    marked = client.post(
+        f"/api/v1/rig-well/wells/{well_id}/transition", headers=headers, json={"action": "configure", "remarks": "Plan checked"}
+    )
+    assert marked.status_code == 200, marked.text
     return saved.json()
 
 
@@ -633,3 +638,153 @@ def test_provisioning_seeds_afe_capabilities_for_new_tenants():
     from app.services.provisioning import CAPABILITIES
 
     assert set(CAPABILITIES["afe"]) >= {"read", "create", "estimate", "submit", "review", "approve", "reopen"}
+
+
+# ---------------------------------------------------------------------------
+# Configured plan, currency standard and conversion
+# ---------------------------------------------------------------------------
+
+
+def _service_line(master, key, currency, amount, **overrides):
+    line = {
+        "client_key": key, "service_id": master["service"], "charging_basis": "Per Service Rate",
+        "hole_section_id": master["hole_2"], "phase_id": master["phase"], "currency": currency,
+        "service_amount": amount, "remarks": "", "rates": [], "charges": [], "section_rates": [],
+    }
+    line.update(overrides)
+    return line
+
+
+def test_engine_currency_rules_pick_standard_and_report_missing_rates():
+    single = engine_rules.resolve_currency(["USD", "USD"], standard="EUR")
+    assert single.standard_currency == "USD" and single.converted and single.exchange_rates == ()
+
+    unset = engine_rules.resolve_currency(["USD", "EUR"])
+    assert unset.standard_missing and not unset.converted and unset.standard_currency == ""
+
+    partial = engine_rules.resolve_currency(["USD", "EUR", "GBP"], "usd", {"EUR": Decimal("1.1")})
+    assert partial.standard_currency == "USD"
+    assert partial.missing_rates == ("GBP",) and not partial.converted
+    assert partial.factor("USD") == Decimal("1") and partial.factor("EUR") == Decimal("1.1") and partial.factor("GBP") is None
+
+
+def test_engine_converts_lines_and_sections_only_when_every_rate_is_present():
+    scope = _scope()
+    usd = engine_rules.ServiceLine(
+        key="a", label="Logging", charging_basis=engine_rules.BASIS_PER_SERVICE, currency="USD",
+        section_id="s1", phase_id="p1", service_amount=Decimal("1000"),
+    )
+    eur = engine_rules.TangibleLine(key="t", label="Shoe", quantity=Decimal("1"), captured_rate=Decimal("10"), currency="EUR")
+
+    converted = engine_rules.compile_estimate(scope, services=[usd], tangibles=[eur], standard_currency="USD", exchange_rates={"EUR": Decimal("2")})
+    assert converted.total == Decimal("1020.00")
+    assert converted.services_total == Decimal("1000.00") and converted.tangibles_total == Decimal("20.00")
+    section = next(row for row in converted.by_section if row.section_id == "s1")
+    assert section.total == Decimal("1000.00")
+    assert converted.totals_by_currency == (("EUR", Decimal("10.00")), ("USD", Decimal("1000.00")))  # as entered
+
+    withheld = engine_rules.compile_estimate(scope, services=[usd], tangibles=[eur], standard_currency="USD")
+    assert withheld.total is None and withheld.services_total is None
+    assert all(row.total is None for row in withheld.by_section)
+    assert any("conversion rate to USD for EUR" in text for text in withheld.warnings)
+
+
+def test_afe_needs_a_configured_plan_for_create_estimate_save_and_submit():
+    with TestClient(app) as client:
+        headers = login(client)
+        master = _master_setup(client, headers)
+        rig = create_rig(client, headers)
+        well = create_well(client, headers, rig["id"])
+        plan = {
+            "depth_unit": "m",
+            "sections": [{
+                "hole_section_id": master["hole_1"], "from_depth": "0", "to_depth": "100", "remarks": "",
+                "phases": [{"phase_id": master["phase"], "days": "10", "remarks": ""}],
+            }],
+        }
+        saved = client.put(f"/api/v1/rig-well/wells/{well['id']}/configuration", headers=headers, json=plan)
+        assert saved.status_code == 200, saved.text
+        afe_body = {"rig_id": rig["id"], "well_id": well["id"], "afe_code": "AFE-CFG", "afe_name": "Drill", "afe_type": "Drilling"}
+
+        draft_plan = client.post("/api/v1/afe/afes", headers=headers, json=afe_body)
+        assert draft_plan.status_code == 422
+        assert "Configured" in draft_plan.json()["detail"]
+
+        assert client.post(f"/api/v1/rig-well/wells/{well['id']}/transition", headers=headers, json={"action": "configure", "remarks": "Checked"}).status_code == 200
+        afe = client.post("/api/v1/afe/afes", headers=headers, json=afe_body)
+        assert afe.status_code == 200, afe.text
+        url = f"/api/v1/afe/afes/{afe.json()['id']}/estimate"
+        day_rate_only = _estimate_payload(master, consumables=[], tangibles=[])  # only the well-wide service
+        assert client.put(url, headers=headers, json=day_rate_only).status_code == 200
+
+        # Reopening the plan blocks estimate saves and submission until it is configured again.
+        assert client.post(f"/api/v1/rig-well/wells/{well['id']}/transition", headers=headers, json={"action": "draft", "remarks": "Revise"}).status_code == 200
+        blocked_save = client.put(url, headers=headers, json=day_rate_only)
+        assert blocked_save.status_code == 409 and "Configured" in blocked_save.json()["detail"]
+        blocked_submit = client.post(f"/api/v1/afe/afes/{afe.json()['id']}/status", headers=headers, json={"action": "submit", "remarks": ""})
+        assert blocked_submit.status_code == 409 and "not Configured" in blocked_submit.json()["detail"]
+
+
+def test_mixed_currency_estimate_needs_standard_currency_and_rates_then_converts_totals():
+    with TestClient(app) as client:
+        headers = login(client)
+        master, _, _, afe = _setup(client, headers)
+        url = f"/api/v1/afe/afes/{afe['id']}/estimate"
+        services = [_service_line(master, "usd-svc", "USD", "1000"), _service_line(master, "eur-svc", "EUR", "2000")]
+        payload = _estimate_payload(master, services=services, consumables=[], tangibles=[])
+
+        unset = client.post(f"{url}/preview", headers=headers, json=payload).json()
+        assert unset["summary"]["total"] is None
+        assert unset["summary"]["currency"]["standard_missing"] is True and unset["summary"]["currency"]["converted"] is False
+        assert unset["summary"]["currency"]["currencies"] == ["EUR", "USD"]
+        assert {row["currency"]: row["amount"] for row in unset["summary"]["totals_by_currency"]} == {"EUR": "2000.00", "USD": "1000.00"}
+        assert any("mixes currencies" in text for text in unset["summary"]["warnings"])
+        assert unset["afe"]["conversion_pending"] is True and unset["afe"]["total_cost"] is None
+        refused = client.put(url, headers=headers, json=payload)
+        assert refused.status_code == 422 and "standard currency" in refused.json()["detail"]
+
+        missing = client.post(f"{url}/preview", headers=headers, json={**payload, "standard_currency": "USD"}).json()
+        assert missing["summary"]["currency"]["missing_rates"] == ["EUR"] and missing["summary"]["total"] is None
+        refused = client.put(url, headers=headers, json={**payload, "standard_currency": "USD"})
+        assert refused.status_code == 422 and "conversion rate to USD for EUR" in refused.json()["detail"]
+
+        rated = {**payload, "standard_currency": "usd", "exchange_rates": [{"currency_code": "eur", "rate": "1.1"}]}
+        preview = client.post(f"{url}/preview", headers=headers, json=rated).json()
+        assert preview["summary"]["total"] == "3200.00"  # 1000 USD + 2000 EUR x 1.1
+        assert preview["summary"]["services_total"] == "3200.00"
+        assert preview["summary"]["currency"]["standard_currency"] == "USD"
+
+        saved = client.put(url, headers=headers, json=rated)
+        assert saved.status_code == 200, saved.text
+        body = saved.json()
+        assert body["summary"]["total"] == "3200.00" and body["afe"]["total_cost"] == "3200.00"
+        assert body["afe"]["standard_currency"] == "USD" and body["afe"]["conversion_pending"] is False
+        assert body["summary"]["currency"]["exchange_rates"] == [{"currency_code": "EUR", "rate": "1.100000"}]
+        reloaded = client.get(url, headers=headers).json()
+        assert reloaded["summary"]["total"] == "3200.00"
+        by_section = {row["hole_section_id"]: row["services"] for row in reloaded["summary"]["by_section"]}
+        assert by_section[master["hole_2"]] == "3200.00"  # converted, not 1000 + 2000 as entered
+        assert by_section[master["hole_1"]] == "0.00"
+
+        updated = client.put(url, headers=headers, json={**rated, "exchange_rates": [{"currency_code": "EUR", "rate": "1.2"}]})
+        assert updated.json()["summary"]["total"] == "3400.00"  # the new rate replaces the saved one
+
+        overview = client.get("/api/v1/afe/overview", headers=headers).json()
+        assert overview["totals_by_currency"] == [{"currency": "USD", "amount": "3400.00"}]
+        assert overview["conversion_pending_afes"] == 0
+
+
+def test_single_currency_estimate_needs_no_rates_and_ignores_a_stored_standard():
+    with TestClient(app) as client:
+        headers = login(client)
+        master, _, _, afe = _setup(client, headers)
+        url = f"/api/v1/afe/afes/{afe['id']}/estimate"
+        payload = _estimate_payload(master, services=[_service_line(master, "usd-only", "USD", "1500")], consumables=[], tangibles=[])
+        body = client.put(url, headers=headers, json={**payload, "standard_currency": "EUR"}).json()
+        assert body["summary"]["currency"]["converted"] is True and body["summary"]["currency"]["multi_currency"] is False
+        assert body["summary"]["currency"]["standard_currency"] == "USD"
+        assert body["summary"]["currency"]["exchange_rates"] == []
+        assert body["summary"]["total"] == "1500.00"
+        assert body["afe"]["standard_currency"] == "USD"
+        dup = client.put(url, headers=headers, json={**payload, "exchange_rates": [{"currency_code": "EUR", "rate": "1"}, {"currency_code": "EUR", "rate": "2"}]})
+        assert dup.status_code == 422

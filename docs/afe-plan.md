@@ -12,23 +12,25 @@ redesigned for this app's structure and models; the reference tab layout is not 
   (submit, review, approve, reopen) happen only here and in the estimate workspace.
 - **Deleted entries** (same page, tab `Deleted entries`): restore or permanently delete soft-deleted AFEs.
 - **Overview dashboard** (`/afe`): totals, approval progress, highest-cost wells, recent activity.
-- **Estimate workspace** (`/afe/estimate/:afeId`): line-item estimate, bulk estimate by section,
-  section rollup, print.
+- **Estimate workspace** (`/afe/estimate/:afeId`): line-item estimate, bulk estimate by section (available from
+  both the Services and Consumables cards), currency and conversion panel, section rollup, print.
 
 ## Data model
 
 | Table | Purpose |
 | --- | --- |
-| `afes` | Header: rig, well, code (unique per workspace), name, type, remarks, status, soft-delete. |
+| `afes` | Header: rig, well, code (unique per workspace), name, type, remarks, status, standard currency, soft-delete. |
 | `afe_service_lines` | Service line: service, charging basis, scope (section, phase), currency, remarks. |
 | `afe_service_rates` | Unit rate per charge category for Day Rate lines. |
 | `afe_service_charges` | Explicit day quantities (days or hours) per day-based category. |
 | `afe_service_section_rates` | Amount per (section, phase) for Per Section Rate lines. |
 | `afe_consumable_lines` | Lump sum (Mud Chemicals, Cement Additives, Fuel) or drill bit line (bit, quantity, override). |
 | `afe_tangible_lines` | Tangible line: item, quantity, override rate. |
+| `afe_exchange_rates` | Conversion rate per foreign currency: units of the standard currency per one unit. Only for mixed-currency estimates. |
 
-No JSON columns. Migration `a9d4e2f7c138` follows `f3a7d0b9c214`. It upgrades, downgrades and
-re-upgrades cleanly on SQLite, and `alembic check` reports the models and migration in sync.
+No JSON columns. Migration `a9d4e2f7c138` follows `f3a7d0b9c214`. Migration `b2c8f1d4a9e6` adds the
+standard currency column and `afe_exchange_rates`. Both upgrade, downgrade and re-upgrade cleanly on SQLite,
+and `alembic check` reports the models and migrations in sync.
 
 Estimates are stored as line rows. Saving replaces all lines for the AFE under a row lock and a process
 lock, so a double click cannot duplicate lines.
@@ -49,12 +51,21 @@ lock, so a double click cannot duplicate lines.
   Captured rate = `final_cost` when set, otherwise `unit_rate`.
 - Sections and phases come only from the well configuration. Anything outside it produces a warning,
   not a silent price.
-- Money rounds to 2 decimals (half-up). Totals are per currency and are never converted.
+- Money rounds to 2 decimals (half-up).
+- **Currency** (`resolve_currency` in `app/domain/afe_costing.py`):
+  - Each line keeps the currency it was entered in. Totals as entered are shown per currency and are never added together.
+  - One detected currency: it is the standard currency. No choice and no rate are needed.
+  - Several detected currencies: the user selects the standard currency and enters one conversion rate for each other
+    currency (units of standard per one foreign unit, up to 6 decimals). Every line and section is converted with its rate.
+  - Converted totals (services, consumables, tangibles, grand total and the section rollup) are null until every rate is
+    entered. The estimate cannot be saved in that state, so a stored estimate is always fully converted.
+  - Saving stores the effective standard currency and only the rates in use. Rates are a snapshot taken at save time.
 
 ## Workflow
 
-- An AFE can be created only for an active well with a saved plan (at least one section) on an active rig.
-  The plan does not have to be marked Configured. That sign-off is separate.
+- An AFE can be created only for an active well on an active rig whose plan has at least one section and is marked
+  **Configured** in Rig & Well Management. Create, edit, import and estimate save are refused for a well whose plan is in
+  Draft. Submit is refused when the plan is no longer Configured.
 - Header edits, estimate edits and soft delete are allowed only in Draft.
 - Transitions: submit (Draft → Submitted, needs a saved estimate with total > 0), review
   (Submitted → Review), approve (Review → Approval, remarks ≥ 3 characters), reopen (Submitted, Review or
@@ -81,6 +92,15 @@ lock, so a double click cannot duplicate lines.
 | Lumpsum round-trip | Lumpsum stores quantity 1, captured rate 0 and the estimated amount. Load and save round-trip exactly. |
 | Print shows only days and costs | Print sheet is plain HTML that prints every section in order. |
 | Daily cost shown well-wide | Split per section by planned days. |
+| Only the last line added is visible, although all lines are in the total | The grids keyed rows by a missing `id`, so every line shared one row id. Rows are now keyed by the line key. |
+| Currency totals added across currencies | Lines are converted to one standard currency with user-entered rates. Totals stay withheld until every rate is entered. |
+| AFE created for a well whose plan is not Configured | Creating, editing, importing and saving the estimate now require the plan to be Configured. |
+
+## Daily cost (information only)
+
+Daily cost tracking is not developed yet. The agreed rule, shown on the estimate page as information only, is that daily
+expenses can be entered either as one bulk amount per service or as separate amounts per line item. Either way, the day's
+total for that service is deducted from the service's estimate. Nothing is deducted today.
 
 ## Open question: mud chemical daily consumption
 
@@ -90,17 +110,21 @@ UI says that daily consumption is not deducted automatically.
 
 ## Verification status
 
-- Backend: `cd backend && ../.venv/bin/python -m pytest -q` passes (79 tests in the full suite, including
-  17 AFE tests). Pyflakes is clean on the AFE modules.
+- Backend: `cd backend && ../.venv/bin/python -m pytest -q` passes (84 tests in the full suite, including
+  22 AFE tests). Pyflakes is clean on the AFE modules.
 - Migration: upgrade, downgrade and re-upgrade on a fresh SQLite database; `alembic check` clean.
 - Frontend: `npm run build` passes (type check and Vite build).
 - `make graph` runs cleanly and refreshes `.agent/memory/architecture.dot`.
-- Not verified in this environment: the screens were not exercised in a real browser, so layout,
-  print output and keyboard flow still need a manual pass.
+- Not verified in this environment: the screens were not exercised in a real browser (no browser could be installed
+  here), so the grid fix, currency panel layout, print output and keyboard flow still need a manual pass.
 
 ## Known limitations
 
 - The estimate tables are AG Grid instances. The print sheet and the section rollup are plain tables,
   so they print in full.
-- Currency is never converted. A multi-currency AFE shows one total per currency.
+- Conversion rates are typed in by the user for each save. They are not fetched from a rate source, and the
+  rate history is not kept beyond the saved estimate.
+- Line-level amounts stay in the entered currency. Converted figures appear at estimate, section and AFE level.
+- Overview totals add each AFE in its own standard currency. An AFE whose conversion is incomplete is counted separately.
+- Daily cost tracking is not built. The estimate page states the agreed rule (see Daily cost below).
 - Estimate line import is not provided. The AFE register supports XLSX and CSV import.

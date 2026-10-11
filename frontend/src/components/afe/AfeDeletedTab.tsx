@@ -6,7 +6,7 @@ import { DataTable } from '../DataTable'
 import { ErrorMessage, FormDialog } from '../Common'
 import { useAuth } from '../../context/AuthContext'
 import { api, body } from '../../lib/api'
-import { amountText, totalsText, type Afe } from '../../lib/afe'
+import { afeTotalText, type Afe } from '../../lib/afe'
 import { ErrorDetails, StatusTag } from './AfeShared'
 
 type PendingAction = { kind: 'restore' | 'purge'; targets: Afe[] }
@@ -67,7 +67,7 @@ export function AfeDeletedTab() {
     { headerName: 'TYPE', field: 'afe_type', minWidth: 110, maxWidth: 125 },
     { headerName: 'RIG · WELL', field: 'well_name', minWidth: 210, flex: 1.2, valueFormatter: params => params.data ? `${params.data.rig_code} · ${params.data.well_code}` : '' },
     { headerName: 'STATUS AT DELETION', field: 'status', minWidth: 150, cellRenderer: ({ data }: { data: Afe }) => data && <Box display="flex" alignItems="center" height="100%"><StatusTag status={data.status}/></Box> },
-    { headerName: 'ESTIMATE', field: 'total_cost', minWidth: 170, valueFormatter: params => params.data ? (params.data.totals_by_currency.length ? totalsText(params.data.totals_by_currency) : amountText(params.value)) : '' },
+    { headerName: 'ESTIMATE', field: 'total_cost', minWidth: 170, valueFormatter: params => params.data ? afeTotalText(params.data) : '' },
     { headerName: 'DELETED AT', field: 'deleted_at', minWidth: 160, valueFormatter: params => params.value ? new Date(params.value).toLocaleString() : '' },
     {
       headerName: 'ACTIONS', width: 230, minWidth: 230, maxWidth: 230, flex: 0, sortable: false,

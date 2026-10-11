@@ -7,6 +7,7 @@ from app.models.well_sub_activity import WellSubActivity
 from app.models.afe import (
     Afe,
     AfeConsumableLine,
+    AfeExchangeRate,
     AfeServiceCharge,
     AfeServiceLine,
     AfeServiceRate,

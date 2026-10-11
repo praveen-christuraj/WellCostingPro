@@ -13,6 +13,7 @@ export type BulkResult = { services: ServiceLineInput[]; consumables: Consumable
 
 type Props = {
   open: boolean
+  initialMode?: Mode
   scope: WellScope
   reference: AfeReference
   onClose: () => void
@@ -21,8 +22,8 @@ type Props = {
 
 // Method 2: enter one amount per hole section (and phase) of the well plan, in one pass.
 // Each filled row becomes one line, so the result stays editable line by line afterwards.
-export function BulkEstimateDialog({ open, scope, reference, onClose, onApply }: Props) {
-  const [mode, setMode] = useState<Mode>('consumable')
+export function BulkEstimateDialog({ open, initialMode = 'consumable', scope, reference, onClose, onApply }: Props) {
+  const [mode, setMode] = useState<Mode>(initialMode)
   const [category, setCategory] = useState<ConsumableCategory>('Mud Chemicals')
   const [serviceId, setServiceId] = useState('')
   const [currency, setCurrency] = useState('')
@@ -31,7 +32,7 @@ export function BulkEstimateDialog({ open, scope, reference, onClose, onApply }:
 
   useEffect(() => {
     if (!open) return
-    setMode('consumable')
+    setMode(initialMode)
     setCategory('Mud Chemicals')
     setServiceId('')
     setCurrency('')

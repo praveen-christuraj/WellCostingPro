@@ -98,6 +98,7 @@ class Afe(Base):
     status_changed_by: Mapped[str] = mapped_column(String(255), default="", server_default="", nullable=False)
     estimate_saved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     estimate_saved_by: Mapped[str] = mapped_column(String(255), default="", server_default="", nullable=False)
+    standard_currency: Mapped[str] = mapped_column(String(10), default="", server_default="", nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
@@ -120,6 +121,12 @@ class Afe(Base):
     tangible_lines: Mapped[list["AfeTangibleLine"]] = relationship(
         cascade="all, delete-orphan",
         order_by="AfeTangibleLine.sort_order",
+        lazy="selectin",
+        passive_deletes=True,
+    )
+    exchange_rates: Mapped[list["AfeExchangeRate"]] = relationship(
+        cascade="all, delete-orphan",
+        order_by="AfeExchangeRate.sort_order",
         lazy="selectin",
         passive_deletes=True,
     )
@@ -245,3 +252,22 @@ class AfeTangibleLine(AfeChildRecord):
     currency: Mapped[str] = mapped_column(String(10), default="", server_default="", nullable=False)
     uom: Mapped[str] = mapped_column(String(50), default="", server_default="", nullable=False)
     remarks: Mapped[str] = mapped_column(String(500), default="", server_default="", nullable=False)
+
+
+class AfeExchangeRate(AfeChildRecord):
+    """Conversion rate used for one foreign currency of an estimate.
+
+    ``rate`` is units of the AFE's standard currency per one unit of ``currency_code``.
+    Rows exist only for currencies that need converting (multi-currency estimates).
+    """
+
+    __tablename__ = "afe_exchange_rates"
+    __table_args__ = (
+        UniqueConstraint("afe_id", "currency_code", name="uq_afe_exchange_rates_currency"),
+        CheckConstraint("rate > 0", name="ck_afe_exchange_rates_rate"),
+        Index("ix_afe_exchange_rates_afe", "afe_id"),
+    )
+
+    afe_id: Mapped[str] = mapped_column(ForeignKey("afes.id", ondelete="CASCADE"), nullable=False)
+    currency_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)

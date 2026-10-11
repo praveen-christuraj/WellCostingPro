@@ -8,6 +8,7 @@ import { amountText, daysText, STATUS_LABEL, totalsText, type AfeComponent, type
 export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
   const { afe, well, services, consumables, tangibles, summary } = estimate
   const printedAt = new Date().toLocaleString()
+  const std = summary.currency.standard_currency
 
   const componentRows = (components: AfeComponent[], currency: string) => components.map((component, index) => (
     <tr key={`${component.category}-${index}`} className="ps-component">
@@ -74,13 +75,18 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
       <h2>2. AFE cost estimate summary</h2>
       <table className="ps-table">
         <tbody>
-          <tr><th>Services</th><td className="num">{amountText(summary.services_total)}</td></tr>
-          <tr><th>Consumables</th><td className="num">{amountText(summary.consumables_total)}</td></tr>
-          <tr><th>Tangibles</th><td className="num">{amountText(summary.tangibles_total)}</td></tr>
-          <tr className="ps-total"><th>Total estimate</th><td className="num">{totalsText(summary.totals_by_currency)}</td></tr>
+          <tr><th>Services</th><td className="num">{amountText(summary.services_total, std)}</td></tr>
+          <tr><th>Consumables</th><td className="num">{amountText(summary.consumables_total, std)}</td></tr>
+          <tr><th>Tangibles</th><td className="num">{amountText(summary.tangibles_total, std)}</td></tr>
+          <tr className="ps-total"><th>Total estimate{std ? ` (${std})` : ''}</th><td className="num">{summary.total === null ? 'Pending conversion' : amountText(summary.total, std)}</td></tr>
+          {summary.currency.multi_currency && <>
+            <tr><th>Standard currency</th><td className="num">{std}</td></tr>
+            {summary.currency.exchange_rates.map(rate => <tr key={rate.currency_code}><th>Conversion rate · {rate.currency_code} to {std}</th><td className="num">{rate.rate}</td></tr>)}
+            <tr><th>Amounts as entered</th><td className="num">{totalsText(summary.totals_by_currency)}</td></tr>
+          </>}
         </tbody>
       </table>
-      <h3>By hole section and phase</h3>
+      <h3>By hole section and phase{std ? ` (${std})` : ''}</h3>
       {summary.by_section.length === 0 ? <p className="ps-empty">No section totals.</p> : <table className="ps-table ps-grid">
         <thead>
           <tr><th>Section / phase</th><th className="num">Planned days</th><th className="num">Services</th><th className="num">Consumables</th><th className="num">Tangibles</th><th className="num">Total</th></tr>
@@ -89,10 +95,10 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
           {summary.by_section.map(row => <tr key={`${row.hole_section_id ?? 'well'}-${row.label}`}>
             <td>{row.label}</td>
             <td className="num">{daysText(row.planned_days)}</td>
-            <td className="num">{amountText(row.services)}</td>
-            <td className="num">{amountText(row.consumables)}</td>
-            <td className="num">{amountText(row.tangibles)}</td>
-            <td className="num">{amountText(row.total)}</td>
+            <td className="num">{amountText(row.services, std)}</td>
+            <td className="num">{amountText(row.consumables, std)}</td>
+            <td className="num">{amountText(row.tangibles, std)}</td>
+            <td className="num">{amountText(row.total, std)}</td>
           </tr>)}
         </tbody>
       </table>}

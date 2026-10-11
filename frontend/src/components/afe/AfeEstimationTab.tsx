@@ -8,7 +8,7 @@ import { ErrorMessage } from '../Common'
 import { useAuth } from '../../context/AuthContext'
 import { api, body } from '../../lib/api'
 import {
-  STATUS_ACTIONS, STATUS_LABEL, amountText, nextActions, toNumber, totalsText,
+  STATUS_ACTIONS, STATUS_LABEL, afeTotalText, amountText, nextActions, toNumber,
   type Afe, type AfeStatusAction,
 } from '../../lib/afe'
 import { StatusDialog, StatusTag } from './AfeShared'
@@ -80,10 +80,10 @@ export function AfeEstimationTab() {
     { headerName: 'AFE NAME', field: 'afe_name', minWidth: 190, flex: 1.2 },
     { headerName: 'RIG · WELL', field: 'well_name', minWidth: 210, flex: 1.2, valueFormatter: params => params.data ? `${params.data.rig_code} · ${params.data.well_code}` : '' },
     { headerName: 'STATUS', field: 'status', minWidth: 125, maxWidth: 140, cellRenderer: ({ data }: { data: Afe }) => data && <Box display="flex" alignItems="center" height="100%"><StatusTag status={data.status}/></Box> },
-    { headerName: 'SERVICES', field: 'services_total', minWidth: 130, valueFormatter: params => amountText(params.value) },
-    { headerName: 'CONSUMABLES', field: 'consumables_total', minWidth: 135, valueFormatter: params => amountText(params.value) },
-    { headerName: 'TANGIBLES', field: 'tangibles_total', minWidth: 130, valueFormatter: params => amountText(params.value) },
-    { headerName: 'TOTAL ESTIMATE', field: 'total_cost', minWidth: 175, flex: .9, valueFormatter: params => params.data ? totalsText(params.data.totals_by_currency) : '' },
+    { headerName: 'SERVICES', field: 'services_total', minWidth: 130, valueFormatter: params => amountText(params.value, params.data?.standard_currency) },
+    { headerName: 'CONSUMABLES', field: 'consumables_total', minWidth: 135, valueFormatter: params => amountText(params.value, params.data?.standard_currency) },
+    { headerName: 'TANGIBLES', field: 'tangibles_total', minWidth: 130, valueFormatter: params => amountText(params.value, params.data?.standard_currency) },
+    { headerName: 'TOTAL ESTIMATE', field: 'total_cost', minWidth: 175, flex: .9, valueFormatter: params => params.data ? afeTotalText(params.data) : '' },
     { headerName: 'WARNINGS', field: 'warning_count', minWidth: 115, maxWidth: 130, valueFormatter: params => Number(params.value) > 0 ? `${params.value} to review` : 'None' },
     { headerName: 'ESTIMATE SAVED', field: 'estimate_saved_at', minWidth: 150, valueFormatter: params => params.value ? new Date(params.value).toLocaleString() : 'Not saved' },
     { headerName: 'STATUS CHANGED', field: 'status_changed_at', minWidth: 150, valueFormatter: params => params.value ? new Date(params.value).toLocaleString() : '' },
