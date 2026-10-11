@@ -20,6 +20,11 @@ const PoSoOrders = lazy(() => import('./pages/PoSoOrders'))
 const Tangibles = lazy(() => import('./pages/Tangibles'))
 const Consumables = lazy(() => import('./pages/Consumables'))
 const CatalogueLists = lazy(() => import('./pages/CatalogueLists'))
+const RigWellOverview = lazy(() => import('./pages/RigWellOverview'))
+const Rigs = lazy(() => import('./pages/Rigs'))
+const Wells = lazy(() => import('./pages/Wells'))
+const WellSubActivities = lazy(() => import('./pages/WellSubActivities'))
+const RigWellDeleted = lazy(() => import('./pages/RigWellDeleted'))
 
 function Guard({ permission, children }: { permission: string | string[]; children: ReactNode }) {
   const { can } = useAuth()
@@ -54,6 +59,11 @@ export default function App() {
           <Route path="master-data/consumables" element={<Guard permission="master-data:read"><Consumables/></Guard>}/>
           <Route path="master-data/catalogue-lists" element={<Guard permission="master-data:read"><CatalogueLists/></Guard>}/>
           <Route path="master-data/deleted" element={<Guard permission="master-data:read"><DeletedMasterData/></Guard>}/>
+          <Route path="rig-well" element={<Guard permission="rig-well:read"><RigWellOverview/></Guard>}/>
+          <Route path="rig-well/rigs" element={<Guard permission="rig-well:read"><Rigs/></Guard>}/>
+          <Route path="rig-well/wells" element={<Guard permission="rig-well:read"><Wells/></Guard>}/>
+          <Route path="rig-well/sub-activities" element={<Guard permission="rig-well:read"><WellSubActivities/></Guard>}/>
+          <Route path="rig-well/deleted" element={<Guard permission="rig-well:read"><RigWellDeleted/></Guard>}/>
           <Route path="*" element={<Navigate to="/" replace/>}/>
         </Route>
       </>}

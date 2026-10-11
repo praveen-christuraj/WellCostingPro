@@ -28,6 +28,9 @@ CAPABILITIES = {resource: actions for resource, actions in {
         # Vendors and PO/SO Orders keep scanned copies; document custody is separately grantable.
         "document-upload", "document-download", "document-delete",
     ),
+    "rig-well": (
+        "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
+    ),
 }.items()}
 
 

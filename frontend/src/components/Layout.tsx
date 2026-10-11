@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AppBar, Avatar, Box, Button, Divider, IconButton, Menu, MenuItem, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
-import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined } from '@mui/icons-material'
+import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined } from '@mui/icons-material'
 import Brand from './Brand'
 import { FormDialog, ErrorMessage } from './Common'
 import { api, body } from '../lib/api'
@@ -29,6 +29,13 @@ const modules: NavModule[] = [
     { label: 'Consumables', path: '/master-data/consumables', icon: OpacityOutlined, permission: 'master-data:read' },
     { label: 'Catalogue lists', path: '/master-data/catalogue-lists', icon: ListAltOutlined, permission: 'master-data:read' },
     { label: 'Deleted entries', path: '/master-data/deleted', icon: DeleteOutlineRounded, permission: 'master-data:read' },
+  ] },
+  { label: 'Rig & Well Management', icon: BusinessOutlined, items: [
+    { label: 'Overview', path: '/rig-well', icon: BusinessOutlined, permission: 'rig-well:read' },
+    { label: 'Rigs', path: '/rig-well/rigs', icon: BusinessOutlined, permission: 'rig-well:read' },
+    { label: 'Wells', path: '/rig-well/wells', icon: PublicOutlined, permission: 'rig-well:read' },
+    { label: 'Well sub activities', path: '/rig-well/sub-activities', icon: TaskAltOutlined, permission: 'rig-well:read' },
+    { label: 'Deleted entries', path: '/rig-well/deleted', icon: DeleteOutlineRounded, permission: 'rig-well:read' },
   ] },
   { label: 'Auditing', icon: HistoryOutlined, items: [
     { label: 'Audit Log', path: '/audit', icon: HistoryOutlined, permission: 'audit:read' },
