@@ -1,7 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from uuid import uuid4
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api import afe, auth, audit, daily_cost, master_data, rbac, rig_well, service_master, vendor_master
 from app.api.catalogue_items import ITEM_ROUTERS, catalogue_error_handler
 from app.api.catalogue_options import router as catalogue_options_router
@@ -52,3 +56,34 @@ def health(db: Db):
         log.exception("Administrator check failed during health probe")
         seeded = False
     return {"status": "ok", "admin_seeded": seeded}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, error: StarletteHTTPException) -> JSONResponse:
+    """Always answer with `{"detail": ...}` so the UI can show the message next to the data."""
+    if isinstance(error.detail, dict) and "detail" in error.detail:
+        detail = error.detail["detail"]
+    else:
+        detail = error.detail
+    return JSONResponse(status_code=error.status_code, content={"detail": detail})
+
+
+@app.exception_handler(Exception)
+async def unexpected_error(request: Request, error: Exception) -> JSONResponse:
+    """Last-resort handler.
+
+    An unhandled failure is logged in full with a reference code and answered with a
+    readable message, instead of the browser's bare "Failed to load resource … 500".
+    Starlette still re-raises afterwards so the process log keeps the traceback.
+    """
+    reference = uuid4().hex[:12]
+    log.exception("Unhandled API error [%s] on %s %s", reference, request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": (
+                "The server could not complete this request. The failure was recorded with "
+                f"reference {reference}. Retry, and contact the administrator if it continues."
+            )
+        },
+    )

@@ -1,6 +1,9 @@
 """Tenant-scoped Daily Cost Management endpoints."""
 
-from fastapi import APIRouter, Depends, Request, Response
+from datetime import date
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from app.api.deps import Current, Db, require
 from app.schemas.daily_cost import (
@@ -18,6 +21,8 @@ from app.schemas.daily_cost import (
     DailyCostReopenIn,
     DailyCostSaveIn,
     DailyCostStatusIn,
+    DailyCostWellOption,
+    DailyCostWellSummary,
 )
 from app.services import daily_cost as service
 
@@ -34,14 +39,49 @@ def overview(db: Db, user: Current) -> DailyCostOverview:
     return service.overview(db, user.organization_id, user)
 
 
+@router.get("/wells", response_model=list[DailyCostWellOption], dependencies=[Depends(require("daily-cost:read"))])
+def tracked_wells(db: Db, user: Current) -> list[DailyCostWellOption]:
+    """Wells that carry daily costs, used by the module's well picker."""
+    return service.daily_cost_wells(db, user.organization_id)
+
+
+@router.get(
+    "/wells/{well_id}/cost-summary", response_model=DailyCostWellSummary,
+    dependencies=[Depends(require("daily-cost:read"))],
+)
+def well_cost_summary(
+    well_id: str,
+    db: Db,
+    user: Current,
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+    include_draft: bool = Query(default=True),
+) -> DailyCostWellSummary:
+    """Whole-well cost detail: daily run sheet, AFE positions and every cost factor."""
+    return service.well_cost_summary(
+        db, user.organization_id, well_id, date_from=date_from, date_to=date_to, include_draft=include_draft,
+    )
+
+
 @router.get("/entries/deleted", response_model=list[DailyCostEntryOut], dependencies=[Depends(require("daily-cost:read"))])
 def deleted_entries(db: Db, user: Current) -> list[DailyCostEntryOut]:
     return service.list_entries(db, user.organization_id, deleted=True)
 
 
 @router.get("/entries", response_model=list[DailyCostEntryOut], dependencies=[Depends(require("daily-cost:read"))])
-def list_entries(db: Db, user: Current) -> list[DailyCostEntryOut]:
-    return service.list_entries(db, user.organization_id, deleted=False)
+def list_entries(
+    db: Db,
+    user: Current,
+    well_id: str = Query(default="", max_length=36),
+    afe_id: str = Query(default="", max_length=36),
+    status: Literal["", "draft", "submitted"] = Query(default=""),
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+) -> list[DailyCostEntryOut]:
+    return service.list_entries(
+        db, user.organization_id, well_id=well_id, afe_id=afe_id, status=status,
+        date_from=date_from, date_to=date_to,
+    )
 
 
 @router.post("/entries", response_model=DailyCostDayOut, status_code=201, dependencies=[Depends(require("daily-cost:create"))])

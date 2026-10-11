@@ -278,3 +278,165 @@ def test_daily_cost_is_tenant_scoped_and_rejects_unjustified_upa():
         })
         assert invalid.status_code == 422
         assert "reason" in invalid.text.lower()
+
+
+def test_daily_cost_import_reports_an_unknown_charging_basis_instead_of_failing():
+    """A typo in an imported sheet is a row error, never a 500."""
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        entry_id = setup["entry"]["id"]
+        response = client.post(f"/api/v1/daily-cost/entries/{entry_id}/import", headers=headers, json={"rows": [{
+            "line_type": "Service", "activity_code": "DRL", "service_code": "MUD-LOG",
+            "classification": "NPT", "charging_basis": "Monthly", "quantity": "1",
+            "quantity_unit": "days", "currency": "USD", "override_rate": "150",
+            "override_reason": "Unplanned call-out", "party_name": "Acme Services",
+        }]})
+        assert response.status_code == 200, response.text
+        assert response.json()["success"] is False
+        assert "Charging basis" in " ".join(response.json()["errors"])
+
+        # The same value written the way an operator types it is accepted.
+        accepted = client.post(f"/api/v1/daily-cost/entries/{entry_id}/import", headers=headers, json={"rows": [{
+            "line_type": "Service", "activity_code": "DRL", "service_code": "MUD-LOG",
+            "classification": "NPT", "charging_basis": "day rate", "quantity": "1",
+            "quantity_unit": "days", "currency": "USD", "override_rate": "150",
+            "override_reason": "Unplanned call-out", "party_name": "Acme Services",
+        }]})
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["success"] is True, accepted.text
+
+
+def test_daily_cost_reference_and_sheet_survive_an_unusable_afe():
+    """One broken AFE must not take the whole Daily Cost module down with a 500."""
+    with SessionLocal() as db:
+        organization_id = db.query(Organization).filter(Organization.slug == "north").one().id
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+
+        from app.models import Afe
+        from app.services import afe as afe_service
+
+        with SessionLocal() as db:
+            db.add(Afe(
+                id="afe-broken", organization_id=organization_id, rig_id=setup["rig"]["id"],
+                well_id=setup["well"]["id"], afe_code="AFE-BROKEN", afe_name="Broken estimate",
+                afe_type="Drilling", status="draft",
+            ))
+            db.commit()
+
+        original = afe_service.get_estimate
+
+        def explode(db, organization_id, afe_id, *args, **kwargs):
+            if afe_id == "afe-broken":
+                raise RuntimeError("this stored estimate cannot be read")
+            return original(db, organization_id, afe_id, *args, **kwargs)
+
+        afe_service.get_estimate = explode
+        try:
+            reference = client.get("/api/v1/daily-cost/reference", headers=headers)
+            assert reference.status_code == 200, reference.text
+            assert [afe["afe_code"] for afe in reference.json()["afes"]] == ["AFE-01"]
+            assert client.get("/api/v1/daily-cost/overview", headers=headers).status_code == 200
+            assert client.get(f"/api/v1/daily-cost/entries/{setup['entry']['id']}", headers=headers).status_code == 200
+        finally:
+            afe_service.get_estimate = original
+
+
+def test_well_cost_summary_reports_daily_and_factor_views():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        entry_id = setup["entry"]["id"]
+        baseline = setup["baseline"]
+        rate = baseline["service_rates"][0]
+        for index, day in enumerate(("2026-10-10", "2026-10-11")):
+            if index:
+                created = client.post("/api/v1/daily-cost/entries", headers=headers, json={
+                    "well_id": setup["well"]["id"], "afe_id": setup["afe"]["id"],
+                    "cost_date": day, "remarks": "",
+                })
+                assert created.status_code == 201, created.text
+                entry_id = created.json()["entry"]["id"]
+            saved = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json={
+                "remarks": "day actuals",
+                "services": [{
+                    "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
+                    "phase_id": setup["phase"]["id"], "classification": "Planned",
+                    "vendor_id": setup["vendor"]["id"], "quantity": "12", "quantity_unit": "hours",
+                    "currency": "USD", "service_id": setup["service"]["id"],
+                    "baseline_service_rate_id": rate["id"], "charging_basis": "Day Rate",
+                    "charge_category": "Operation",
+                }],
+                "consumables": [{
+                    "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
+                    "phase_id": setup["phase"]["id"], "classification": "UPA",
+                    "vendor_id": setup["vendor"]["id"], "quantity": "3", "currency": "USD",
+                    "override_rate": "50", "override_reason": "Extra mud on the margin",
+                    "category": "Mud Chemicals", "item_kind": "mud_chemical", "item_id": setup["chemical"]["id"],
+                }],
+                "tangibles": [],
+            })
+            assert saved.status_code == 200, saved.text
+            assert client.post(f"/api/v1/daily-cost/entries/{entry_id}/submit", headers=headers,
+                               json={"remarks": "reviewed"}).status_code == 200
+
+        wells = client.get("/api/v1/daily-cost/wells", headers=headers)
+        assert wells.status_code == 200, wells.text
+        assert [well["id"] for well in wells.json()] == [setup["well"]["id"]]
+
+        summary = client.get(f"/api/v1/daily-cost/wells/{setup['well']['id']}/cost-summary", headers=headers)
+        assert summary.status_code == 200, summary.text
+        data = summary.json()
+        assert data["totals"]["currency"] == "USD"
+        assert data["totals"]["recorded_days"] == 2
+        assert data["totals"]["elapsed_days"] == 2
+        assert data["totals"]["sheets"] == 2
+        assert data["totals"]["submitted_sheets"] == 2
+        assert data["totals"]["lines"] == 4
+        assert Decimal(data["totals"]["actual"]) == Decimal("400.00")  # 2 x (50 day rate + 150 mud)
+        assert Decimal(data["totals"]["services"]) == Decimal("100.00")
+        assert Decimal(data["totals"]["consumables"]) == Decimal("300.00")
+        assert Decimal(data["totals"]["upa"]) == Decimal("300.00")
+        assert Decimal(data["totals"]["balance"]) == Decimal("5600.00")
+        assert [row["cost_date"] for row in data["daily"]] == ["2026-10-10", "2026-10-11"]
+        assert Decimal(data["daily"][-1]["cumulative"]) == Decimal(data["totals"]["actual"])
+        assert Decimal(data["daily"][0]["budget_balance"]) == Decimal("5800.00")
+        assert Decimal(data["daily"][0]["total"]) == Decimal("200.00")
+
+        factors = {group["dimension"]: group for group in data["factors"]}
+        assert factors["classification"]["rows"][0]["code"] == "UPA"
+        assert {row["code"] for row in factors["classification"]["rows"]} == {"Planned", "UPA"}
+        activity = factors["activity"]["rows"][0]
+        assert activity["code"] == "DRL" and Decimal(activity["amount"]) == Decimal("400.00")
+        assert Decimal(activity["share"]) == Decimal("100.00")
+        party = factors["party"]["rows"][0]
+        assert party["name"] == "Acme Services"
+        assert sorted(row["name"] for row in factors["rate_source"]["rows"]) == [
+            "Daily override (justified)", "Locked AFE rate",
+        ]
+        assert sorted(row["name"] for row in factors["item"]["rows"]) == ["Barite", "Mud logging"]
+        section = factors["section"]["rows"][0]
+        assert section["code"] == "17-1/2" and Decimal(section["planned"]) == Decimal("5000.00")
+        assert Decimal(factors["cost_group"]["total"]) == Decimal("6000.00")
+        planned_keys = {row["budget_key"]: row for row in data["budget_lines"]}
+        assert planned_keys[f"service:{rate['source_afe_line_id']}"]["actual_to_date"] == "100.00"
+
+        # Submitted-only and date-range views narrow the same ledger.
+        submitted_only = client.get(
+            f"/api/v1/daily-cost/wells/{setup['well']['id']}/cost-summary?include_draft=false", headers=headers)
+        assert submitted_only.status_code == 200
+        assert submitted_only.json()["totals"]["actual"] == data["totals"]["actual"]
+        single_day = client.get(
+            f"/api/v1/daily-cost/wells/{setup['well']['id']}/cost-summary?from=2026-10-11&to=2026-10-11", headers=headers)
+        assert len(single_day.json()["daily"]) == 1
+        assert single_day.json()["totals"]["actual"] == "200.00"
+
+        # The register filters daily: well, AFE, status and date range.
+        filtered = client.get(
+            f"/api/v1/daily-cost/entries?well_id={setup['well']['id']}&status=submitted&from=2026-10-11", headers=headers)
+        assert filtered.status_code == 200, filtered.text
+        assert [row["cost_date"] for row in filtered.json()] == ["2026-10-11"]
+        assert client.get(
+            "/api/v1/daily-cost/entries?status=submitted&from=2030-01-01", headers=headers).json() == []

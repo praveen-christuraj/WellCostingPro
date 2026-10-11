@@ -30,6 +30,7 @@ const AfeManagement = lazy(() => import('./pages/AfeManagement'))
 const AfeEstimate = lazy(() => import('./pages/AfeEstimate'))
 const DailyCostManagement = lazy(() => import('./pages/DailyCostManagement'))
 const DailyCostSheet = lazy(() => import('./pages/DailyCostSheet'))
+const DailyCostAnalysis = lazy(() => import('./pages/DailyCostAnalysis'))
 
 function Guard({ permission, children }: { permission: string | string[]; children: ReactNode }) {
   const { can } = useAuth()
@@ -74,6 +75,8 @@ export default function App() {
           <Route path="afe/estimate/:afeId" element={<Guard permission="afe:read"><AfeEstimate/></Guard>}/>
           <Route path="daily-cost" element={<Guard permission="daily-cost:read"><DailyCostManagement/></Guard>}/>
           <Route path="daily-cost/entries/:entryId" element={<Guard permission="daily-cost:read"><DailyCostSheet/></Guard>}/>
+          <Route path="daily-cost/analysis" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
+          <Route path="daily-cost/analysis/:wellId" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
           <Route path="*" element={<Navigate to="/" replace/>}/>
         </Route>
       </>}

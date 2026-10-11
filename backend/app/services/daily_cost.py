@@ -9,6 +9,7 @@ both their native currency and the AFE's standard currency for reconciliation.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -18,8 +19,8 @@ from uuid import uuid4
 
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
-from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import Select, func, literal, select, union_all
+from sqlalchemy.exc import DataError, DatabaseError, IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models import (
@@ -34,16 +35,17 @@ from app.models.entities import User
 from app.models.rig_well import now as _model_now, uid
 from app.schemas.afe import AfeEstimateOut
 from app.schemas.daily_cost import (
-    DailyCostAfeOption, DailyCostBaselineBudgetOut, DailyCostBaselineOut,
+    DailyCostAfeOption, DailyCostAfePosition, DailyCostBaselineBudgetOut, DailyCostBaselineOut,
     DailyCostBudgetComparison, DailyCostCatalogueOption, DailyCostComparison,
     DailyCostComparisonGroup, DailyCostConsumableLineIn, DailyCostConsumableLineOut,
-    DailyCostDayOut, DailyCostEntryCreate, DailyCostEntryOut, DailyCostExportAudit,
-    DailyCostGroupSummary, DailyCostIDs, DailyCostImportRequest, DailyCostImportResponse,
-    DailyCostOverview, DailyCostPreviewOut, DailyCostRateOut, DailyCostReference,
-    DailyCostReopenIn, DailyCostRigOption, DailyCostSaveIn, DailyCostSectionOption,
-    DailyCostServiceLineIn, DailyCostServiceLineOut, DailyCostStatusIn,
+    DailyCostDailyRow, DailyCostDayOut, DailyCostEntryCreate, DailyCostEntryOut, DailyCostExportAudit,
+    DailyCostFactorGroup, DailyCostFactorRow, DailyCostGroupSummary, DailyCostIDs,
+    DailyCostImportRequest, DailyCostImportResponse, DailyCostOverview, DailyCostPreviewOut,
+    DailyCostRateOut, DailyCostReference, DailyCostReopenIn, DailyCostRigOption, DailyCostSaveIn,
+    DailyCostSectionOption, DailyCostServiceLineIn, DailyCostServiceLineOut, DailyCostStatusIn,
     DailyCostSubActivityOption, DailyCostTangibleLineIn, DailyCostTangibleLineOut,
-    DailyCostTrendPoint, DailyCostVendorOption, DailyCostWarnings, DailyCostWellOption,
+    DailyCostTrendPoint, DailyCostVendorOption, DailyCostWarnings, DailyCostWellHeader,
+    DailyCostWellOption, DailyCostWellSummary, DailyCostWellTotals,
 )
 from app.services import afe as afe_service
 from app.services import audit
@@ -52,9 +54,19 @@ from app.models.catalogue import CatalogueOption
 MONEY = Decimal("0.01")
 RATE = Decimal("0.0001")
 FX = Decimal("0.000001")
+# Every money column is Numeric(18, 2). PostgreSQL rejects anything larger with a
+# driver error, which would surface as an opaque 500, so the limit is checked here
+# and reported to the user as ordinary validation.
+MONEY_LIMIT = Decimal("9999999999999999.99")
 MAX_IMPORT_ERRORS = 100
 SERVICE_ONE_TIME = {"Mobilization", "Demobilization", "Fixed Charge"}
 SERVICE_DAY_BASED = {"Operation", "Standby", "Personnel-Operation", "Personnel-Standby", "Others"}
+QUANTITY_UNIT_FOR_BASIS = {"Day Rate": "days", "Per Service Rate": "service", "Per Section Rate": "section"}
+BASIS_ALIASES = {
+    "day rate": "Day Rate", "dayrate": "Day Rate", "day": "Day Rate",
+    "per service rate": "Per Service Rate", "perservicerate": "Per Service Rate", "service": "Per Service Rate",
+    "per section rate": "Per Section Rate", "persectionrate": "Per Section Rate", "section": "Per Section Rate",
+}
 CONSUMABLE_KIND_MODEL: dict[str, tuple[type[Any], str, str, str]] = {
     "mud_chemical": (MudChemical, "chemical_code", "chemical_name", "Mud Chemicals"),
     "cement_additive": (CementAdditive, "additive_code", "additive_name", "Cement Additives"),
@@ -62,6 +74,13 @@ CONSUMABLE_KIND_MODEL: dict[str, tuple[type[Any], str, str, str]] = {
     "drill_bit": (DrillBit, "bit_code", "bit_name", "Drill Bits"),
     "tangible": (Tangible, "tangible_code", "tangible_name", "Tangibles"),
 }
+LINE_MODELS: tuple[tuple[type[Any], str], ...] = (
+    (DailyCostServiceLine, "Services"),
+    (DailyCostConsumableLine, "Consumables"),
+    (DailyCostTangibleLine, "Tangibles"),
+)
+
+log = logging.getLogger("app.daily_cost")
 
 # SQLite ignores SELECT FOR UPDATE. These process locks also serialize snapshot
 # creation and whole-sheet replacements in single-process local deployments.
@@ -73,7 +92,14 @@ def _now() -> datetime:
 
 
 def _money(value: Decimal | int | str) -> Decimal:
-    return Decimal(value).quantize(MONEY, rounding=ROUND_HALF_UP)
+    amount = Decimal(value).quantize(MONEY, rounding=ROUND_HALF_UP)
+    if abs(amount) > MONEY_LIMIT:
+        raise HTTPException(
+            status_code=422,
+            detail="This amount is too large for the cost ledger. Reduce the quantity or rate, "
+                   "or record the cost in a more suitable unit.",
+        )
+    return amount
 
 
 def _rate(value: Decimal | int | str) -> Decimal:
@@ -88,6 +114,12 @@ def _label(code: str, name: str) -> str:
     return " — ".join(part for part in (code, name) if part)
 
 
+def _normalise_basis(value: Any) -> str:
+    """Accept charging bases as written in an imported sheet, case and spacing aside."""
+    text = str(value or "").strip()
+    return BASIS_ALIASES.get(text.casefold(), text)
+
+
 def _actor_name(user: User) -> str:
     return user.full_name or user.email
 
@@ -100,6 +132,23 @@ def _commit(db: Session) -> None:
         raise HTTPException(
             status_code=409,
             detail="This daily cost change conflicts with an existing entry or dependent workspace record",
+        ) from error
+    except DataError as error:
+        # PostgreSQL raises a driver error (not an IntegrityError) when a value
+        # exceeds its column precision. Report it as validation, never as a 500.
+        db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail="A value on this daily sheet is outside the range the cost ledger accepts. "
+                   "Reduce the quantity or rate and save again.",
+        ) from error
+    except DatabaseError as error:
+        db.rollback()
+        log.exception("Daily cost write failed with a database error")
+        raise HTTPException(
+            status_code=503,
+            detail="The daily cost ledger could not be saved because the database rejected the change. "
+                   "Retry; if it continues, contact the administrator.",
         ) from error
 
 
@@ -525,6 +574,10 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
             estimate = afe_service.get_estimate(db, organization_id, afe.id)
         except HTTPException:
             continue
+        except Exception:  # noqa: BLE001 - one unusable AFE must not break the whole module
+            db.rollback()  # a failed read would otherwise poison the rest of this request
+            log.exception("Skipping AFE %s while building daily cost reference data", afe.afe_code)
+            continue
         if estimate.summary.total is None or not estimate.summary.currency.converted:
             continue
         afe_options.append(DailyCostAfeOption(
@@ -912,7 +965,8 @@ def _normalise_service(
         raise HTTPException(status_code=422, detail=f"Service {service.service_code} is inactive in Master Data")
     rate = _service_rate_or_422(entry, line, service)
     basis = rate.charging_basis if rate else line.charging_basis
-    assert basis is not None
+    if not basis:
+        raise HTTPException(status_code=422, detail=f"Service {service.service_code}: select a charging basis for this line")
     _validate_service_unit(line, basis, f"Service {service.service_code}")
     if basis in ("Per Service Rate", "Per Section Rate") and not line.hole_section_id:
         raise HTTPException(status_code=422, detail=f"Service {service.service_code}: select a hole section for this charging basis")
@@ -1695,7 +1749,18 @@ def preview_day(
 # ---------------------------------------------------------------------------
 
 
-def list_entries(db: Session, organization_id: str, *, deleted: bool = False) -> list[DailyCostEntryOut]:
+def list_entries(
+    db: Session,
+    organization_id: str,
+    *,
+    deleted: bool = False,
+    well_id: str = "",
+    afe_id: str = "",
+    status: str = "",
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[DailyCostEntryOut]:
+    """Daily register, optionally narrowed to one well, AFE, status or date range."""
     rows = db.scalars(
         select(DailyCostEntry)
         .options(
@@ -1707,6 +1772,16 @@ def list_entries(db: Session, organization_id: str, *, deleted: bool = False) ->
         .where(DailyCostEntry.organization_id == organization_id, DailyCostEntry.is_deleted.is_(deleted))
         .order_by(DailyCostEntry.cost_date.desc(), DailyCostEntry.created_at.desc(), DailyCostEntry.id)
     ).unique().all()
+    if well_id:
+        rows = [row for row in rows if row.well_id == well_id]
+    if afe_id:
+        rows = [row for row in rows if row.afe_id == afe_id]
+    if status:
+        rows = [row for row in rows if row.status == status]
+    if date_from is not None:
+        rows = [row for row in rows if row.cost_date >= date_from]
+    if date_to is not None:
+        rows = [row for row in rows if row.cost_date <= date_to]
     return [_entry_out(row) for row in rows]
 
 
@@ -1959,12 +2034,517 @@ def overview(db: Session, organization_id: str, user: User) -> DailyCostOverview
     return DailyCostOverview(
         active_entries=len(active), deleted_entries=deleted_count,
         submitted_entries=sum(1 for row in active if row.status == "submitted"),
-        draft_entries=sum(1 for row in active if row.status == "draft"),
+draft_entries=sum(1 for row in active if row.status == "draft"),
         wells_tracked=len({row.well_id for row in active}), active_baselines=len(baselines),
         over_budget_afes=over_budget, total_planned_by_currency=planned_out,
         actual_to_date_by_currency=actual_out, remaining_by_currency=remaining_out,
         groups=groups, trend=trend, recent_activity=recent,
     )
+
+
+# ---------------------------------------------------------------------------
+# Whole-well cost analysis
+# ---------------------------------------------------------------------------
+
+FACTOR_LABELS = {
+    "cost_group": "Cost group",
+    "classification": "Planned / UPA / NPT",
+    "section": "Hole section",
+    "phase": "Phase",
+    "activity": "Master Data activity",
+    "sub_activity": "Well sub activity",
+    "party": "Responsible party",
+    "rate_source": "Rate source",
+    "currency": "Currency (as charged)",
+    "item": "Service, consumable and tangible",
+}
+FACTOR_COLUMNS: dict[str, tuple[str, ...]] = {
+    "cost_group": ("cost_group",),
+    "classification": ("classification",),
+    "section": ("section_code", "section_name"),
+    "phase": ("section_code", "phase_code", "phase_name"),
+    "activity": ("activity_code", "activity_name"),
+    "sub_activity": ("sub_activity_code", "sub_activity_name", "sub_activity_party"),
+    "party": ("vendor_code", "vendor_name", "party_name"),
+    "rate_source": ("rate_source",),
+    "currency": ("currency", "exchange_rate"),
+    "item": ("cost_group", "item_code", "item_name"),
+}
+RATE_SOURCE_LABELS = {
+    "afe_baseline": "Locked AFE rate",
+    "catalogue_baseline": "Locked catalogue rate",
+    "daily_override": "Daily override (justified)",
+    "manual_unplanned": "Manual rate (unplanned)",
+    "": "Unrated",
+}
+NO_SECTION = "Well level (no hole section)"
+NO_PHASE = "Whole section"
+UNASSIGNED = "Unassigned"
+
+
+def _line_union(
+    organization_id: str,
+    well_id: str,
+    *,
+    date_from: date | None,
+    date_to: date | None,
+    include_draft: bool,
+) -> Any:
+    """One row per daily cost line, whatever its group, with every captured factor.
+
+    The three line tables share the same factor columns, so a UNION ALL keeps one
+    column-wise shape for every cut of the ledger (day, section, activity, party).
+    """
+    parts = []
+    for model, group in LINE_MODELS:
+        statement = select(
+            literal(group).label("cost_group"),
+            _item_columns(model).label("item_code"),
+            _item_columns(model, name=True).label("item_name"),
+            DailyCostEntry.cost_date.label("cost_date"),
+            DailyCostEntry.status.label("entry_status"),
+            model.section_code_snapshot.label("section_code"),
+            model.section_name_snapshot.label("section_name"),
+            model.phase_code_snapshot.label("phase_code"),
+            model.phase_name_snapshot.label("phase_name"),
+            model.activity_code_snapshot.label("activity_code"),
+            model.activity_name_snapshot.label("activity_name"),
+            model.sub_activity_code_snapshot.label("sub_activity_code"),
+            model.sub_activity_name_snapshot.label("sub_activity_name"),
+            model.sub_activity_party_snapshot.label("sub_activity_party"),
+            model.vendor_code_snapshot.label("vendor_code"),
+            model.vendor_name_snapshot.label("vendor_name"),
+            model.party_name.label("party_name"),
+            model.classification.label("classification"),
+            model.rate_source.label("rate_source"),
+            model.currency.label("currency"),
+            model.exchange_rate.label("exchange_rate"),
+            model.budget_key.label("budget_key"),
+            model.quantity.label("quantity"),
+            model.amount.label("amount"),
+            model.standard_amount.label("standard_amount"),
+        ).select_from(model).join(DailyCostEntry, model.entry_id == DailyCostEntry.id).where(
+            model.organization_id == organization_id,
+            DailyCostEntry.well_id == well_id,
+            DailyCostEntry.is_deleted.is_(False),
+        )
+        if not include_draft:
+            statement = statement.where(DailyCostEntry.status == "submitted")
+        if date_from is not None:
+            statement = statement.where(DailyCostEntry.cost_date >= date_from)
+        if date_to is not None:
+            statement = statement.where(DailyCostEntry.cost_date <= date_to)
+        parts.append(statement)
+    return union_all(*parts).subquery("daily_cost_lines")
+
+
+def _item_columns(model: type[Any], name: bool = False) -> Any:
+    if model is DailyCostServiceLine:
+        return model.service_name_snapshot if name else model.service_code_snapshot
+    if model is DailyCostConsumableLine:
+        return model.item_name_snapshot if name else model.item_code_snapshot
+    return model.tangible_name_snapshot if name else model.tangible_code_snapshot
+
+
+def _factor_row_labels(dimension: str, values: list[str]) -> tuple[str, str, str]:
+    """Return (code, name, detail) for one grouped factor row."""
+    if dimension == "cost_group":
+        return values[0], values[0], ""
+    if dimension == "classification":
+        return values[0], values[0], "Planned work" if values[0] == "Planned" else (
+            "Unplanned Activity" if values[0] == "UPA" else "Non-Productive Time" if values[0] == "NPT" else "")
+    if dimension == "section":
+        if not values[0]:
+            return UNASSIGNED, NO_SECTION, "Costs not booked to a hole section"
+        return values[0], values[1] or values[0], ""
+    if dimension == "phase":
+        code = " · ".join(value for value in values[:2] if value)
+        return code or UNASSIGNED, values[2] or NO_PHASE, values[0] or NO_SECTION
+    if dimension == "activity":
+        return values[0] or UNASSIGNED, values[1] or values[0] or UNASSIGNED, ""
+    if dimension == "sub_activity":
+        name = values[1] or values[0] or UNASSIGNED
+        return values[0] or UNASSIGNED, name, values[2]
+    if dimension == "party":
+        name = values[1] or values[2] or UNASSIGNED
+        detail = values[2] if values[2] and values[2] != name else ""
+        return values[0] or values[2] or UNASSIGNED, name, detail
+    if dimension == "rate_source":
+        return values[0] or UNASSIGNED, RATE_SOURCE_LABELS.get(values[0], values[0] or UNASSIGNED), ""
+    if dimension == "currency":
+        factor = Decimal(values[1] or "1")
+        return values[0] or UNASSIGNED, values[0] or UNASSIGNED, f"1 {values[0] or '?'} = {factor:,.6f} standard"
+    # item
+    group = values[0] or ""
+    name = values[2] or values[1] or UNASSIGNED
+    return values[1] or UNASSIGNED, name, group
+
+
+def _factor_rows(
+    db: Session,
+    lines: Any,
+    dimension: str,
+    *,
+    currency: str,
+    total: Decimal,
+    planned_lookup: Any = None,
+    native: bool = False,
+) -> list[DailyCostFactorRow]:
+    """Group the ledger by one factor. Every grouping column is a stored column."""
+    columns = [getattr(lines.c, name) for name in FACTOR_COLUMNS[dimension]]
+    amount = lines.c.amount if native else lines.c.standard_amount
+    rows = db.execute(
+        select(*columns, func.sum(amount).label("total"), func.sum(lines.c.quantity).label("quantity"))
+        .select_from(lines)
+        .group_by(*columns)
+    ).all()
+    grouped = [(tuple(str(value or "") for value in row[:-2]), Decimal(row[-2] or 0), Decimal(row[-1] or 0)) for row in rows]
+    grouped.sort(key=lambda row: (-row[1], row[0]))
+    result: list[DailyCostFactorRow] = []
+    for key, amount_value, quantity in grouped:
+        code, name, detail = _factor_row_labels(dimension, list(key))
+        planned = planned_lookup(list(key)) if planned_lookup else None
+        result.append(DailyCostFactorRow(
+            key="|".join(key), code=code, name=name, detail=detail,
+            amount=_money(amount_value),
+            planned=_money(planned) if planned is not None else None,
+            balance=_money(planned - amount_value) if planned is not None else None,
+            share=(amount_value / total * Decimal("100")).quantize(Decimal("0.01")) if total > 0 else Decimal("0.00"),
+            quantity=quantity,
+        ))
+    return result
+
+
+def well_cost_summary(
+    db: Session,
+    organization_id: str,
+    well_id: str,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    include_draft: bool = True,
+) -> DailyCostWellSummary:
+    """Cost the whole well: daily run sheet, AFE positions and every captured factor."""
+    well = db.scalars(
+        select(Well).options(joinedload(Well.rig))
+        .where(Well.id == well_id, Well.organization_id == organization_id, Well.is_deleted.is_(False))
+    ).unique().first()
+    if well is None:
+        raise HTTPException(status_code=404, detail="Well not found in this workspace")
+
+    entries = list(db.scalars(
+        select(DailyCostEntry)
+        .options(joinedload(DailyCostEntry.afe), joinedload(DailyCostEntry.baseline))
+        .where(
+            DailyCostEntry.organization_id == organization_id,
+            DailyCostEntry.well_id == well_id,
+            DailyCostEntry.is_deleted.is_(False),
+        )
+        .order_by(DailyCostEntry.cost_date, DailyCostEntry.id)
+    ).unique().all())
+    windowed = [
+        row for row in entries
+        if (date_from is None or row.cost_date >= date_from) and (date_to is None or row.cost_date <= date_to)
+    ]
+    baseline_ids = {row.baseline_id for row in entries}
+    baselines = list(db.scalars(
+        select(DailyCostBaseline).options(
+            selectinload(DailyCostBaseline.budget_lines), selectinload(DailyCostBaseline.well_sections)
+        ).where(DailyCostBaseline.organization_id == organization_id, DailyCostBaseline.id.in_(baseline_ids))
+    ).unique().all()) if baseline_ids else []
+    currency = baselines[0].standard_currency if baselines else ""
+    for baseline in sorted(baselines, key=lambda row: row.locked_at):
+        if baseline.standard_currency != currency:
+            currency = ""  # mixed standard currencies cannot be added together
+    if len({row.standard_currency for row in entries}) > 1:
+        currency = ""
+
+    afe_options: list[DailyCostAfeOption] = []
+    for afe in sorted({row.afe_id: row.afe for row in entries}.values(), key=lambda row: row.afe_code):
+        entry_rows = [row for row in entries if row.afe_id == afe.id]
+        planned_total = sum(
+            (Decimal(baseline.total_amount) for baseline in baselines if baseline.afe_id == afe.id), Decimal("0")
+        )
+        afe_options.append(DailyCostAfeOption(
+            id=afe.id, well_id=afe.well_id, afe_code=afe.afe_code, afe_name=afe.afe_name,
+            afe_type=afe.afe_type, status=afe.status,
+            standard_currency=entry_rows[0].standard_currency if entry_rows else currency,
+            total_cost=planned_total, estimate_saved_at=afe.estimate_saved_at,
+            display_name=f"{afe.afe_code} — {afe.afe_name} · {entry_rows[0].standard_currency if entry_rows else currency} {planned_total:,.2f}",
+        ))
+
+    lines = _line_union(organization_id, well_id, date_from=date_from, date_to=date_to, include_draft=include_draft)
+    totals_by_group = {
+        str(row[0] or ""): Decimal(row[1] or 0)
+        for row in db.execute(
+            select(lines.c.cost_group, func.sum(lines.c.standard_amount)).select_from(lines).group_by(lines.c.cost_group)
+        ).all()
+    }
+    services = totals_by_group.get("Services", Decimal("0"))
+    consumables = totals_by_group.get("Consumables", Decimal("0"))
+    tangibles = totals_by_group.get("Tangibles", Decimal("0"))
+    actual_total = _money(services + consumables + tangibles)
+    upa = _money(sum((
+        Decimal(row[0] or 0) for row in db.execute(
+            select(func.sum(lines.c.standard_amount)).select_from(lines).where(lines.c.classification == "UPA")
+        ).all()
+    ), Decimal("0")))
+    npt = _money(sum((
+        Decimal(row[0] or 0) for row in db.execute(
+            select(func.sum(lines.c.standard_amount)).select_from(lines).where(lines.c.classification == "NPT")
+        ).all()
+    ), Decimal("0")))
+
+    planned_by_group: dict[str, Decimal] = {}
+    planned_days = Decimal("0")
+    for baseline in baselines:
+        planned_by_group["Services"] = planned_by_group.get("Services", Decimal("0")) + Decimal(baseline.services_total)
+        planned_by_group["Consumables"] = planned_by_group.get("Consumables", Decimal("0")) + Decimal(baseline.consumables_total)
+        planned_by_group["Tangibles"] = planned_by_group.get("Tangibles", Decimal("0")) + Decimal(baseline.tangibles_total)
+        planned_days += sum((Decimal(section.total_days) for section in baseline.well_sections), Decimal("0"))
+    planned_total = _money(sum(planned_by_group.values(), Decimal("0")))
+
+    # ---- daily run sheet -----------------------------------------------------
+    per_day: dict[date, dict[str, Any]] = {}
+    for row in db.execute(
+        select(lines.c.cost_date, lines.c.cost_group, func.sum(lines.c.standard_amount))
+        .select_from(lines).group_by(lines.c.cost_date, lines.c.cost_group).order_by(lines.c.cost_date)
+    ).all():
+        day = per_day.setdefault(row[0], {
+            "Services": Decimal("0"), "Consumables": Decimal("0"), "Tangibles": Decimal("0"),
+            "UPA": Decimal("0"), "NPT": Decimal("0"), "sheets": set(), "statuses": set(),
+        })
+        day[row[1]] = Decimal(row[2] or 0)
+    for row in db.execute(
+        select(lines.c.cost_date, lines.c.classification, func.sum(lines.c.standard_amount))
+        .select_from(lines).where(lines.c.classification.in_(("UPA", "NPT")))
+        .group_by(lines.c.cost_date, lines.c.classification)
+    ).all():
+        per_day[row[0]][row[1]] = Decimal(row[2] or 0)
+    for entry in windowed:
+        day = per_day.setdefault(entry.cost_date, {
+            "Services": Decimal("0"), "Consumables": Decimal("0"), "Tangibles": Decimal("0"),
+            "UPA": Decimal("0"), "NPT": Decimal("0"), "sheets": set(), "statuses": set(),
+        })
+        day["sheets"].add(entry.id)
+        day["statuses"].add(entry.status)
+    cumulative = Decimal("0")
+    daily: list[DailyCostDailyRow] = []
+    for day_date in sorted(per_day):
+        values = per_day[day_date]
+        total = _money(values["Services"] + values["Consumables"] + values["Tangibles"])
+        cumulative = _money(cumulative + total)
+        statuses = values["statuses"]
+        daily.append(DailyCostDailyRow(
+            cost_date=day_date,
+            services=_money(values["Services"]), consumables=_money(values["Consumables"]),
+            tangibles=_money(values["Tangibles"]), total=total,
+            upa=_money(values["UPA"]), npt=_money(values["NPT"]), cumulative=cumulative,
+            budget_balance=_money(planned_total - cumulative),
+            sheets=len(values["sheets"]),
+            status=("submitted" if statuses == {"submitted"} else "draft" if statuses == {"draft"} else "mixed"),
+        ))
+
+    # ---- AFE positions -------------------------------------------------------
+    positions: list[DailyCostAfePosition] = []
+    for option in afe_options:
+        entry_rows = [row for row in windowed if row.afe_id == option.id]
+        planned = Decimal("0")
+        for baseline in baselines:
+            if baseline.afe_id == option.id:
+                planned += Decimal(baseline.total_amount)
+        actual = _money(sum((Decimal(row.total_cost) for row in entry_rows), Decimal("0")))
+        days_recorded = sorted({row.cost_date for row in entry_rows})
+        positions.append(DailyCostAfePosition(
+            afe_id=option.id, afe_code=option.afe_code, afe_name=option.afe_name,
+            afe_status=option.status, currency=option.standard_currency,
+            planned_total=_money(planned), actual=actual, balance=_money(planned - actual),
+            over_budget=actual > planned, sheets=len(entry_rows), days_recorded=len(days_recorded),
+            first_day=days_recorded[0] if days_recorded else None,
+            last_day=days_recorded[-1] if days_recorded else None,
+        ))
+
+    # ---- factors -------------------------------------------------------------
+    section_planned: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    for baseline in baselines:
+        section_labels = {
+            section.hole_section_id: (section.section_code_snapshot, section.section_name_snapshot)
+            for section in baseline.well_sections
+        }
+        for budget_line in baseline.budget_lines:
+            label = section_labels.get(budget_line.section_id or "", (None, None))
+            if label[0]:
+                section_planned[(label[0], label[1] or label[0])] += Decimal(budget_line.planned_amount)
+
+    def planned_by_group_lookup(values: list[str]) -> Decimal | None:
+        return planned_by_group.get(values[0])
+
+    def planned_by_section_lookup(values: list[str]) -> Decimal | None:
+        return section_planned.get((values[0], values[1] or values[0])) if values[0] else None
+
+    factors = [
+        DailyCostFactorGroup(
+            dimension="cost_group", label=FACTOR_LABELS["cost_group"], currency=currency, total=planned_total,
+            rows=_factor_rows(db, lines, "cost_group", currency=currency, total=actual_total,
+                              planned_lookup=planned_by_group_lookup),
+        ),
+        DailyCostFactorGroup(
+            dimension="classification", label=FACTOR_LABELS["classification"], currency=currency, total=actual_total,
+            rows=_factor_rows(db, lines, "classification", currency=currency, total=actual_total),
+        ),
+        DailyCostFactorGroup(
+            dimension="section", label=FACTOR_LABELS["section"], currency=currency, total=actual_total,
+            rows=_factor_rows(db, lines, "section", currency=currency, total=actual_total,
+                              planned_lookup=planned_by_section_lookup),
+        ),
+        DailyCostFactorGroup(
+            dimension="phase", label=FACTOR_LABELS["phase"], currency=currency, total=actual_total,
+            rows=_factor_rows(db, lines, "phase", currency=currency, total=actual_total),
+        ),
+        DailyCostFactorGroup(
+            dimension="activity", label=FACTOR_LABELS["activity"], currency=currency, total=actual_total,
+            rows=_factor_rows(db, lines, "activity", currency=currency, total=actual_total),
+        ),
+        DailyCostFactorGroup(
+            dimension="sub_activity", label=FACTOR_LABELS["sub_activity"], currency=currency, total=actual_total,
+            rows=_factor_rows(db, lines, "sub_activity", currency=currency, total=actual_total),
+        ),
+        DailyCostFactorGroup(
+            dimension="party", label=FACTOR_LABELS["party"], currency=currency, total=actual_total,
+            rows=_factor_rows(db, lines, "party", currency=currency, total=actual_total),
+        ),
+        DailyCostFactorGroup(
+            dimension="rate_source", label=FACTOR_LABELS["rate_source"], currency=currency, total=actual_total,
+            rows=_factor_rows(db, lines, "rate_source", currency=currency, total=actual_total),
+        ),
+        DailyCostFactorGroup(
+            dimension="item", label=FACTOR_LABELS["item"], currency=currency, total=actual_total,
+            rows=_factor_rows(db, lines, "item", currency=currency, total=actual_total),
+        ),
+        DailyCostFactorGroup(
+            dimension="currency", label=FACTOR_LABELS["currency"], currency=currency, total=actual_total,
+            rows=_factor_rows(db, lines, "currency", currency=currency, total=actual_total, native=True),
+        ),
+    ]
+
+    # ---- budget reconciliation ----------------------------------------------
+    budget_rows = db.execute(
+        select(lines.c.budget_key, lines.c.cost_group, func.sum(lines.c.standard_amount))
+        .select_from(lines).group_by(lines.c.budget_key, lines.c.cost_group)
+    ).all()
+    actual_by_key = {str(row[0] or ""): Decimal(row[2] or 0) for row in budget_rows}
+    group_by_key = {str(row[0] or ""): str(row[1] or "Services") for row in budget_rows}
+    planned_by_key: dict[str, Decimal] = {}
+    meta: dict[str, DailyCostBaselineBudgetLine] = {}
+    for baseline in baselines:
+        for budget_line in baseline.budget_lines:
+            key = f"{budget_line.budget_kind}:{budget_line.item_key}"
+            planned_by_key[key] = planned_by_key.get(key, Decimal("0")) + Decimal(budget_line.planned_amount)
+            meta.setdefault(key, budget_line)
+    unplanned_names: dict[tuple[str, str], str] = {}
+    for row in db.execute(
+        select(lines.c.cost_group, lines.c.budget_key, lines.c.activity_name, lines.c.party_name)
+        .select_from(lines)
+        .where(lines.c.budget_key.like("unplanned:%"))
+        .group_by(lines.c.cost_group, lines.c.budget_key)
+    ).all():
+        unplanned_names[(str(row[0]), str(row[1]))] = f"Unbudgeted {row[0].lower()} — {row[2] or row[3] or UNASSIGNED}"
+    budget_lines: list[DailyCostBudgetComparison] = []
+    for key in sorted(set(planned_by_key) | set(actual_by_key), key=lambda value: -abs(actual_by_key.get(value, Decimal("0")))):
+        budget_line = meta.get(key)
+        if budget_line is not None:
+            group = budget_line.cost_group
+            code, name, kind = budget_line.item_code_snapshot, budget_line.item_name_snapshot, budget_line.budget_kind
+        else:
+            group = group_by_key.get(key, "Services")
+            kind = key.split(":", 1)[0] if key else "unplanned"
+            code = "" if key.startswith("unplanned:") else key.split(":", 1)[-1][:50]
+            name = unplanned_names.get((str(group), key), f"Unbudgeted {str(group).lower()}")
+        planned_value = planned_by_key.get(key)
+        actual_value = _money(actual_by_key.get(key, Decimal("0")))
+        budget_lines.append(DailyCostBudgetComparison(
+            budget_key=key, cost_group=group, budget_kind=kind, item_code=code, item_name=name,
+            planned=_money(planned_value) if planned_value is not None else Decimal("0.00"),
+            actual_to_date=actual_value,
+            balance=_money((planned_value or Decimal("0")) - actual_value),
+            is_planned=key in planned_by_key,
+        ))
+
+    # ---- warnings and totals -------------------------------------------------
+    warnings: list[DailyCostWarnings] = []
+    if actual_total > planned_total and planned_total > 0:
+        warnings.append(DailyCostWarnings(
+            code="well-over-budget", severity="warning",
+            message=f"Actual cost exceeds the locked AFE budget by {currency} {actual_total - planned_total:,.2f}."))
+    over_afe = [row for row in positions if row.over_budget]
+    if over_afe:
+        warnings.append(DailyCostWarnings(
+            code="afe-over-budget", severity="warning",
+            message=f"{len(over_afe)} AFE on this well is over its locked budget."))
+    if upa or npt:
+        warnings.append(DailyCostWarnings(
+            code="upa-npt", severity="warning",
+            message=f"Unplanned and non-productive charges so far: {currency} {upa + npt:,.2f} "
+                    f"(UPA {upa:,.2f} · NPT {npt:,.2f})."))
+    unrated = next((group for group in factors if group.dimension == "rate_source"
+                    and any(row.key == "" for row in group.rows)), None)
+    if unrated:
+        warnings.append(DailyCostWarnings(
+            code="unrated-lines", severity="info",
+            message="Some daily lines carry no rate source. Review them before closing the well."))
+    if not entries:
+        warnings.append(DailyCostWarnings(
+            code="no-daily-sheets", severity="info",
+            message="No daily cost sheet has been started for this well yet."))
+    if include_draft:
+        draft_count = sum(1 for row in windowed if row.status == "draft")
+        if draft_count:
+            warnings.append(DailyCostWarnings(
+                code="draft-included", severity="info",
+                message=f"{draft_count} draft sheet(s) are included in these figures."))
+
+    days = [row.cost_date for row in windowed]
+    recorded_days = len(set(days))
+    elapsed_days = (max(days) - min(days)).days + 1 if days else 0
+    average = _money(actual_total / recorded_days) if recorded_days else Decimal("0.00")
+    remaining = planned_total - actual_total
+    days_to_budget = (
+        Decimal(str(round(float(remaining / average), 1))) if average > 0 and remaining > 0 else None
+    )
+    totals = DailyCostWellTotals(
+        currency=currency, planned=planned_total, actual=actual_total, balance=_money(remaining),
+        used_percent=(actual_total / planned_total * Decimal("100")).quantize(Decimal("0.01")) if planned_total > 0 else Decimal("0.00"),
+        services=_money(services), consumables=_money(consumables), tangibles=_money(tangibles),
+        upa=upa, npt=npt, planned_days=_rate(planned_days), recorded_days=recorded_days,
+        elapsed_days=elapsed_days, average_per_day=average, days_to_budget=days_to_budget,
+        first_day=min(days) if days else None, last_day=max(days) if days else None,
+        sheets=len(windowed),
+        draft_sheets=sum(1 for row in windowed if row.status == "draft"),
+        submitted_sheets=sum(1 for row in windowed if row.status == "submitted"),
+        lines=int(db.execute(select(func.count()).select_from(lines)).scalar() or 0),
+    )
+    return DailyCostWellSummary(
+        well=DailyCostWellHeader(
+            id=well.id, well_code=well.well_code, well_name=well.well_name,
+            rig_code=well.rig.rig_code if well.rig else "", rig_name=well.rig.rig_name if well.rig else "",
+            status=well.status, config_status=well.config_status, afes=afe_options,
+        ),
+        from_date=date_from, to_date=date_to, as_of=max(days) if days else None,
+        include_draft=include_draft, totals=totals, afes=positions, daily=daily,
+        factors=factors, budget_lines=budget_lines, warnings=warnings,
+    )
+
+
+def daily_cost_wells(db: Session, organization_id: str) -> list[DailyCostWellOption]:
+    """Wells that carry daily costs, for the module's well picker."""
+    tracked = {
+        str(row[0]): int(row[1]) for row in db.execute(
+            select(DailyCostEntry.well_id, func.count(DailyCostEntry.id))
+            .where(DailyCostEntry.organization_id == organization_id, DailyCostEntry.is_deleted.is_(False))
+            .group_by(DailyCostEntry.well_id)
+        ).all()
+    }
+    return [well for well in reference_data(db, organization_id).wells if well.id in tracked]
 
 
 
@@ -2133,7 +2713,7 @@ def import_daily_cost(
                 if service is None:
                     raise ValueError("Service code is required")
                 rate_id = str(_import_value(row, "baseline_service_rate_id", "afe_rate_id", "rate_id", default="")) or None
-                basis_value = _import_value(row, "charging_basis", "basis", default=None)
+                basis_value = _normalise_basis(_import_value(row, "charging_basis", "basis", default="")) or None
                 charge_category = str(_import_value(row, "charge_category", "category", default="Operation"))
                 candidates = [rate for rate in entry.baseline.service_rates if rate.service_id == service.id]
                 if rate_id:
@@ -2142,7 +2722,7 @@ def import_daily_cost(
                         raise ValueError("AFE rate ID does not belong to this service and locked AFE")
                 elif classification == "Planned":
                     if basis_value:
-                        candidates = [rate for rate in candidates if rate.charging_basis == str(basis_value)]
+                        candidates = [rate for rate in candidates if rate.charging_basis == basis_value]
                     else:
                         bases = {rate.charging_basis for rate in candidates}
                         if len(bases) == 1:
@@ -2159,13 +2739,15 @@ def import_daily_cost(
                     rate_id = chosen_rate.id
                 else:
                     chosen_rate = next((rate for rate in candidates if rate.id == rate_id), None) if rate_id else None
-                basis = chosen_rate.charging_basis if chosen_rate else str(basis_value or "Day Rate")
+                basis = chosen_rate.charging_basis if chosen_rate else (basis_value or "Day Rate")
                 charge_category = chosen_rate.charge_category if chosen_rate and chosen_rate.rate_kind == "day_rate" else charge_category
                 unit = str(_import_value(row, "quantity_unit", "unit", default="")).strip().lower()
+                if basis not in QUANTITY_UNIT_FOR_BASIS:
+                    raise ValueError(
+                        f"Charging basis '{basis}' is not one of Day Rate, Per Service Rate or Per Section Rate"
+                    )
                 if not unit:
-                    unit = "unit" if basis == "Day Rate" and charge_category in SERVICE_ONE_TIME else {
-                        "Day Rate": "days", "Per Service Rate": "service", "Per Section Rate": "section",
-                    }[basis]
+                    unit = "unit" if basis == "Day Rate" and charge_category in SERVICE_ONE_TIME else QUANTITY_UNIT_FOR_BASIS[basis]
                 if not currency:
                     currency = chosen_rate.currency if chosen_rate else ""
                 service_vendor_id = vendor.id if vendor else service.vendor_id
