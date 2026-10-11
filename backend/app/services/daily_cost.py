@@ -18,9 +18,9 @@ from uuid import uuid4
 
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import bindparam, func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, joinedload, lazyload, selectinload
 
 from app.models import (
     Activity, Afe, AuditLog, CementAdditive, Currency, DailyCostBaseline,
@@ -121,6 +121,35 @@ def _audit(
     )
 
 
+_ENTRY_LOADS = (
+    # The five many-to-one references are forced to plain lazy loading so the
+    # SELECT stays single-table: PostgreSQL rejects ``FOR UPDATE`` over the
+    # nullable side of an outer join, and these relationships are declared
+    # ``lazy="joined"`` on the models (SQLite tolerates the combination, which
+    # is why the failure only appeared on PostgreSQL deployments). All
+    # one-to-many children keep their declared selectin strategies and load in
+    # separate statements, so writes can still price lines from the locked
+    # baseline immediately after the row lock is taken.
+    lazyload(DailyCostEntry.rig), lazyload(DailyCostEntry.well), lazyload(DailyCostEntry.afe),
+    lazyload(DailyCostEntry.rate_baseline), lazyload(DailyCostEntry.baseline),
+)
+
+_BASELINE_LOADS = (lazyload(DailyCostBaseline.rate_baseline),)
+
+
+def _entry_statement(deleted: bool | None = False, lock: bool = False):
+    """Single-table ``daily_cost_entries`` SELECT used by reads and row locks."""
+    statement = select(DailyCostEntry).options(*_ENTRY_LOADS).where(
+        DailyCostEntry.id == bindparam("entry_id"),
+        DailyCostEntry.organization_id == bindparam("organization_id"),
+    )
+    if deleted is not None:
+        statement = statement.where(DailyCostEntry.is_deleted.is_(deleted))
+    if lock:
+        statement = statement.with_for_update()
+    return statement
+
+
 def _get_entry(
     db: Session,
     entry_id: str,
@@ -129,24 +158,7 @@ def _get_entry(
     deleted: bool | None = False,
     lock: bool = False,
 ) -> DailyCostEntry:
-    statement = (
-        select(DailyCostEntry)
-        .options(
-            joinedload(DailyCostEntry.rig), joinedload(DailyCostEntry.well), joinedload(DailyCostEntry.afe),
-            selectinload(DailyCostEntry.baseline).selectinload(DailyCostBaseline.budget_lines),
-            selectinload(DailyCostEntry.baseline).selectinload(DailyCostBaseline.service_rates),
-            selectinload(DailyCostEntry.baseline).selectinload(DailyCostBaseline.well_sections).selectinload(DailyCostBaselineSection.phases),
-            selectinload(DailyCostEntry.baseline).selectinload(DailyCostBaseline.exchange_rates),
-            selectinload(DailyCostEntry.rate_baseline).selectinload(DailyCostWellRateBaseline.catalogue_rates),
-            selectinload(DailyCostEntry.service_lines), selectinload(DailyCostEntry.consumable_lines),
-            selectinload(DailyCostEntry.tangible_lines),
-        )
-        .where(DailyCostEntry.id == entry_id, DailyCostEntry.organization_id == organization_id)
-    )
-    if deleted is not None:
-        statement = statement.where(DailyCostEntry.is_deleted.is_(deleted))
-    if lock:
-        statement = statement.with_for_update()
+    statement = _entry_statement(deleted=deleted, lock=lock).params(entry_id=entry_id, organization_id=organization_id)
     entry = db.scalars(statement.execution_options(populate_existing=True)).unique().first()
     if entry is None:
         raise HTTPException(status_code=404, detail="Daily cost entry not found in this workspace")
@@ -278,18 +290,22 @@ def _make_budget_line(
     )
 
 
+def _baseline_statement(organization_id: str, afe_id: str, *, lock: bool = False):
+    """Single-table ``daily_cost_baselines`` SELECT; safe to row-lock on PostgreSQL."""
+    statement = select(DailyCostBaseline).options(*_BASELINE_LOADS).where(
+        DailyCostBaseline.organization_id == organization_id, DailyCostBaseline.afe_id == afe_id
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return statement
+
+
 def _ensure_afe_baseline(
     db: Session, organization_id: str, well: Well, afe: Afe,
     rate_baseline: DailyCostWellRateBaseline, user: User,
 ) -> DailyCostBaseline:
     with _WRITE_LOCK:
-        existing = db.scalar(
-            select(DailyCostBaseline).options(
-                selectinload(DailyCostBaseline.budget_lines), selectinload(DailyCostBaseline.service_rates),
-                selectinload(DailyCostBaseline.well_sections).selectinload(DailyCostBaselineSection.phases),
-                selectinload(DailyCostBaseline.exchange_rates),
-            ).where(DailyCostBaseline.organization_id == organization_id, DailyCostBaseline.afe_id == afe.id).with_for_update()
-        )
+        existing = db.scalar(_baseline_statement(organization_id, afe.id, lock=True))
         if existing is not None:
             return existing
         estimate: AfeEstimateOut = afe_service.get_estimate(db, organization_id, afe.id)
@@ -1565,6 +1581,32 @@ def get_day(db: Session, organization_id: str, entry_id: str) -> DailyCostDayOut
         comparison=comparison,
         warnings=_warnings(entry, comparison),
     )
+
+
+def previous_day(db: Session, organization_id: str, entry_id: str) -> DailyCostDayOut:
+    """The closest earlier sheet for the same well and AFE, for one-click carry-forward.
+
+    Daily sheets repeat most of the previous day's lines (the standing rig crew,
+    running chemicals, standby charges). Returning the priced previous day lets
+    the UI prefill a new draft; the save rules still revalidate every line, so a
+    deactivated vendor or a changed rate on this day's entry is rejected with a
+    normal validation error rather than silently copied.
+    """
+    entry = _get_entry(db, entry_id, organization_id, deleted=False)
+    previous_id = db.scalar(
+        select(DailyCostEntry.id).where(
+            DailyCostEntry.organization_id == organization_id,
+            DailyCostEntry.baseline_id == entry.baseline_id,
+            DailyCostEntry.is_deleted.is_(False),
+            DailyCostEntry.cost_date < entry.cost_date,
+        ).order_by(DailyCostEntry.cost_date.desc(), DailyCostEntry.created_at.desc(), DailyCostEntry.id.desc()).limit(1)
+    )
+    if previous_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail="There is no earlier daily cost sheet for this well and AFE to copy from",
+        )
+    return get_day(db, organization_id, previous_id)
 
 
 def save_day(
