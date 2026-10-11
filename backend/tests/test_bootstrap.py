@@ -3,7 +3,9 @@ import tempfile
 
 # Set the database before importing app modules (engine is constructed at import).
 _db_path = tempfile.mktemp(suffix=".sqlite3")
-os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
+# Set TEST_DATABASE_URL (a PostgreSQL URL, as CI does) to run this suite against
+# a real server instead of the throwaway SQLite file.
+os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL") or f"sqlite:///{_db_path}"
 os.environ["SECRET_KEY"] = "test-only-secret-do-not-deploy-12345"
 
 import pytest
