@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useParams } from 'react-router-dom'
 import {
-  AddRounded, ArrowBackRounded, CloudUploadOutlined, DeleteOutlineRounded, DownloadOutlined,
-  EditOutlined, LockOutlined, RefreshRounded, SaveOutlined, SendRounded, UndoRounded,
+  AddRounded, ArrowBackRounded, CloudUploadOutlined, ContentCopyOutlined, DeleteOutlineRounded,
+  DownloadOutlined, EditOutlined, LockOutlined, RefreshRounded, SaveOutlined, SendRounded, UndoRounded,
 } from '@mui/icons-material'
 import {
-  Alert, Box, Button, CircularProgress, Paper, Table, TableBody, TableCell, TableHead,
-  TableRow, TextField, Tooltip, Typography,
+  Alert, Box, Button, CircularProgress, LinearProgress, Paper, Table, TableBody, TableCell,
+  TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material'
 import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
@@ -16,7 +16,7 @@ import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import { downloadTemplate, parseImportFile, type ImportRow } from '../lib/export'
 import {
-  DAILY_COST_STATUSES, dailyMoney, displayDate, saveFromDay,
+  DAILY_COST_STATUSES, dailyMoney, displayDate, entryQuery, saveFromDay,
   type DailyCostBaseline, type DailyCostComparisonLine, type DailyCostDay,
   type DailyCostImportResult, type DailyCostPreview, type DailyCostReference,
   type DailyCostSavePayload, type DailyCostServiceInput, type DailyCostConsumableInput,
@@ -75,6 +75,10 @@ export default function DailyCostSheet() {
   const [importFileName, setImportFileName] = useState('')
   const [importErrors, setImportErrors] = useState<string[]>([])
   const [importError, setImportError] = useState('')
+  const [previousDay, setPreviousDay] = useState<DailyCostDay | null>(null)
+  const [previousBusy, setPreviousBusy] = useState(false)
+  const [previousError, setPreviousError] = useState('')
+  const [copyBusy, setCopyBusy] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -200,6 +204,61 @@ export default function DailyCostSheet() {
       setSaveError(caught instanceof Error ? caught.message : 'The daily cost sheet could not be saved')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // Drill days repeat the same crew, service and consumable pattern, so the
+  // previous well-day sheet is offered as a starting point for today's entry.
+  const loadPreviousDay = useCallback(async () => {
+    if (!day) return
+    setPreviousBusy(true)
+    setPreviousError('')
+    try {
+      const candidates = await api<{ id: string; cost_date: string; daily_cost_code: string }[]>(
+        `/daily-cost/entries${entryQuery({ afe_id: day.entry.afe_id, to: day.entry.cost_date })}`,
+      )
+      const previous = candidates
+        .filter(item => item.cost_date < day.entry.cost_date)
+        .sort((left, right) => right.cost_date.localeCompare(left.cost_date))[0]
+      if (!previous) {
+        setPreviousDay(null)
+        setPreviousError('No earlier daily sheet exists for this AFE yet. Enter today\u2019s actuals from scratch.')
+        return
+      }
+      setPreviousDay(await api<DailyCostDay>(`/daily-cost/entries/${previous.id}`))
+    } catch (caught) {
+      setPreviousDay(null)
+      setPreviousError(caught instanceof Error ? caught.message : 'The previous daily sheet could not be loaded')
+    } finally {
+      setPreviousBusy(false)
+    }
+  }, [day])
+
+  useEffect(() => { void loadPreviousDay() }, [loadPreviousDay])
+
+  const copyPreviousDay = async (mode: 'replace' | 'append') => {
+    if (!previousDay) return
+    setCopyBusy(true)
+    setNotice('')
+    try {
+      const source = saveFromDay(previousDay)
+      const copyList = <T extends { id?: string | null }>(rows: T[]) => rows.map(line => ({ ...line, id: null }))
+      const copyServices = copyList(source.services)
+      const copyConsumables = copyList(source.consumables)
+      const copyTangibles = copyList(source.tangibles)
+      setPayload(current => ({
+        remarks: current.remarks,
+        services: mode === 'replace' ? copyServices : [...current.services, ...copyServices],
+        consumables: mode === 'replace' ? copyConsumables : [...current.consumables, ...copyConsumables],
+        tangibles: mode === 'replace' ? copyTangibles : [...current.tangibles, ...copyTangibles],
+      }))
+      setPreview(null)
+      const count = source.services.length + source.consumables.length + source.tangibles.length
+      setNotice(count
+        ? `${count} line${count === 1 ? '' : 's'} copied from ${previousDay.entry.daily_cost_code} (${displayDate(previousDay.entry.cost_date)}). Review quantities, dates and rates before saving.`
+        : `${previousDay.entry.daily_cost_code} has no lines to copy.`)
+    } finally {
+      setCopyBusy(false)
     }
   }
 
@@ -494,6 +553,11 @@ export default function DailyCostSheet() {
         <Button component={RouterLink} to="/daily-cost" variant="outlined" startIcon={<ArrowBackRounded/>}>Register</Button>
         <Button variant="outlined" startIcon={<RefreshRounded/>} onClick={() => void load()} disabled={loading || dirty}>{loading ? 'Refreshing…' : 'Refresh'}</Button>
         {entry.status === 'draft' && editable && <>
+          <Tooltip title={previousDay
+            ? `Start from ${previousDay.entry.daily_cost_code} · ${displayDate(previousDay.entry.cost_date)}`
+            : 'No earlier daily sheet for this AFE'}>
+            <span><Button variant="outlined" startIcon={<ContentCopyOutlined/>} disabled={!previousDay || copyBusy} onClick={() => void copyPreviousDay('replace')}>Copy previous day</Button></span>
+          </Tooltip>
           <Button variant="outlined" startIcon={<CloudUploadOutlined/>} onClick={openImport}>Import lines</Button>
           {can('daily-cost:update') && <Button variant="contained" startIcon={<SaveOutlined/>} onClick={() => void save()} disabled={!dirty || saving}>{saving ? 'Saving…' : 'Save sheet'}</Button>}
         </>}
@@ -509,6 +573,17 @@ export default function DailyCostSheet() {
       Submitted by {entry.submitted_by || 'workspace user'}{entry.submitted_at ? ` on ${new Date(entry.submitted_at).toLocaleString()}` : ''}. The daily sheet is read-only{entry.status_remarks ? ` · ${entry.status_remarks}` : ''}.
     </Alert>}
     {!editable && entry.status === 'draft' && <Alert severity="info" sx={{ mb: 1.5 }}>You can view this Draft. Editing requires the Daily Cost update permission.</Alert>}
+    {entry.status === 'draft' && editable && previousDay && <Alert severity="info" icon={<ContentCopyOutlined/>} sx={{ mb: 1.5 }}
+      action={<Box display="flex" gap={.6}>
+        <Button color="inherit" size="small" disabled={copyBusy} onClick={() => void copyPreviousDay('replace')}>Replace lines</Button>
+        <Button color="inherit" size="small" disabled={copyBusy} onClick={() => void copyPreviousDay('append')}>Add to current</Button>
+      </Box>}>
+      {previousDay.entry.daily_cost_code} · {displayDate(previousDay.entry.cost_date)} carried {previousDay.services.length} service,{' '}
+      {previousDay.consumables.length} consumable and {previousDay.tangibles.length} tangible line(s) totalling{' '}
+      {dailyMoney(previousDay.entry.total_cost, standard)}. Copied lines keep the activity, section, vendor and locked AFE rate, and are saved as new lines on this sheet.
+    </Alert>}
+    {entry.status === 'draft' && editable && previousError && <Alert severity="info" sx={{ mb: 1.5 }}>{previousError}</Alert>}
+    {previousBusy && <LinearProgress sx={{ mb: 1.5 }}/>}
     {dirty && <Alert severity="warning" sx={{ mb: 1.5 }} action={can('daily-cost:update') ? <Button color="inherit" size="small" onClick={() => { setPayload(originalPayload ?? payload); setPreview(null); setPreviewError('') }}>Discard changes</Button> : undefined}>
       Unsaved changes{previewing ? ' · recalculating against the locked AFE baseline…' : hasPreviewForEdits ? ' · preview is current' : ' · save to update the register'}.
     </Alert>}

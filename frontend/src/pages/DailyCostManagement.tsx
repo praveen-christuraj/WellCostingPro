@@ -4,7 +4,8 @@ import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import {
   AddRounded, DeleteForeverOutlined, DeleteOutlineRounded, EventNoteOutlined,
-  FactCheckOutlined, Inventory2Outlined, RestoreRounded, RefreshRounded, TaskAltOutlined, WarningAmberRounded,
+  FactCheckOutlined, FilterAltOffOutlined, InsightsOutlined, Inventory2Outlined, RestoreRounded,
+  RefreshRounded, TaskAltOutlined, WarningAmberRounded,
 } from '@mui/icons-material'
 import {
   Alert, Box, Button, CircularProgress, MenuItem, Paper, TextField, Typography, useTheme,
@@ -15,8 +16,9 @@ import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import {
-  dailyMoney, DAILY_COST_STATUSES, displayDate, localToday,
+  dailyMoney, DAILY_COST_STATUSES, displayDate, entryQuery, localToday,
   type DailyCostDay, type DailyCostEntry, type DailyCostOverview, type DailyCostReference,
+  type DailyCostStatus,
 } from '../lib/dailyCost'
 
 type PendingAction = { kind: 'delete' | 'restore' | 'purge'; rows: DailyCostEntry[] }
@@ -63,6 +65,16 @@ export default function DailyCostManagement() {
   const [costDate, setCostDate] = useState(localToday())
   const [remarks, setRemarks] = useState('')
   const [chartCurrency, setChartCurrency] = useState('')
+  const [filterWell, setFilterWell] = useState('')
+  const [filterAfe, setFilterAfe] = useState('')
+  const [filterStatus, setFilterStatus] = useState<'' | DailyCostStatus>('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
+  const filterQuery = entryQuery({
+    well_id: filterWell, afe_id: filterAfe, status: filterStatus, from: dateFrom, to: dateTo,
+  })
+  const filtersActive = Boolean(filterWell || filterAfe || filterStatus || dateFrom || dateTo)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -71,7 +83,7 @@ export default function DailyCostManagement() {
     try {
       const [overviewData, entries, ref] = await Promise.all([
         api<DailyCostOverview>('/daily-cost/overview'),
-        api<DailyCostEntry[]>(deletedView ? '/daily-cost/entries/deleted' : '/daily-cost/entries'),
+        api<DailyCostEntry[]>(deletedView ? '/daily-cost/entries/deleted' : `/daily-cost/entries${filterQuery}`),
         api<DailyCostReference>('/daily-cost/reference'),
       ])
       setOverview(overviewData)
@@ -84,7 +96,7 @@ export default function DailyCostManagement() {
     } finally {
       setLoading(false)
     }
-  }, [deletedView])
+  }, [deletedView, filterQuery])
 
   useEffect(() => { void load() }, [load])
 
@@ -166,6 +178,20 @@ export default function DailyCostManagement() {
     }) })
   }
 
+  // Daily basis: running actual for the same AFE, oldest sheet first, so a cost
+  // accountant can read each day against the budget left at that point.
+  const cumulativeById = useMemo(() => {
+    const running = new Map<string, number>()
+    const result = new Map<string, string>()
+    const ordered = [...rows].sort((left, right) => left.cost_date.localeCompare(right.cost_date))
+    for (const row of ordered) {
+      const total = (running.get(row.afe_id) ?? 0) + Number(row.total_cost)
+      running.set(row.afe_id, total)
+      result.set(row.id, total.toFixed(2))
+    }
+    return result
+  }, [rows])
+
   const columns = useMemo<ColDef<DailyCostEntry>[]>(() => [
     { headerName: 'DATE', field: 'cost_date', minWidth: 125, width: 130, valueFormatter: params => displayDate(String(params.value ?? '')) },
     { headerName: 'DAILY SHEET', field: 'daily_cost_code', minWidth: 230, flex: 1.1 },
@@ -178,6 +204,13 @@ export default function DailyCostManagement() {
     } },
     { headerName: 'UPA / NPT', field: 'upa_total', minWidth: 160, valueGetter: params => params.data
       ? `${dailyMoney(params.data.upa_total, params.data.standard_currency)} / ${dailyMoney(params.data.npt_total, params.data.standard_currency)}` : '—' },
+    { headerName: 'ACTUAL TO DATE', field: 'id', minWidth: 165, valueGetter: params => params.data ? dailyMoney(cumulativeById.get(params.data.id) ?? '0', params.data.standard_currency) : '—',
+      cellRenderer: (params: ICellRendererParams<DailyCostEntry>) => {
+        const row = params.data
+        if (!row) return null
+        const value = Number(cumulativeById.get(row.id) ?? 0)
+        return <Typography fontSize={12} fontWeight={700} color={value > 0 ? 'text.primary' : 'text.secondary'}>{dailyMoney(value, row.standard_currency)}</Typography>
+      } },
     { headerName: 'STATUS', field: 'status', minWidth: 120, cellRenderer: (params: ICellRendererParams<DailyCostEntry>) => <Tag tone={params.value === 'submitted' ? 'success' : 'info'}>{DAILY_COST_STATUSES[params.value as 'draft' | 'submitted'] ?? String(params.value ?? '')}</Tag> },
     { headerName: 'ACTIONS', field: 'id', minWidth: deletedView ? 205 : 170, width: deletedView ? 215 : 180, sortable: false,
       cellRenderer: (params: ICellRendererParams<DailyCostEntry>) => {
@@ -192,7 +225,7 @@ export default function DailyCostManagement() {
         </Box>
       },
     },
-  ], [can, deletedView])
+  ], [can, deletedView, cumulativeById])
 
   const currencies = Object.keys(overview?.actual_to_date_by_currency ?? {})
   const chartRows = overview?.trend.filter(point => point.currency === chartCurrency) ?? []
@@ -230,6 +263,11 @@ export default function DailyCostManagement() {
         ? 'Restore a recoverable sheet or permanently remove an obsolete record.'
         : 'Capture well-day service, consumable and tangible actuals against locked AFE budgets and rate revisions.'}
       action={<Box display="flex" gap={1} flexWrap="wrap">
+        {!deletedView && can('daily-cost:read') && <Button
+          variant="outlined" startIcon={<InsightsOutlined/>}
+          component={RouterLink}
+          to={filterWell ? `/daily-cost/analysis/${filterWell}` : '/daily-cost/analysis'}
+        >Well cost analysis</Button>}
         <Button variant="outlined" startIcon={<RefreshRounded/>} onClick={() => void load()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</Button>
         {deletedView
           ? <Button variant="outlined" startIcon={<EventNoteOutlined/>} onClick={() => { setParams({}); setNotice('') }}>Active register</Button>
@@ -239,6 +277,38 @@ export default function DailyCostManagement() {
     />
     <ErrorMessage message={loadError}/>
     {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
+
+    {!deletedView && <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 2, mb: 1.8 }}>
+      <Box display="grid" gap={1.3} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1.3fr 1.3fr .8fr .8fr .8fr auto' } }} alignItems="center">
+        <TextField select label="Filter by well" value={filterWell} onChange={event => {
+          const next = event.target.value
+          setFilterWell(next)
+          setFilterAfe('')
+        }} helperText="Daily basis for one well">
+          <MenuItem value="">All wells</MenuItem>
+          {(reference?.wells ?? []).map(well => <MenuItem key={well.id} value={well.id}>{well.well_code} · {well.well_name}</MenuItem>)}
+        </TextField>
+        <TextField select label="Filter by AFE" value={filterAfe} onChange={event => setFilterAfe(event.target.value)} disabled={!reference?.afes.length}>
+          <MenuItem value="">All AFEs</MenuItem>
+          {(reference?.afes ?? []).filter(afe => !filterWell || afe.well_id === filterWell)
+            .map(afe => <MenuItem key={afe.id} value={afe.id}>{afe.display_name}</MenuItem>)}
+        </TextField>
+        <TextField select label="Status" value={filterStatus} onChange={event => setFilterStatus(event.target.value as '' | DailyCostStatus)}>
+          <MenuItem value="">All</MenuItem>
+          <MenuItem value="draft">Draft</MenuItem>
+          <MenuItem value="submitted">Submitted</MenuItem>
+        </TextField>
+        <TextField type="date" label="Cost date from" value={dateFrom} onChange={event => setDateFrom(event.target.value)} InputLabelProps={{ shrink: true }}/>
+        <TextField type="date" label="to" value={dateTo} onChange={event => setDateTo(event.target.value)} InputLabelProps={{ shrink: true }}/>
+        <Button variant="outlined" startIcon={<FilterAltOffOutlined/>} onClick={() => {
+          setFilterWell(''); setFilterAfe(''); setFilterStatus(''); setDateFrom(''); setDateTo('')
+        }} disabled={!filtersActive}>Clear</Button>
+      </Box>
+      {filtersActive && <Alert severity="info" sx={{ mt: 1.3, py: .4 }}>
+        Showing {rows.length} daily sheet{rows.length === 1 ? '' : 's'} for the selected filters.
+        {dateFrom && dateTo && dateFrom > dateTo ? ' The start date is after the end date, so no sheet can match.' : ''}
+      </Alert>}
+    </Paper>}
 
     {!deletedView && overview && <>
       {overview.over_budget_afes > 0 && <Alert severity="warning" icon={<WarningAmberRounded/>} sx={{ mb: 2 }}>

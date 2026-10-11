@@ -208,3 +208,65 @@ export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
     })),
   }
 }
+
+// ---------------------------------------------------------------------------
+// Whole-well cost analysis (daily run sheet + every cost factor)
+// ---------------------------------------------------------------------------
+
+export type DailyCostAfePosition = {
+  afe_id: string; afe_code: string; afe_name: string; afe_status: string; currency: string
+  planned_total: string; actual: string; balance: string; over_budget: boolean
+  sheets: number; days_recorded: number; first_day: string | null; last_day: string | null
+}
+export type DailyCostDailyRow = {
+  cost_date: string; services: string; consumables: string; tangibles: string; total: string
+  upa: string; npt: string; cumulative: string; budget_balance: string; sheets: number
+  status: 'draft' | 'submitted' | 'mixed'
+}
+export type DailyCostFactorRow = {
+  key: string; code: string; name: string; detail: string; amount: string
+  planned: string | null; balance: string | null; share: string; quantity: string
+}
+export type DailyCostFactorDimension =
+  | 'cost_group' | 'classification' | 'section' | 'phase' | 'activity'
+  | 'sub_activity' | 'party' | 'rate_source' | 'currency' | 'item'
+export type DailyCostFactorGroup = {
+  dimension: DailyCostFactorDimension; label: string; currency: string; total: string; rows: DailyCostFactorRow[]
+}
+export type DailyCostWellTotals = {
+  currency: string; planned: string; actual: string; balance: string; used_percent: string
+  services: string; consumables: string; tangibles: string; upa: string; npt: string
+  planned_days: string; recorded_days: number; elapsed_days: number; average_per_day: string
+  days_to_budget: string | null; first_day: string | null; last_day: string | null
+  sheets: number; draft_sheets: number; submitted_sheets: number; lines: number
+}
+export type DailyCostWellSummary = {
+  well: {
+    id: string; well_code: string; well_name: string; rig_code: string; rig_name: string
+    status: string; config_status: string; afes: DailyCostAfeOption[]
+  }
+  from_date: string | null; to_date: string | null; as_of: string | null; include_draft: boolean
+  totals: DailyCostWellTotals
+  afes: DailyCostAfePosition[]
+  daily: DailyCostDailyRow[]
+  factors: DailyCostFactorGroup[]
+  budget_lines: DailyCostComparisonLine[]
+  warnings: DailyCostWarning[]
+}
+
+/** Server-side register filters, so the daily basis stays quick on a long well. */
+export type DailyCostEntryFilter = {
+  well_id?: string; afe_id?: string; status?: '' | DailyCostStatus
+  from?: string; to?: string
+}
+
+export function entryQuery(filter: DailyCostEntryFilter): string {
+  const params = new URLSearchParams()
+  if (filter.well_id) params.set('well_id', filter.well_id)
+  if (filter.afe_id) params.set('afe_id', filter.afe_id)
+  if (filter.status) params.set('status', filter.status)
+  if (filter.from) params.set('from', filter.from)
+  if (filter.to) params.set('to', filter.to)
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}

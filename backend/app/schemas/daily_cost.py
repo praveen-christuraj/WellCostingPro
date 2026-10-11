@@ -590,5 +590,129 @@ class DailyCostBulkActionResponse(BaseModel):
     affected_count: int
 
 
+# ---------------------------------------------------------------------------
+# Whole-well cost analysis (the daily ledger every reporting module builds on)
+# ---------------------------------------------------------------------------
+
+
+class DailyCostWellHeader(BaseModel):
+    """Identity of the well, rig and tracked AFEs a summary belongs to."""
+
+    id: str
+    well_code: str
+    well_name: str
+    rig_code: str
+    rig_name: str
+    status: str
+    config_status: str
+    afes: list[DailyCostAfeOption]
+
+
+class DailyCostAfePosition(BaseModel):
+    """One AFE's locked budget against the actuals recorded under it."""
+
+    afe_id: str
+    afe_code: str
+    afe_name: str
+    afe_status: str
+    currency: str
+    planned_total: Decimal
+    actual: Decimal
+    balance: Decimal
+    over_budget: bool
+    sheets: int
+    days_recorded: int
+    first_day: date | None
+    last_day: date | None
+
+
+class DailyCostDailyRow(BaseModel):
+    """One well-day: the daily actuals and the running total against the AFE."""
+
+    cost_date: date
+    services: Decimal
+    consumables: Decimal
+    tangibles: Decimal
+    total: Decimal
+    upa: Decimal
+    npt: Decimal
+    cumulative: Decimal
+    budget_balance: Decimal
+    sheets: int
+    status: Literal["draft", "submitted", "mixed"]
+
+
+class DailyCostFactorRow(BaseModel):
+    """One factor (activity, section, vendor, …) with its share of well spend."""
+
+    key: str
+    code: str
+    name: str
+    detail: str
+    amount: Decimal
+    planned: Decimal | None
+    balance: Decimal | None
+    share: Decimal
+    quantity: Decimal
+
+
+class DailyCostFactorGroup(BaseModel):
+    """A named cut of the same ledger, e.g. by activity or by responsible party."""
+
+    dimension: Literal[
+        "cost_group", "classification", "section", "phase", "activity", "sub_activity",
+        "party", "rate_source", "currency", "item",
+    ]
+    label: str
+    currency: str
+    total: Decimal
+    rows: list[DailyCostFactorRow]
+
+
+class DailyCostWellTotals(BaseModel):
+    currency: str
+    planned: Decimal
+    actual: Decimal
+    balance: Decimal
+    used_percent: Decimal
+    services: Decimal
+    consumables: Decimal
+    tangibles: Decimal
+    upa: Decimal
+    npt: Decimal
+    planned_days: Decimal
+    recorded_days: int
+    elapsed_days: int
+    average_per_day: Decimal
+    days_to_budget: Decimal | None
+    first_day: date | None
+    last_day: date | None
+    sheets: int
+    draft_sheets: int
+    submitted_sheets: int
+    lines: int
+
+
+class DailyCostWellSummary(BaseModel):
+    """Everything captured from the AFE and the daily sheets, costed for the whole well.
+
+    Every figure is a plain column-wise aggregation of the daily line tables, in the
+    AFE standard currency (with native-currency amounts under `currency`), so cost
+    analysis and reporting modules can read one stable shape.
+    """
+
+    well: DailyCostWellHeader
+    from_date: date | None
+    to_date: date | None
+    as_of: date | None
+    include_draft: bool
+    totals: DailyCostWellTotals
+    afes: list[DailyCostAfePosition]
+    daily: list[DailyCostDailyRow]
+    factors: list[DailyCostFactorGroup]
+    budget_lines: list[DailyCostBudgetComparison]
+    warnings: list[DailyCostWarnings]
+
+
 DailyCostDayOut.model_rebuild()
 DailyCostPreviewOut.model_rebuild()
