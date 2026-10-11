@@ -1,0 +1,594 @@
+"""Column-wise request/response contracts for Daily Cost Management."""
+
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+CostClassification = Literal["Planned", "UPA", "NPT"]
+ChargingBasis = Literal["Day Rate", "Per Service Rate", "Per Section Rate"]
+ChargeCategory = Literal[
+    "Mobilization",
+    "Demobilization",
+    "Operation",
+    "Standby",
+    "Personnel-Operation",
+    "Personnel-Standby",
+    "Fixed Charge",
+    "Others",
+]
+ConsumableCategory = Literal["Mud Chemicals", "Cement Additives", "Fuel", "Drill Bits"]
+ConsumableKind = Literal["mud_chemical", "cement_additive", "fuel", "drill_bit"]
+QuantityUnit = Literal["days", "hours", "service", "section", "unit"]
+DAILY_COST_MAX_LINES = 1000
+MAX_RATE = Decimal("100000000")
+MAX_AMOUNT = Decimal("100000000000")
+
+
+def _trim(value: Any) -> Any:
+    return value.strip() if isinstance(value, str) else value
+
+
+def _upper(value: Any) -> Any:
+    return value.strip().upper() if isinstance(value, str) else value
+
+
+def _blank_to_none(value: Any) -> Any:
+    value = _trim(value)
+    return value or None
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DailyCostEntryCreate(_Strict):
+    well_id: str = Field(min_length=1, max_length=36)
+    afe_id: str = Field(min_length=1, max_length=36)
+    cost_date: date
+    remarks: str = Field(default="", max_length=1000)
+
+    @field_validator("well_id", "afe_id", "remarks", mode="before")
+    @classmethod
+    def trim_text(cls, value: Any) -> Any:
+        return _trim(value)
+
+
+class DailyCostLineInput(_Strict):
+    """Common typed fields for each actual cost line."""
+
+    id: str | None = Field(default=None, max_length=36)
+    client_key: str | None = Field(default=None, max_length=64)
+    activity_id: str = Field(min_length=1, max_length=36)
+    hole_section_id: str | None = Field(default=None, max_length=36)
+    phase_id: str | None = Field(default=None, max_length=36)
+    sub_activity_id: str | None = Field(default=None, max_length=36)
+    classification: CostClassification = "Planned"
+    vendor_id: str | None = Field(default=None, max_length=36)
+    party_name: str = Field(default="", max_length=200)
+    quantity: Decimal = Field(gt=0, le=Decimal("1000000"), max_digits=18, decimal_places=4)
+    currency: str = Field(default="", max_length=10)
+    override_rate: Decimal | None = Field(default=None, ge=0, le=MAX_RATE, max_digits=18, decimal_places=4)
+    override_reason: str = Field(default="", max_length=500)
+    remarks: str = Field(default="", max_length=500)
+
+    @field_validator("hole_section_id", "phase_id", "sub_activity_id", "vendor_id", mode="before")
+    @classmethod
+    def blank_ids_to_none(cls, value: Any) -> Any:
+        return _blank_to_none(value)
+
+    @field_validator("currency", mode="before")
+    @classmethod
+    def normalize_currency(cls, value: Any) -> Any:
+        return _upper(value)
+
+    @field_validator("party_name", "override_reason", "remarks", mode="before")
+    @classmethod
+    def trim_fields(cls, value: Any) -> Any:
+        return _trim(value)
+
+    @model_validator(mode="after")
+    def require_override_reason(self):
+        if self.override_rate is not None and len(self.override_reason.strip()) < 3:
+            raise ValueError("Give a reason of at least 3 characters for a daily rate override.")
+        if self.override_rate is None and self.override_reason:
+            raise ValueError("An override reason is only valid when an override rate is entered.")
+        if self.classification in ("UPA", "NPT") and not self.vendor_id and not self.party_name:
+            raise ValueError("UPA and NPT lines must identify the responsible vendor or party.")
+        if self.phase_id and not self.hole_section_id:
+            raise ValueError("Choose a hole section before selecting a phase.")
+        return self
+
+
+class DailyCostServiceLineIn(DailyCostLineInput):
+    service_id: str = Field(min_length=1, max_length=36)
+    baseline_service_rate_id: str | None = Field(default=None, max_length=36)
+    charging_basis: ChargingBasis | None = None
+    charge_category: ChargeCategory = "Operation"
+    quantity_unit: QuantityUnit = "days"
+
+    @field_validator("baseline_service_rate_id", mode="before")
+    @classmethod
+    def blank_rate_to_none(cls, value: Any) -> Any:
+        return _blank_to_none(value)
+
+
+class DailyCostConsumableLineIn(DailyCostLineInput):
+    category: ConsumableCategory
+    item_kind: ConsumableKind
+    item_id: str = Field(min_length=1, max_length=36)
+
+    @model_validator(mode="after")
+    def category_matches_item(self):
+        expected = {
+            "Mud Chemicals": "mud_chemical",
+            "Cement Additives": "cement_additive",
+            "Fuel": "fuel",
+            "Drill Bits": "drill_bit",
+        }[self.category]
+        if self.item_kind != expected:
+            raise ValueError(f"{self.category} items must use the {expected} catalogue.")
+        return self
+
+
+class DailyCostTangibleLineIn(DailyCostLineInput):
+    tangible_id: str = Field(min_length=1, max_length=36)
+
+
+class DailyCostSaveIn(_Strict):
+    remarks: str = Field(default="", max_length=1000)
+    services: list[DailyCostServiceLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
+    consumables: list[DailyCostConsumableLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
+    tangibles: list[DailyCostTangibleLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
+
+    @field_validator("remarks", mode="before")
+    @classmethod
+    def trim_remarks(cls, value: Any) -> Any:
+        return _trim(value)
+
+    @model_validator(mode="after")
+    def unique_line_ids(self):
+        ids = [line.id for group in (self.services, self.consumables, self.tangibles) for line in group if line.id]
+        if len(ids) != len(set(ids)):
+            raise ValueError("A saved line can appear only once in a daily sheet.")
+        return self
+
+
+class DailyCostStatusIn(_Strict):
+    remarks: str = Field(default="", max_length=500)
+
+    @field_validator("remarks", mode="before")
+    @classmethod
+    def trim_remarks(cls, value: Any) -> Any:
+        return _trim(value)
+
+
+class DailyCostReopenIn(_Strict):
+    remarks: str = Field(min_length=3, max_length=500)
+
+    @field_validator("remarks", mode="before")
+    @classmethod
+    def trim_remarks(cls, value: Any) -> Any:
+        return _trim(value)
+
+
+class DailyCostIDs(_Strict):
+    ids: list[str] = Field(min_length=1, max_length=5000)
+
+
+class DailyCostImportRequest(_Strict):
+    rows: list[dict[str, Any]] = Field(min_length=1, max_length=5000)
+
+
+class DailyCostImportResponse(BaseModel):
+    imported_count: int
+    error_count: int
+    errors: list[str]
+    success: bool
+
+
+class DailyCostExportAudit(_Strict):
+    module: Literal["entries", "deleted", "day-sheet", "budget-comparison"]
+    format: Literal["csv", "xlsx", "pdf"]
+    record_count: int = Field(ge=0, le=1_000_000)
+    include_deleted: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Reference data and immutable rate/plan context
+# ---------------------------------------------------------------------------
+
+
+class DailyCostRigOption(BaseModel):
+    id: str
+    rig_code: str
+    rig_name: str
+    display_name: str
+
+
+class DailyCostPhaseOption(BaseModel):
+    phase_id: str
+    phase_code: str
+    phase_name: str
+    days: Decimal
+
+
+class DailyCostSectionOption(BaseModel):
+    hole_section_id: str
+    section_code: str
+    section_name: str
+    from_depth: Decimal
+    to_depth: Decimal
+    total_days: Decimal
+    phases: list[DailyCostPhaseOption]
+
+
+class DailyCostWellOption(BaseModel):
+    id: str
+    rig_id: str
+    well_code: str
+    well_name: str
+    display_name: str
+    status: str
+    config_status: str
+    sections: list[DailyCostSectionOption]
+
+
+class DailyCostAfeOption(BaseModel):
+    id: str
+    well_id: str
+    afe_code: str
+    afe_name: str
+    afe_type: str
+    status: str
+    standard_currency: str
+    total_cost: Decimal
+    estimate_saved_at: datetime
+    display_name: str
+
+
+class DailyCostActivityOption(BaseModel):
+    id: str
+    activity_code: str
+    activity_name: str
+    display_name: str
+
+
+class DailyCostSubActivityOption(BaseModel):
+    id: str
+    well_id: str
+    activity_id: str
+    sub_activity_code: str
+    sub_activity_name: str
+    responsible_party: str
+    display_name: str
+
+
+class DailyCostServiceOption(BaseModel):
+    id: str
+    service_code: str
+    service_name: str
+    service_category: str
+    provider_type: str
+    vendor_id: str | None
+    vendor_code: str
+    vendor_name: str
+    display_name: str
+
+
+class DailyCostCatalogueOption(BaseModel):
+    id: str
+    item_kind: ConsumableKind | Literal["tangible"]
+    category: ConsumableCategory | Literal["Tangibles"]
+    item_code: str
+    item_name: str
+    description: str
+    uom: str
+    captured_rate: Decimal
+    currency: str
+    revision_number: int
+    effective_date: date | None
+    display_name: str
+
+
+class DailyCostVendorOption(BaseModel):
+    id: str
+    vendor_code: str
+    vendor_name: str
+    vendor_type: str
+    status: str
+    display_name: str
+
+
+class DailyCostReference(BaseModel):
+    rigs: list[DailyCostRigOption]
+    wells: list[DailyCostWellOption]
+    afes: list[DailyCostAfeOption]
+    activities: list[DailyCostActivityOption]
+    sub_activities: list[DailyCostSubActivityOption]
+    services: list[DailyCostServiceOption]
+    catalogue_items: list[DailyCostCatalogueOption]
+    vendors: list[DailyCostVendorOption]
+    currencies: list[str]
+    charge_categories: list[str]
+    charge_bases: list[str]
+    quantity_units: list[str]
+    classifications: list[str]
+    consumable_categories: list[str]
+
+
+class DailyCostRateOut(BaseModel):
+    id: str
+    service_id: str
+    source_afe_line_id: str
+    service_code: str
+    service_name: str
+    charging_basis: ChargingBasis
+    rate_kind: Literal["day_rate", "per_service", "per_section"]
+    charge_category: str
+    hole_section_id: str | None
+    section_label: str
+    phase_id: str | None
+    phase_label: str
+    unit_rate: Decimal
+    currency: str
+    display_name: str
+
+
+class DailyCostBaselineBudgetOut(BaseModel):
+    id: str
+    cost_group: Literal["Services", "Consumables", "Tangibles"]
+    budget_kind: str
+    item_key: str
+    item_code: str
+    item_name: str
+    source_afe_line_id: str
+    section_id: str | None
+    phase_id: str | None
+    quantity: Decimal
+    unit_rate: Decimal
+    native_amount: Decimal
+    currency: str
+    exchange_rate: Decimal
+    planned_amount: Decimal
+    uom: str
+
+
+class DailyCostBaselineOut(BaseModel):
+    id: str
+    rate_baseline_id: str
+    afe_id: str
+    afe_code: str
+    afe_name: str
+    standard_currency: str
+    total_amount: Decimal
+    locked_at: datetime
+    locked_by: str
+    afe_estimate_saved_at: datetime | None
+    catalogue_rates: list[DailyCostCatalogueOption]
+    service_rates: list[DailyCostRateOut]
+    budget_lines: list[DailyCostBaselineBudgetOut]
+    sections: list[DailyCostSectionOption]
+    exchange_rates: dict[str, Decimal]
+
+
+# ---------------------------------------------------------------------------
+# Daily line outputs
+# ---------------------------------------------------------------------------
+
+
+class DailyCostLineOut(BaseModel):
+    id: str
+    activity_id: str
+    activity_code: str
+    activity_name: str
+    hole_section_id: str | None
+    section_code: str
+    section_name: str
+    phase_id: str | None
+    phase_code: str
+    phase_name: str
+    sub_activity_id: str | None
+    sub_activity_code: str
+    sub_activity_name: str
+    sub_activity_party: str
+    classification: CostClassification
+    vendor_id: str | None
+    vendor_code: str
+    vendor_name: str
+    party_name: str
+    quantity: Decimal
+    quantity_unit: QuantityUnit
+    captured_rate: Decimal
+    override_rate: Decimal | None
+    effective_rate: Decimal
+    currency: str
+    exchange_rate: Decimal
+    amount: Decimal
+    standard_amount: Decimal
+    rate_source: str
+    rate_revision_number: int | None
+    rate_effective_date: date | None
+    baseline_budget_line_id: str | None
+    budget_key: str
+    budget_name: str
+    override_reason: str
+    remarks: str
+
+
+class DailyCostServiceLineOut(DailyCostLineOut):
+    service_id: str
+    service_code: str
+    service_name: str
+    charging_basis: ChargingBasis
+    charge_category: ChargeCategory
+    baseline_service_rate_id: str | None
+
+
+class DailyCostConsumableLineOut(DailyCostLineOut):
+    category: ConsumableCategory
+    item_kind: ConsumableKind
+    item_id: str
+    item_code: str
+    item_name: str
+    uom: str
+    catalogue_rate_snapshot_id: str | None
+
+
+class DailyCostTangibleLineOut(DailyCostLineOut):
+    tangible_id: str
+    tangible_code: str
+    tangible_name: str
+    uom: str
+    catalogue_rate_snapshot_id: str | None
+
+
+class DailyCostComparisonGroup(BaseModel):
+    cost_group: Literal["Services", "Consumables", "Tangibles"]
+    planned: Decimal
+    actual_to_date: Decimal
+    balance: Decimal
+
+
+class DailyCostBudgetComparison(BaseModel):
+    budget_key: str
+    cost_group: Literal["Services", "Consumables", "Tangibles"]
+    budget_kind: str
+    item_code: str
+    item_name: str
+    planned: Decimal
+    actual_to_date: Decimal
+    balance: Decimal
+    is_planned: bool
+
+
+class DailyCostComparison(BaseModel):
+    effective_on: date
+    currency: str
+    planned_total: Decimal
+    actual_to_date: Decimal
+    balance: Decimal
+    over_budget: bool
+    includes_draft_entries: bool
+    upa_to_date: Decimal
+    npt_to_date: Decimal
+    groups: list[DailyCostComparisonGroup]
+    budget_lines: list[DailyCostBudgetComparison]
+
+
+class DailyCostEntryOut(BaseModel):
+    id: str
+    daily_cost_code: str
+    rig_id: str
+    rig_code: str
+    rig_name: str
+    well_id: str
+    well_code: str
+    well_name: str
+    afe_id: str
+    afe_code: str
+    afe_name: str
+    afe_status: str
+    cost_date: date
+    standard_currency: str
+    remarks: str
+    status: Literal["draft", "submitted"]
+    submitted_at: datetime | None
+    submitted_by: str
+    status_remarks: str
+    services_count: int
+    consumables_count: int
+    tangibles_count: int
+    services_total: Decimal
+    consumables_total: Decimal
+    tangibles_total: Decimal
+    total_cost: Decimal
+    upa_total: Decimal
+    npt_total: Decimal
+    rate_baseline_locked_at: datetime
+    budget_baseline_locked_at: datetime
+    warning_count: int
+    is_deleted: bool
+    deleted_at: datetime | None
+    created_by: str
+    updated_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class DailyCostWarnings(BaseModel):
+    code: str
+    severity: Literal["info", "warning", "error"]
+    message: str
+
+
+class DailyCostDayOut(BaseModel):
+    entry: DailyCostEntryOut
+    services: list[DailyCostServiceLineOut]
+    consumables: list[DailyCostConsumableLineOut]
+    tangibles: list[DailyCostTangibleLineOut]
+    comparison: DailyCostComparison
+    warnings: list[DailyCostWarnings]
+
+
+class DailyCostPreviewOut(BaseModel):
+    services: list[DailyCostServiceLineOut]
+    consumables: list[DailyCostConsumableLineOut]
+    tangibles: list[DailyCostTangibleLineOut]
+    services_total: Decimal
+    consumables_total: Decimal
+    tangibles_total: Decimal
+    total_cost: Decimal
+    upa_total: Decimal
+    npt_total: Decimal
+    warnings: list[DailyCostWarnings]
+
+
+class DailyCostGroupSummary(BaseModel):
+    currency: str
+    cost_group: Literal["Services", "Consumables", "Tangibles"]
+    planned: Decimal
+    actual: Decimal
+    balance: Decimal
+
+
+class DailyCostTrendPoint(BaseModel):
+    cost_date: date
+    currency: str
+    actual: Decimal
+    upa: Decimal
+    npt: Decimal
+
+
+class DailyCostRecentActivity(BaseModel):
+    id: str
+    action: str
+    entity_type: str
+    entity_label: str
+    summary: str
+    created_at: datetime
+
+
+class DailyCostOverview(BaseModel):
+    active_entries: int
+    deleted_entries: int
+    submitted_entries: int
+    draft_entries: int
+    wells_tracked: int
+    active_baselines: int
+    over_budget_afes: int
+    total_planned_by_currency: dict[str, Decimal]
+    actual_to_date_by_currency: dict[str, Decimal]
+    remaining_by_currency: dict[str, Decimal]
+    groups: list[DailyCostGroupSummary]
+    trend: list[DailyCostTrendPoint]
+    recent_activity: list[DailyCostRecentActivity]
+
+
+class DailyCostBulkActionResponse(BaseModel):
+    affected_count: int
+
+
+DailyCostDayOut.model_rebuild()
+DailyCostPreviewOut.model_rebuild()

@@ -11,6 +11,7 @@ digraph WellCostingPro {
   "backend/app/api/auth.py";
   "backend/app/api/catalogue_items.py";
   "backend/app/api/catalogue_options.py";
+  "backend/app/api/daily_cost.py";
   "backend/app/api/deps.py";
   "backend/app/api/master_data.py";
   "backend/app/api/rbac.py";
@@ -29,6 +30,7 @@ digraph WellCostingPro {
   "backend/app/models/__init__.py";
   "backend/app/models/afe.py";
   "backend/app/models/catalogue.py";
+  "backend/app/models/daily_cost.py";
   "backend/app/models/entities.py";
   "backend/app/models/master_data.py";
   "backend/app/models/rig_well.py";
@@ -38,6 +40,7 @@ digraph WellCostingPro {
   "backend/app/schemas/__init__.py";
   "backend/app/schemas/afe.py";
   "backend/app/schemas/catalogue.py";
+  "backend/app/schemas/daily_cost.py";
   "backend/app/schemas/master_data.py";
   "backend/app/schemas/rbac.py";
   "backend/app/schemas/rig_well.py";
@@ -50,6 +53,7 @@ digraph WellCostingPro {
   "backend/app/services/catalogue.py";
   "backend/app/services/catalogue_specs.py";
   "backend/app/services/console.py";
+  "backend/app/services/daily_cost.py";
   "backend/app/services/provisioning.py";
   "frontend/src/App.tsx";
   "frontend/src/components/Brand.tsx";
@@ -83,11 +87,13 @@ digraph WellCostingPro {
   "frontend/src/components/catalogue/PriceHistoryDialog.tsx";
   "frontend/src/components/catalogue/PricedItemFormDialog.tsx";
   "frontend/src/components/catalogue/ReviseRateDialog.tsx";
+  "frontend/src/components/daily-cost/DailyCostLineDialog.tsx";
   "frontend/src/context/AuthContext.tsx";
   "frontend/src/context/ThemeContext.tsx";
   "frontend/src/lib/afe.ts";
   "frontend/src/lib/api.ts";
   "frontend/src/lib/catalogue.ts";
+  "frontend/src/lib/dailyCost.ts";
   "frontend/src/lib/export.ts";
   "frontend/src/lib/masterData.ts";
   "frontend/src/lib/rigWell.ts";
@@ -102,6 +108,8 @@ digraph WellCostingPro {
   "frontend/src/pages/AuditLog.tsx";
   "frontend/src/pages/CatalogueLists.tsx";
   "frontend/src/pages/Consumables.tsx";
+  "frontend/src/pages/DailyCostManagement.tsx";
+  "frontend/src/pages/DailyCostSheet.tsx";
   "frontend/src/pages/DeletedMasterData.tsx";
   "frontend/src/pages/Login.tsx";
   "frontend/src/pages/MasterDataOverview.tsx";
@@ -146,6 +154,9 @@ digraph WellCostingPro {
   "backend/app/api/catalogue_options.py" -> "backend/app/schemas/master_data.py";
   "backend/app/api/catalogue_options.py" -> "backend/app/services/__init__.py";
   "backend/app/api/catalogue_options.py" -> "backend/app/services/catalogue.py";
+  "backend/app/api/daily_cost.py" -> "backend/app/api/deps.py";
+  "backend/app/api/daily_cost.py" -> "backend/app/schemas/daily_cost.py";
+  "backend/app/api/daily_cost.py" -> "backend/app/services/__init__.py";
   "backend/app/api/deps.py" -> "backend/app/core/config.py";
   "backend/app/api/deps.py" -> "backend/app/core/database.py";
   "backend/app/api/deps.py" -> "backend/app/models/__init__.py";
@@ -196,6 +207,7 @@ digraph WellCostingPro {
   "backend/app/main.py" -> "backend/app/services/catalogue.py";
   "backend/app/models/__init__.py" -> "backend/app/models/afe.py";
   "backend/app/models/__init__.py" -> "backend/app/models/catalogue.py";
+  "backend/app/models/__init__.py" -> "backend/app/models/daily_cost.py";
   "backend/app/models/__init__.py" -> "backend/app/models/entities.py";
   "backend/app/models/__init__.py" -> "backend/app/models/master_data.py";
   "backend/app/models/__init__.py" -> "backend/app/models/rig_well.py";
@@ -206,6 +218,8 @@ digraph WellCostingPro {
   "backend/app/models/afe.py" -> "backend/app/models/rig_well.py";
   "backend/app/models/catalogue.py" -> "backend/app/core/database.py";
   "backend/app/models/catalogue.py" -> "backend/app/models/master_data.py";
+  "backend/app/models/daily_cost.py" -> "backend/app/core/database.py";
+  "backend/app/models/daily_cost.py" -> "backend/app/models/rig_well.py";
   "backend/app/models/entities.py" -> "backend/app/core/database.py";
   "backend/app/models/master_data.py" -> "backend/app/core/database.py";
   "backend/app/models/rig_well.py" -> "backend/app/core/database.py";
@@ -238,6 +252,13 @@ digraph WellCostingPro {
   "backend/app/services/catalogue_specs.py" -> "backend/app/models/catalogue.py";
   "backend/app/services/catalogue_specs.py" -> "backend/app/schemas/catalogue.py";
   "backend/app/services/catalogue_specs.py" -> "backend/app/services/catalogue.py";
+  "backend/app/services/daily_cost.py" -> "backend/app/models/__init__.py";
+  "backend/app/services/daily_cost.py" -> "backend/app/models/catalogue.py";
+  "backend/app/services/daily_cost.py" -> "backend/app/models/entities.py";
+  "backend/app/services/daily_cost.py" -> "backend/app/models/rig_well.py";
+  "backend/app/services/daily_cost.py" -> "backend/app/schemas/afe.py";
+  "backend/app/services/daily_cost.py" -> "backend/app/schemas/daily_cost.py";
+  "backend/app/services/daily_cost.py" -> "backend/app/services/__init__.py";
   "backend/app/services/provisioning.py" -> "backend/app/core/database.py";
   "backend/app/services/provisioning.py" -> "backend/app/core/security.py";
   "backend/app/services/provisioning.py" -> "backend/app/models/__init__.py";
@@ -250,6 +271,8 @@ digraph WellCostingPro {
   "frontend/src/App.tsx" -> "frontend/src/pages/AuditLog.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/CatalogueLists.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Consumables.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/pages/DailyCostManagement.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/pages/DailyCostSheet.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/DeletedMasterData.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Login.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/MasterDataOverview.tsx";
@@ -370,6 +393,8 @@ digraph WellCostingPro {
   "frontend/src/components/catalogue/ReviseRateDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/catalogue/ReviseRateDialog.tsx" -> "frontend/src/components/catalogue/MasterSelect.tsx";
   "frontend/src/components/catalogue/ReviseRateDialog.tsx" -> "frontend/src/lib/catalogue.ts";
+  "frontend/src/components/daily-cost/DailyCostLineDialog.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/components/daily-cost/DailyCostLineDialog.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/context/AuthContext.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/context/AuthContext.tsx" -> "frontend/src/lib/types.ts";
   "frontend/src/context/ThemeContext.tsx" -> "frontend/src/theme.ts";
@@ -417,6 +442,18 @@ digraph WellCostingPro {
   "frontend/src/pages/Consumables.tsx" -> "frontend/src/components/catalogue/CatalogueItemRegister.tsx";
   "frontend/src/pages/Consumables.tsx" -> "frontend/src/components/catalogue/FuelRegister.tsx";
   "frontend/src/pages/Consumables.tsx" -> "frontend/src/lib/catalogue.ts";
+  "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/components/DataTable.tsx";
+  "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/DataTable.tsx";
+  "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/daily-cost/DailyCostLineDialog.tsx";
+  "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/DeletedMasterData.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/DeletedMasterData.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/DeletedMasterData.tsx" -> "frontend/src/components/ServiceFormDialog.tsx";
