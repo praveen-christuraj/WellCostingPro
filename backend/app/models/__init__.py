@@ -4,6 +4,15 @@ from app.models.vendor_master import OrderDocument, PurchaseOrder, Vendor
 from app.models.service_master import Service
 from app.models.rig_well import Rig, Well, WellPhase, WellSection
 from app.models.well_sub_activity import WellSubActivity
+from app.models.afe import (
+    Afe,
+    AfeConsumableLine,
+    AfeServiceCharge,
+    AfeServiceLine,
+    AfeServiceRate,
+    AfeServiceSectionRate,
+    AfeTangibleLine,
+)
 from app.models.catalogue import (
     CatalogueOption,
     CementAdditive,

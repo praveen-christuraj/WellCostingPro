@@ -37,6 +37,10 @@ const modules: NavModule[] = [
     { label: 'Well sub activities', path: '/rig-well/sub-activities', icon: TaskAltOutlined, permission: 'rig-well:read' },
     { label: 'Deleted entries', path: '/rig-well/deleted', icon: DeleteOutlineRounded, permission: 'rig-well:read' },
   ] },
+  { label: 'AFE Management', icon: DescriptionOutlined, items: [
+    { label: 'Overview', path: '/afe', icon: DashboardOutlined, permission: 'afe:read' },
+    { label: 'AFE & cost estimation', path: '/afe/register', icon: DescriptionOutlined, permission: 'afe:read' },
+  ] },
   { label: 'Auditing', icon: HistoryOutlined, items: [
     { label: 'Audit Log', path: '/audit', icon: HistoryOutlined, permission: 'audit:read' },
   ] },
@@ -62,7 +66,7 @@ export default function Layout() {
 
   const visible = (item: NavItem) => (!item.permission || can(item.permission)) && (!item.requires || item.requires.every(can))
   const modulesForUser = modules.map(m => ({ ...m, items: m.items.filter(visible) })).filter(m => m.items.length > 0)
-  const currentModule = modulesForUser.find(m => m.items.some(i => i.path === location.pathname))
+  const currentModule = modulesForUser.find(m => m.items.some(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`)))
 
   return <Box display="flex" flexDirection="column" minHeight="100vh">
     <AppBar position="sticky" elevation={0} sx={{ bgcolor: 'background.paper', color: 'text.primary', borderBottom: '1px solid', borderColor: 'divider' }}>

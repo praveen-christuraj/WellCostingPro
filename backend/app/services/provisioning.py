@@ -31,6 +31,12 @@ CAPABILITIES = {resource: actions for resource, actions in {
     "rig-well": (
         "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
     ),
+    # AFE register and cost estimation. Status moves are separately grantable so that
+    # estimators, reviewers and approvers can be given different authority.
+    "afe": (
+        "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
+        "estimate", "submit", "review", "approve", "reopen",
+    ),
 }.items()}
 
 
