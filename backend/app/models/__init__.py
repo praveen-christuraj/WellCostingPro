@@ -14,6 +14,20 @@ from app.models.afe import (
     AfeServiceSectionRate,
     AfeTangibleLine,
 )
+from app.models.daily_cost import (
+    DailyCostBaseline,
+    DailyCostBaselineBudgetLine,
+    DailyCostBaselineExchangeRate,
+    DailyCostBaselinePhase,
+    DailyCostBaselineSection,
+    DailyCostBaselineServiceRate,
+    DailyCostCatalogueRateSnapshot,
+    DailyCostConsumableLine,
+    DailyCostEntry,
+    DailyCostServiceLine,
+    DailyCostTangibleLine,
+    DailyCostWellRateBaseline,
+)
 from app.models.catalogue import (
     CatalogueOption,
     CementAdditive,
