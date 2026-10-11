@@ -73,3 +73,31 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
 
 .assignment-option { border: 1px solid var(--line-soft); background: var(--surface-muted); border-radius: 8px; padding: 12px 17px; }
 .assignment-option:hover { border-color: var(--surface-accent-fg); }
+
+/* AFE print sheet: hidden on screen. When printing, the app is hidden and the full AFE
+   (well configuration, cost summary, services, consumables, tangibles) is shown in order. */
+.afe-print-sheet { display: none; }
+@media print {
+  @page { size: A4; margin: 12mm 10mm; }
+  body > #root { display: none !important; }
+  body { background: #fff !important; }
+  .afe-print-sheet { display: block !important; color: #000; background: #fff; font-family: Arial, Helvetica, sans-serif; font-size: 9.5pt; line-height: 1.35; }
+  .afe-print-sheet h1 { font-size: 15pt; margin: 2mm 0 3mm; }
+  .afe-print-sheet h2 { font-size: 11.5pt; margin: 5mm 0 2mm; border-bottom: 1px solid #000; padding-bottom: 1mm; page-break-after: avoid; }
+  .afe-print-sheet h3 { font-size: 10pt; margin: 3mm 0 1mm; page-break-after: avoid; }
+  .afe-print-sheet table { width: 100%; border-collapse: collapse; margin-bottom: 2mm; }
+  .afe-print-sheet th, .afe-print-sheet td { border: 1px solid #777; padding: 1.2mm 1.6mm; text-align: left; vertical-align: top; }
+  .afe-print-sheet th { background: #E6ECF3 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-weight: 700; }
+  .afe-print-sheet thead { display: table-header-group; }
+  .afe-print-sheet tr { page-break-inside: avoid; }
+  .afe-print-sheet .num { text-align: right; white-space: nowrap; }
+  .afe-print-sheet .ps-eyebrow { font-size: 8pt; letter-spacing: 1px; text-transform: uppercase; color: #333; }
+  .afe-print-sheet .ps-meta th { width: 14%; background: #F3F6FA !important; }
+  .afe-print-sheet .ps-line td { background: #FBFCFE; }
+  .afe-print-sheet .ps-component td { font-size: 8.5pt; color: #333; }
+  .afe-print-sheet .ps-sub { font-size: 8.5pt; color: #444; margin-top: .6mm; }
+  .afe-print-sheet .ps-total th, .afe-print-sheet .ps-total td { font-weight: 800; background: #E6ECF3 !important; }
+  .afe-print-sheet .ps-empty { font-style: italic; color: #444; }
+  .afe-print-sheet .ps-warnings { margin-top: 2mm; font-size: 9pt; }
+  .afe-print-sheet .ps-footer { margin-top: 5mm; font-size: 9pt; }
+}

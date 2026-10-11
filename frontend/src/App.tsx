@@ -25,6 +25,9 @@ const Rigs = lazy(() => import('./pages/Rigs'))
 const Wells = lazy(() => import('./pages/Wells'))
 const WellSubActivities = lazy(() => import('./pages/WellSubActivities'))
 const RigWellDeleted = lazy(() => import('./pages/RigWellDeleted'))
+const AfeOverview = lazy(() => import('./pages/AfeOverview'))
+const AfeManagement = lazy(() => import('./pages/AfeManagement'))
+const AfeEstimate = lazy(() => import('./pages/AfeEstimate'))
 
 function Guard({ permission, children }: { permission: string | string[]; children: ReactNode }) {
   const { can } = useAuth()
@@ -64,6 +67,9 @@ export default function App() {
           <Route path="rig-well/wells" element={<Guard permission="rig-well:read"><Wells/></Guard>}/>
           <Route path="rig-well/sub-activities" element={<Guard permission="rig-well:read"><WellSubActivities/></Guard>}/>
           <Route path="rig-well/deleted" element={<Guard permission="rig-well:read"><RigWellDeleted/></Guard>}/>
+          <Route path="afe" element={<Guard permission="afe:read"><AfeOverview/></Guard>}/>
+          <Route path="afe/register" element={<Guard permission="afe:read"><AfeManagement/></Guard>}/>
+          <Route path="afe/estimate/:afeId" element={<Guard permission="afe:read"><AfeEstimate/></Guard>}/>
           <Route path="*" element={<Navigate to="/" replace/>}/>
         </Route>
       </>}

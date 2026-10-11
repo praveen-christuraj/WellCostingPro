@@ -22,11 +22,35 @@ export async function api<T>(path: string, options: RequestInit = {}, retry = tr
   }
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))
-    throw new Error(typeof payload.detail === 'string' ? payload.detail : `Request failed (${response.status})`)
+    throw apiError(payload.detail, response.status)
   }
   if (response.status === 204) return undefined as T
   return response.json()
 }
+// Error raised for failed JSON requests. `details` carries every message the server
+// returned (for example one line per invalid estimate row), so pages can list them.
+export class ApiError extends Error {
+  status: number
+  details: string[]
+  constructor(message: string, status: number, details: string[]) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.details = details
+  }
+}
+
+function apiError(detail: unknown, status: number): ApiError {
+  if (typeof detail === 'string') return new ApiError(detail, status, [detail])
+  if (Array.isArray(detail)) {
+    const details = detail
+      .map(item => (typeof item === 'string' ? item : typeof item?.msg === 'string' ? item.msg : ''))
+      .filter(Boolean)
+    if (details.length) return new ApiError(details[0], status, details)
+  }
+  return new ApiError(`Request failed (${status})`, status, [])
+}
+
 export const body = (value: unknown) => JSON.stringify(value)
 export const restoreSession = renew
 

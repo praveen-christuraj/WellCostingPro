@@ -1,7 +1,7 @@
 # Durable project memory
 
 ## Product scope
-WellCosting Pro is a tenant-aware SaaS foundation. The current increment covers authentication, user/role/permission CRUD, assignments, workspace and module dashboards, an audit trail, Master Data Management for UOM, Currency, Phases, Hole Sections, Activities, Services, Vendors, and PO/SO Orders (with attachments and amendment revisions), plus Rig & Well Management. Project/costing domain entities and workflows are **not implemented yet**.
+WellCosting Pro is a tenant-aware SaaS foundation. The current increment covers authentication, user/role/permission CRUD, assignments, workspace and module dashboards, an audit trail, Master Data Management for UOM, Currency, Phases, Hole Sections, Activities, Services, Vendors, and PO/SO Orders (with attachments and amendment revisions), plus Rig & Well Management and AFE Management (AFE register, cost estimation, approvals). Project domain entities and workflows are **not implemented yet**.
 
 ## Standing product conventions (mandatory for every module and page)
 These are cross-cutting requirements. Every new page, module, and feature must comply; code review must reject violations. They apply to User Management, Master Data Management, Business modules, Report modules, Back-up modules, Auditing modules, and anything added later.
@@ -39,6 +39,12 @@ These are cross-cutting requirements. Every new page, module, and feature must c
 - Migrations are explicit Alembic revisions. Do not use `create_all` in the app runtime.
 - The owner account is the platform administrator. On a new device the database is empty, so at startup the API detects the missing owner and asks the operator to create one (`app/bootstrap.py` + prompts in `app/services/console.py`, provisioning in `app/services/provisioning.py`, schema state in `app/core/migrations.py`). It never invents credentials, never writes to an existing tenant, never creates tables behind Alembic and never blocks a non-interactive process; `SEED_*` variables cover unattended first boots and `BOOTSTRAP_ADMIN_ON_STARTUP=false` disables the check. `python -m app.seed` is the same flow as a CLI, `--check` exits 0 admin present / 1 missing / 2 unmigrated / 3 failed.
 
+## AFE Management
+- Backend: `backend/app/models/afe.py`, `app/domain/afe_costing.py` (pure pricing engine), `app/services/afe.py`, `app/schemas/afe.py`, `app/api/afe.py` (`/api/v1/afe`), Alembic revision `a9d4e2f7c138` (descends from `f3a7d0b9c214`). Permissions `afe:*` are provisioned for new tenants and backfilled. Tests: `backend/tests/test_afe.py`.
+- Frontend: `/afe` overview, `/afe/register` (tabs AFE, AFE Cost Estimation, Deleted entries), `/afe/estimate/:afeId` workspace. Shared logic lives in `frontend/src/lib/afe.ts`; components in `frontend/src/components/afe/`; print sheet is `AfePrintSheet.tsx` with `@media print` rules in `styles.css`.
+- Status moves happen only from AFE Cost Estimation or the estimate workspace. The AFE register never changes status.
+- Design, pricing rules, reference-bug handling, and the open mud-chemical daily-consumption question are in `docs/afe-plan.md`.
+
 ## Rig & Well Management
 - `backend/app/models/rig_well.py`, `well_sub_activity.py`, `backend/app/api/rig_well.py`, and Alembic revision `f3a7d0b9c214` implement tenant-scoped Rigs, Rig-scoped Wells, typed Hole Section / Phase plan rows, and Well-scoped Sub Activities classified by an active Master Data Activity. Rig and well codes are workspace-unique; sub-activity codes are unique within their well. The revision descends from `e5b0c7a9f213` and was checked through a full SQLite upgrade and `alembic check`.
 - Wells have active/completed and draft/configured lifecycle states. Configuration uses active workspace Hole Sections and Phases, validates unique selections, ordered non-overlapping depth intervals, non-negative depth/day values and requires at least one Phase per section. Configured/completed plans are read-only until explicitly reopened as Draft; every configuration and lifecycle change is audited.
@@ -53,7 +59,7 @@ These are cross-cutting requirements. Every new page, module, and feature must c
 - Guide: `docs/deployment.md`; blueprint: `render.yaml`.
 
 ## Next engineering priorities
-Object storage (S3/Supabase Storage) for PO/SO attachments once files outgrow database storage; project and costing domain model (with its own module dashboard); invitation and password reset email flow; SSO/MFA; server-driven pagination and bulk export endpoints for very large datasets; richer audit retention/rotation; stronger distributed rate limiting; background jobs; billing and tenant lifecycle automation; observability; PostgreSQL integration tests and deployment hardening. Every new module must follow the Standing product conventions above. Do not represent these as shipped.
+Object storage (S3/Supabase Storage) for PO/SO attachments once files outgrow database storage; project domain model (with its own module dashboard); invitation and password reset email flow; SSO/MFA; server-driven pagination and bulk export endpoints for very large datasets; richer audit retention/rotation; stronger distributed rate limiting; background jobs; billing and tenant lifecycle automation; observability; PostgreSQL integration tests and deployment hardening. Every new module must follow the Standing product conventions above. Do not represent these as shipped.
 
 ## Verification
 `cd backend && ../.venv/bin/python -m pytest -q`; `cd frontend && npm install && npm run build`; `make graph`.
