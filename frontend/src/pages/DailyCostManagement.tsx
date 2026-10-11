@@ -41,6 +41,12 @@ function prettyCurrencyMap(map: Record<string, string>): string {
   return items.length ? items.map(([code, value]) => dailyMoney(value, code)).join(' · ') : '—'
 }
 
+function isValidCostDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+}
+
 export default function DailyCostManagement() {
   const { can } = useAuth()
   const navigate = useNavigate()
@@ -104,6 +110,8 @@ export default function DailyCostManagement() {
   const selectedWell = wells.find(well => well.id === wellId)
   const afes = useMemo(() => reference?.afes.filter(afe => afe.well_id === wellId) ?? [], [reference, wellId])
   const selectedAfe = afes.find(afe => afe.id === afeId)
+  const createDateValid = isValidCostDate(costDate)
+  const selectedDuplicate = rows.find(row => row.well_id === wellId && row.afe_id === afeId && row.cost_date === costDate)
 
   useEffect(() => {
     if (!createOpen || !reference) return
@@ -127,6 +135,15 @@ export default function DailyCostManagement() {
       setCreateError('Choose a configured well and a saved AFE estimate.')
       return
     }
+    if (!isValidCostDate(costDate)) {
+      setCreateError('Enter a valid cost date before creating the daily sheet.')
+      return
+    }
+    const existing = rows.find(row => row.well_id === selectedWell.id && row.afe_id === selectedAfe.id && row.cost_date === costDate)
+    if (existing) {
+      setCreateError(`A daily cost sheet already exists for ${displayDate(costDate)} under ${selectedAfe.afe_code}. Open the existing sheet above instead.`)
+      return
+    }
     setCreating(true)
     setCreateError('')
     try {
@@ -136,7 +153,9 @@ export default function DailyCostManagement() {
       setCreateOpen(false)
       navigate(`/daily-cost/entries/${created.entry.id}`)
     } catch (caught) {
-      setCreateError(caught instanceof Error ? caught.message : 'The daily cost sheet could not be created')
+      const message = caught instanceof Error ? caught.message : 'The daily cost sheet could not be created'
+      setCreateError(message)
+      if (message.toLowerCase().includes('already exists')) void load()
     } finally {
       setCreating(false)
     }
@@ -384,7 +403,7 @@ export default function DailyCostManagement() {
       </Typography>}
     </>}
 
-    <FormDialog open={createOpen} title="Start a daily cost sheet" subtitle="The first sheet locks the AFE estimate, FX factors, well plan, service rates and Master Data catalogue prices for this well/AFE." onClose={() => setCreateOpen(false)} onSubmit={() => void createEntry()} busy={creating} submitLabel="Create daily sheet" submitDisabled={!selectedAfe || !selectedWell}>
+    <FormDialog open={createOpen} title="Start a daily cost sheet" subtitle="The first sheet locks the AFE estimate, FX factors, well plan, service rates and Master Data catalogue prices for this well/AFE." onClose={() => setCreateOpen(false)} onSubmit={() => void createEntry()} busy={creating} submitLabel="Create daily sheet" submitDisabled={!selectedAfe || !selectedWell || !createDateValid || Boolean(selectedDuplicate)}>
       <Box display="grid" gap={1.6}>
         {!wells.length && <Alert severity="warning">Create and sign off a well plan in Rig &amp; Well Management before starting daily cost tracking.</Alert>}
         <TextField select required label="Configured well" value={wellId} onChange={event => {
@@ -401,7 +420,10 @@ export default function DailyCostManagement() {
           {afes.map(afe => <MenuItem key={afe.id} value={afe.id}>{afe.display_name}</MenuItem>)}
         </TextField>
         {selectedAfe && <Alert severity="info" sx={{ py: 0 }}>AFE status: {selectedAfe.status}. Budget baseline: {dailyMoney(selectedAfe.total_cost, selectedAfe.standard_currency)}. Subsequent estimate or Master Data changes will not rewrite this locked baseline.</Alert>}
-        <TextField required type="date" label="Cost date" value={costDate} onChange={event => setCostDate(event.target.value)} InputLabelProps={{ shrink: true }}/>
+        {selectedDuplicate && <Alert severity="warning" sx={{ py: 0 }} action={<Button component={RouterLink} to={`/daily-cost/entries/${selectedDuplicate.id}`} size="small" color="inherit" onClick={() => setCreateOpen(false)}>Open existing</Button>}>
+          A sheet already exists for this well, AFE and date. Open it to review or continue editing instead of creating a duplicate.
+        </Alert>}
+        <TextField required type="date" label="Cost date" value={costDate} onChange={event => { setCostDate(event.target.value); setCreateError('') }} error={Boolean(costDate) && !createDateValid} helperText={Boolean(costDate) && !createDateValid ? 'Enter a real calendar date.' : 'Each well + AFE + date can have one sheet.'} InputLabelProps={{ shrink: true }}/>
         <TextField label="Shift / day remarks" value={remarks} onChange={event => setRemarks(event.target.value)} multiline minRows={2} inputProps={{ maxLength: 1000 }}/>
         <ErrorMessage message={createError}/>
       </Box>

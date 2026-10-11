@@ -16,7 +16,7 @@ import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import { downloadTemplate, parseImportFile, type ImportRow } from '../lib/export'
 import {
-  DAILY_COST_STATUSES, dailyMoney, displayDate, entryQuery, saveFromDay,
+  DAILY_COST_STATUSES, DAILY_ONE_TIME_CATEGORIES, dailyMoney, displayDate, entryQuery, saveFromDay,
   type DailyCostBaseline, type DailyCostComparisonLine, type DailyCostDay,
   type DailyCostImportResult, type DailyCostPreview, type DailyCostReference,
   type DailyCostSavePayload, type DailyCostServiceInput, type DailyCostConsumableInput,
@@ -39,8 +39,11 @@ function StatCard({ label, value, hint, tone }: { label: string; value: string; 
   </Paper>
 }
 
-function amountForRate(rate: string, quantity: string, unit: string, basis?: string): string {
-  const amount = Number(rate) * Number(quantity) / (basis === 'Day Rate' && unit === 'hours' ? 24 : 1)
+function amountForRate(rate: string, quantity: string, unit: string, basis?: string, category?: string): string {
+  const billableQuantity = basis === 'Day Rate' && category && DAILY_ONE_TIME_CATEGORIES.includes(category as typeof DAILY_ONE_TIME_CATEGORIES[number])
+    ? 1
+    : Number(quantity) / (basis === 'Day Rate' && unit === 'hours' ? 24 : 1)
+  const amount = Number(rate) * billableQuantity
   return Number.isFinite(amount) ? amount.toFixed(2) : '—'
 }
 
@@ -59,6 +62,7 @@ export default function DailyCostSheet() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [previewError, setPreviewError] = useState('')
+  const [previewRetry, setPreviewRetry] = useState(0)
   const [previewing, setPreviewing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
@@ -111,6 +115,7 @@ export default function DailyCostSheet() {
   const editable = Boolean(day && day.entry.status === 'draft' && can('daily-cost:update'))
   const hasPreviewForEdits = Boolean(preview && dirty)
   const canExport = can('daily-cost:export')
+  const saveDisabled = !dirty || saving || previewing || Boolean(previewError)
 
   useEffect(() => {
     if (!day || !dirty || !editable || loading) {
@@ -139,7 +144,7 @@ export default function DailyCostSheet() {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [day, dirty, editable, entryId, loading, payload])
+  }, [day, dirty, editable, entryId, loading, payload, previewRetry])
 
   useEffect(() => {
     if (!dirty) return
@@ -441,8 +446,16 @@ export default function DailyCostSheet() {
       }
       let localAmount = '—'
       if (priced) localAmount = priced.amount
-      else if (line.override_rate !== null) localAmount = amountForRate(line.override_rate, line.quantity, 'quantity_unit' in line ? line.quantity_unit : 'unit', 'charging_basis' in line ? line.charging_basis ?? undefined : undefined)
-      else if (kind === 'service' && 'quantity_unit' in line) localAmount = amountForRate(sourceRate, line.quantity, line.quantity_unit, 'charging_basis' in line ? line.charging_basis ?? undefined : undefined)
+      else if (line.override_rate !== null) localAmount = amountForRate(
+        line.override_rate, line.quantity, 'quantity_unit' in line ? line.quantity_unit : 'unit',
+        'charging_basis' in line ? line.charging_basis ?? undefined : undefined,
+        'charge_category' in line ? line.charge_category : undefined,
+      )
+      else if (kind === 'service' && 'quantity_unit' in line) localAmount = amountForRate(
+        sourceRate, line.quantity, line.quantity_unit,
+        'charging_basis' in line ? line.charging_basis ?? undefined : undefined,
+        'charge_category' in line ? line.charge_category : undefined,
+      )
       else if (sourceRate !== '0') localAmount = amountForRate(sourceRate, line.quantity, 'unit')
       const activity = activityName(line.activity_id)
       const vendor = vendorName(line.vendor_id, line.party_name)
@@ -559,7 +572,7 @@ export default function DailyCostSheet() {
             <span><Button variant="outlined" startIcon={<ContentCopyOutlined/>} disabled={!previousDay || copyBusy} onClick={() => void copyPreviousDay('replace')}>Copy previous day</Button></span>
           </Tooltip>
           <Button variant="outlined" startIcon={<CloudUploadOutlined/>} onClick={openImport}>Import lines</Button>
-          {can('daily-cost:update') && <Button variant="contained" startIcon={<SaveOutlined/>} onClick={() => void save()} disabled={!dirty || saving}>{saving ? 'Saving…' : 'Save sheet'}</Button>}
+          {can('daily-cost:update') && <Button variant="contained" startIcon={<SaveOutlined/>} onClick={() => void save()} disabled={saveDisabled}>{saving ? 'Saving…' : 'Save sheet'}</Button>}
         </>}
         {canSubmit && <Tooltip title={dirty ? 'Save changes before submitting.' : 'Submit this daily sheet for review.'}><span><Button variant="contained" color="success" startIcon={<SendRounded/>} onClick={() => openStatus('submit')} disabled={dirty || saving}>Submit</Button></span></Tooltip>}
         {canReopen && <Button variant="outlined" startIcon={<UndoRounded/>} onClick={() => openStatus('reopen')}>Reopen</Button>}
@@ -568,7 +581,7 @@ export default function DailyCostSheet() {
 
     {notice && <Alert severity="success" sx={{ mb: 1.5 }} onClose={() => setNotice('')}>{notice}</Alert>}
     <ErrorMessage message={saveError}/>
-    {previewError && <Alert severity="error" sx={{ mb: 1.5 }} action={can('daily-cost:update') ? <Button color="inherit" size="small" onClick={() => { setPreviewError(''); setPreview(null) }}>Retry preview</Button> : undefined}>{previewError}</Alert>}
+    {previewError && <Alert severity="error" sx={{ mb: 1.5 }} action={can('daily-cost:update') ? <Button color="inherit" size="small" onClick={() => { setPreviewError(''); setPreview(null); setPreviewRetry(value => value + 1) }}>Retry preview</Button> : undefined}>{previewError}</Alert>}
     {entry.status === 'submitted' && <Alert severity="info" icon={<LockOutlined/>} sx={{ mb: 1.5 }}>
       Submitted by {entry.submitted_by || 'workspace user'}{entry.submitted_at ? ` on ${new Date(entry.submitted_at).toLocaleString()}` : ''}. The daily sheet is read-only{entry.status_remarks ? ` · ${entry.status_remarks}` : ''}.
     </Alert>}
@@ -658,7 +671,7 @@ export default function DailyCostSheet() {
 
     {editable && <Box display="flex" justifyContent="flex-end" gap={1} mt={1.6}>
       <Button variant="outlined" onClick={() => setPayload(originalPayload ?? payload)} disabled={!dirty || saving}>Discard changes</Button>
-      <Button variant="contained" startIcon={<SaveOutlined/>} onClick={() => void save()} disabled={!dirty || saving}>{saving ? 'Saving…' : 'Save daily sheet'}</Button>
+      <Button variant="contained" startIcon={<SaveOutlined/>} onClick={() => void save()} disabled={saveDisabled}>{saving ? 'Saving…' : 'Save daily sheet'}</Button>
     </Box>}
 
     <DailyCostLineDialog

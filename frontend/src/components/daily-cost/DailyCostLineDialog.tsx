@@ -392,7 +392,7 @@ export function DailyCostLineDialog({ open, kind, initialLine, baseline, referen
         <Divider/>
         <Typography fontSize={12} fontWeight={800} letterSpacing={.5} color="text.secondary">CHARGED QUANTITY &amp; RATE</Typography>
         <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1.2fr .8fr' } }}>
-          <TextField label="Quantity" type="number" required value={form.quantity} onChange={event => update({ quantity: event.target.value })} inputProps={{ min: 0.0001, step: 'any' }}/>
+          <TextField label={DAILY_ONE_TIME_CATEGORIES.includes(form.charge_category) ? 'Recorded quantity' : 'Quantity'} type="number" required value={form.quantity} onChange={event => update({ quantity: event.target.value })} inputProps={{ min: 0.0001, step: 'any' }} helperText={DAILY_ONE_TIME_CATEGORIES.includes(form.charge_category) ? 'One-time Day Rate: the locked unit rate is charged once; quantity is retained as an operational record.' : undefined}/>
           <TextField select label="Quantity unit" value={form.quantity_unit} disabled={form.charging_basis !== 'Day Rate' || DAILY_ONE_TIME_CATEGORIES.includes(form.charge_category)} onChange={event => update({ quantity_unit: event.target.value as DailyQuantityUnit })}>
             {(form.charging_basis === 'Day Rate'
               ? DAILY_ONE_TIME_CATEGORIES.includes(form.charge_category) ? ['unit'] : ['days', 'hours']
