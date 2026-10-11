@@ -8,8 +8,8 @@ type Form = { rig_id: string; well_id: string; afe_code: string; afe_name: strin
 
 const emptyForm = (): Form => ({ rig_id: '', well_id: '', afe_code: '', afe_name: '', afe_type: 'Drilling', remarks: '' })
 
-// Create or edit an AFE header. Rig and well come from Rig & Well Management; the well
-// must be active and have a saved plan, because the estimate prices against its sections and phases.
+// Create or edit an AFE header. Rig and well come from Rig & Well Management. The well must be active
+// and its plan must be marked Configured, because the estimate prices against its sections and phases.
 export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
   open: boolean
   record: Afe | null
@@ -32,7 +32,9 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
   const wells = useMemo(() => (reference?.wells ?? []).filter(well => well.rig_id === form.rig_id), [reference, form.rig_id])
   const selectedWell = wells.find(well => well.id === form.well_id)
   const wellEligible = (well: NonNullable<AfeReference['wells']>[number]) =>
-    (well.status === 'active' && well.section_count > 0) || well.id === record?.well_id
+    (well.status === 'active' && well.config_status === 'configured' && well.section_count > 0) || well.id === record?.well_id
+  const wellNote = (well: NonNullable<AfeReference['wells']>[number]) =>
+    well.section_count === 0 ? ' · no plan saved' : well.status !== 'active' ? ' · not active' : well.config_status !== 'configured' ? ' · plan not configured' : ''
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm(current => ({ ...current, [key]: value }))
   const setRig = (rigId: string) => setForm(current => ({ ...current, rig_id: rigId, well_id: '' }))
@@ -75,7 +77,7 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
     maxWidth="md"
   >
     <Box display="grid" gap={2} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
-      {noRigs && <Box sx={{ gridColumn: '1 / -1' }}><ErrorMessage message="Create an active rig and a well with a saved plan in Rig & Well Management first."/></Box>}
+      {noRigs && <Box sx={{ gridColumn: '1 / -1' }}><ErrorMessage message="Create an active rig and a well with a Configured plan in Rig & Well Management first."/></Box>}
       <TextField
         select label="Rig" required value={form.rig_id} onChange={event => setRig(event.target.value)}
         helperText="Only rigs from Rig & Well Management are listed."
@@ -85,11 +87,11 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
       <TextField
         select label="Well" required value={form.well_id} onChange={event => set('well_id', event.target.value)}
         disabled={!form.rig_id}
-        helperText={!form.rig_id ? 'Choose a rig first.' : !wells.length ? 'This rig has no wells yet.' : selectedWell && !wellEligible(selectedWell) ? 'This well is not active or has no saved plan.' : 'Wells must be active and have a saved plan.'}
+        helperText={!form.rig_id ? 'Choose a rig first.' : !wells.length ? 'This rig has no wells yet.' : selectedWell && !wellEligible(selectedWell) ? 'This well is not active, or its plan is not marked Configured.' : 'Wells must be active and have a plan marked Configured.'}
         error={Boolean(selectedWell) && !wellEligible(selectedWell!)}
       >
         {wells.map(well => <MenuItem key={well.id} value={well.id} disabled={!wellEligible(well)}>
-          {well.display_name}{well.section_count === 0 ? ' · no plan saved' : well.status !== 'active' ? ' · not active' : ''}
+          {well.display_name}{wellNote(well)}
         </MenuItem>)}
       </TextField>
       <TextField

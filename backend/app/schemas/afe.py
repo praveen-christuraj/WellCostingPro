@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.domain.afe_costing import CHARGE_CATEGORIES, CHARGING_BASES, CONSUMABLE_CATEGORIES
 
@@ -122,10 +122,12 @@ class AfeOut(BaseModel):
     service_count: int
     consumable_count: int
     tangible_count: int
-    services_total: Decimal
-    consumables_total: Decimal
-    tangibles_total: Decimal
-    total_cost: Decimal
+    services_total: Decimal | None  # standard currency; null while a conversion rate is missing
+    consumables_total: Decimal | None
+    tangibles_total: Decimal | None
+    total_cost: Decimal | None
+    standard_currency: str
+    conversion_pending: bool
     totals_by_currency: list["CurrencyTotalOut"]
     warning_count: int
     is_deleted: bool
@@ -272,12 +274,41 @@ class TangibleLineIn(BaseModel):
         return _trim(value)
 
 
+class ExchangeRateIn(BaseModel):
+    """Units of the standard currency per one unit of ``currency_code``."""
+
+    currency_code: str = Field(max_length=10)
+    rate: Decimal = Field(gt=0, max_digits=18, decimal_places=6)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("currency_code", mode="before")
+    @classmethod
+    def upper_code(cls, value: Any) -> Any:
+        return _upper(value)
+
+
 class EstimateIn(BaseModel):
     services: list[ServiceLineIn] = Field(default_factory=list, max_length=MAX_LINES)
     consumables: list[ConsumableLineIn] = Field(default_factory=list, max_length=MAX_LINES)
     tangibles: list[TangibleLineIn] = Field(default_factory=list, max_length=MAX_LINES)
+    # Only used when the estimate mixes currencies. Ignored for a single currency.
+    standard_currency: str = Field(default="", max_length=10)
+    exchange_rates: list[ExchangeRateIn] = Field(default_factory=list, max_length=50)
 
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("standard_currency", mode="before")
+    @classmethod
+    def upper_standard(cls, value: Any) -> Any:
+        return _upper(value)
+
+    @model_validator(mode="after")
+    def unique_rate_currencies(self) -> "EstimateIn":
+        codes = [rate.currency_code for rate in self.exchange_rates]
+        if len(codes) != len(set(codes)):
+            raise ValueError("Each currency can have only one conversion rate.")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +319,21 @@ class EstimateIn(BaseModel):
 class CurrencyTotalOut(BaseModel):
     currency: str
     amount: Decimal
+
+
+class ExchangeRateOut(BaseModel):
+    currency_code: str
+    rate: Decimal
+
+
+class CurrencySetupOut(BaseModel):
+    standard_currency: str
+    currencies: list[str]
+    multi_currency: bool
+    converted: bool
+    standard_missing: bool
+    missing_rates: list[str]
+    exchange_rates: list[ExchangeRateOut]
 
 
 class ComponentOut(BaseModel):
@@ -405,18 +451,20 @@ class SectionSummaryOut(BaseModel):
     hole_section_id: str | None
     label: str
     planned_days: Decimal
-    services: Decimal
-    consumables: Decimal
-    tangibles: Decimal
-    total: Decimal
+    services: Decimal | None
+    consumables: Decimal | None
+    tangibles: Decimal | None
+    total: Decimal | None
 
 
 class EstimateSummaryOut(BaseModel):
-    services_total: Decimal
-    consumables_total: Decimal
-    tangibles_total: Decimal
-    total: Decimal
-    totals_by_currency: list[CurrencyTotalOut]
+    # Converted figures are in the standard currency. They are null while a rate is missing.
+    services_total: Decimal | None
+    consumables_total: Decimal | None
+    tangibles_total: Decimal | None
+    total: Decimal | None
+    totals_by_currency: list[CurrencyTotalOut]  # as entered, one per currency
+    currency: CurrencySetupOut
     by_section: list[SectionSummaryOut]
     warnings: list[str]
 
@@ -489,6 +537,7 @@ class AfeOverview(BaseModel):
     wells_with_afes: int
     totals_by_currency: list["CurrencyTotalOut"]
     approved_by_currency: list["CurrencyTotalOut"]
+    conversion_pending_afes: int
     statuses: list[AfeOverviewStatus]
     top_wells: list[AfeOverviewWell]
     warning_afes: int

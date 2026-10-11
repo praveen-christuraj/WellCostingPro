@@ -20,11 +20,17 @@ Rules
 * Sections and phases must come from the well configuration. Anything outside it
   is reported as a warning and is never silently priced into a section.
 * Money is rounded to 2 decimals (half-up) per component; days and rates to 4.
+* Currency. Every line keeps its entered currency. The estimate has one standard
+  currency. When only one currency is detected, that currency is the standard and
+  no rate is needed. When several are detected, a standard currency must be chosen
+  and each other currency needs a conversion rate (units of standard per one unit
+  of the foreign currency). Converted totals are None until every rate is present.
+  Amounts as entered per currency are always reported separately.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -244,16 +250,78 @@ class LineResult:
 
 
 @dataclass(frozen=True)
+class CurrencySetup:
+    """The standard currency and the conversion rates an estimate was priced with.
+
+    ``exchange_rates`` holds only the rates that are needed: one per detected currency
+    other than the standard. ``missing_rates`` lists detected currencies without one.
+    """
+
+    standard_currency: str
+    currencies: tuple[str, ...]
+    exchange_rates: tuple[tuple[str, Decimal], ...] = ()
+    missing_rates: tuple[str, ...] = ()
+    standard_missing: bool = False
+
+    @property
+    def multi_currency(self) -> bool:
+        return len(self.currencies) > 1
+
+    @property
+    def converted(self) -> bool:
+        return not self.standard_missing and not self.missing_rates
+
+    def factor(self, currency: str) -> Decimal | None:
+        """Units of the standard currency per one unit of ``currency``; None when unknown."""
+
+        if currency == self.standard_currency:
+            return Decimal("1")
+        return dict(self.exchange_rates).get(currency)
+
+
+def resolve_currency(currencies: Iterable[str], standard: str = "", rates: Mapping[str, Decimal] | None = None) -> CurrencySetup:
+    """Work out the standard currency and the rates needed for the detected currencies."""
+
+    detected = tuple(sorted({(code or "").strip().upper() for code in currencies}))
+    requested = (standard or "").strip().upper()
+    if len(detected) <= 1:
+        # A single currency is its own standard. Any stored choice is ignored.
+        return CurrencySetup(standard_currency=detected[0] if detected else requested, currencies=detected)
+    if not requested:
+        return CurrencySetup(standard_currency="", currencies=detected, standard_missing=True)
+
+    supplied = {(code or "").strip().upper(): Decimal(value) for code, value in (rates or {}).items()}
+    used: list[tuple[str, Decimal]] = []
+    missing: list[str] = []
+    for code in detected:
+        if code == requested:
+            continue
+        rate = supplied.get(code)
+        if rate is None or rate <= 0:
+            missing.append(code)
+        else:
+            used.append((code, rate))
+    return CurrencySetup(
+        standard_currency=requested,
+        currencies=detected,
+        exchange_rates=tuple(used),
+        missing_rates=tuple(missing),
+    )
+
+
+@dataclass(frozen=True)
 class SectionSummary:
     section_id: str | None
     label: str
     planned_days: Decimal
-    services: Decimal
-    consumables: Decimal
-    tangibles: Decimal
+    services: Decimal | None
+    consumables: Decimal | None
+    tangibles: Decimal | None
 
     @property
-    def total(self) -> Decimal:
+    def total(self) -> Decimal | None:
+        if self.services is None or self.consumables is None or self.tangibles is None:
+            return None
         return money(self.services + self.consumables + self.tangibles)
 
 
@@ -263,14 +331,19 @@ class EstimateResult:
     consumables: tuple[LineResult, ...]
     tangibles: tuple[LineResult, ...]
     by_section: tuple[SectionSummary, ...]
-    services_total: Decimal
-    consumables_total: Decimal
-    tangibles_total: Decimal
+    services_total: Decimal | None
+    consumables_total: Decimal | None
+    tangibles_total: Decimal | None
     totals_by_currency: tuple[tuple[str, Decimal], ...]
+    currency: CurrencySetup
     warnings: tuple[str, ...]
 
     @property
-    def total(self) -> Decimal:
+    def total(self) -> Decimal | None:
+        """Grand total in the standard currency, or None while a rate is missing."""
+
+        if self.services_total is None or self.consumables_total is None or self.tangibles_total is None:
+            return None
         return money(self.services_total + self.consumables_total + self.tangibles_total)
 
 
@@ -551,10 +624,16 @@ def compile_estimate(
     services: Sequence[ServiceLine] = (),
     consumables: Sequence[ConsumableLine] = (),
     tangibles: Sequence[TangibleLine] = (),
+    standard_currency: str = "",
+    exchange_rates: Mapping[str, Decimal] | None = None,
 ) -> EstimateResult:
     service_results = tuple(estimate_service(line, well) for line in services)
     consumable_results = tuple(estimate_consumable(line, well) for line in consumables)
     tangible_results = tuple(estimate_tangible(line) for line in tangibles)
+    all_results = (*service_results, *consumable_results, *tangible_results)
+
+    setup = resolve_currency((result.currency for result in all_results), standard_currency, exchange_rates)
+    converted = setup.converted
 
     configured = {section.section_id for section in well.sections}
     buckets: dict[str | None, dict[str, Decimal]] = {
@@ -562,19 +641,28 @@ def compile_estimate(
         for section in well.sections
     }
     buckets[None] = {GROUP_SERVICES: Decimal("0"), GROUP_CONSUMABLES: Decimal("0"), GROUP_TANGIBLES: Decimal("0")}
-    for result in (*service_results, *consumable_results, *tangible_results):
+    group_totals = {GROUP_SERVICES: Decimal("0"), GROUP_CONSUMABLES: Decimal("0"), GROUP_TANGIBLES: Decimal("0")}
+    for result in all_results:
+        factor = setup.factor(result.currency)
+        if factor is None:
+            continue  # Missing rate: the converted figures are withheld below.
         for component in result.components:
+            value = money(component.amount * factor)
             bucket_id = component.section_id if component.section_id in configured else None
-            buckets[bucket_id][component.group] += component.amount
+            buckets[bucket_id][component.group] += value
+            group_totals[component.group] += value
+
+    def shown(value: Decimal) -> Decimal | None:
+        return money(value) if converted else None
 
     by_section = [
         SectionSummary(
             section_id=section.section_id,
             label=section.label,
             planned_days=section.days,
-            services=money(buckets[section.section_id][GROUP_SERVICES]),
-            consumables=money(buckets[section.section_id][GROUP_CONSUMABLES]),
-            tangibles=money(buckets[section.section_id][GROUP_TANGIBLES]),
+            services=shown(buckets[section.section_id][GROUP_SERVICES]),
+            consumables=shown(buckets[section.section_id][GROUP_CONSUMABLES]),
+            tangibles=shown(buckets[section.section_id][GROUP_TANGIBLES]),
         )
         for section in well.sections
     ]
@@ -585,31 +673,36 @@ def compile_estimate(
                 section_id=None,
                 label=WELL_LEVEL_LABEL,
                 planned_days=Decimal("0"),
-                services=money(well_level[GROUP_SERVICES]),
-                consumables=money(well_level[GROUP_CONSUMABLES]),
-                tangibles=money(well_level[GROUP_TANGIBLES]),
+                services=shown(well_level[GROUP_SERVICES]),
+                consumables=shown(well_level[GROUP_CONSUMABLES]),
+                tangibles=shown(well_level[GROUP_TANGIBLES]),
             )
         )
 
-    services_total = money(sum((result.amount for result in service_results), Decimal("0")))
-    consumables_total = money(sum((result.amount for result in consumable_results), Decimal("0")))
-    tangibles_total = money(sum((result.amount for result in tangible_results), Decimal("0")))
+    services_total = shown(group_totals[GROUP_SERVICES])
+    consumables_total = shown(group_totals[GROUP_CONSUMABLES])
+    tangibles_total = shown(group_totals[GROUP_TANGIBLES])
 
+    # Totals as entered, one per currency. These are never added together.
     currency_totals: dict[str, Decimal] = {}
-    for result in (*service_results, *consumable_results, *tangible_results):
+    for result in all_results:
         currency_totals[result.currency] = currency_totals.get(result.currency, Decimal("0")) + result.amount
     totals_by_currency = tuple(
         (currency, money(amount)) for currency, amount in sorted(currency_totals.items(), key=lambda item: item[0])
     )
 
     warnings: list[str] = []
-    for result in (*service_results, *consumable_results, *tangible_results):
+    for result in all_results:
         warnings.extend(f"{result.label}: {text}" for text in result.warnings)
-    named_currencies = [currency or "no currency" for currency, _ in totals_by_currency]
-    if len(named_currencies) > 1:
-        warnings.append(
-            f"Estimate mixes currencies ({', '.join(named_currencies)}); the grand total adds the amounts as entered"
-        )
+    if setup.multi_currency:
+        names = ", ".join(currency or "no currency" for currency in setup.currencies)
+        if setup.standard_missing:
+            warnings.append(
+                f"Estimate mixes currencies ({names}); select the standard currency and enter the conversion rate for each other currency"
+            )
+        elif setup.missing_rates:
+            missing = ", ".join(currency or "no currency" for currency in setup.missing_rates)
+            warnings.append(f"Enter the conversion rate to {setup.standard_currency} for {missing}")
 
     return EstimateResult(
         services=service_results,
@@ -620,6 +713,6 @@ def compile_estimate(
         consumables_total=consumables_total,
         tangibles_total=tangibles_total,
         totals_by_currency=totals_by_currency,
+        currency=setup,
         warnings=tuple(dict.fromkeys(warnings)),
     )
-

@@ -23,6 +23,7 @@ digraph WellCostingPro {
   "backend/app/core/database.py";
   "backend/app/core/migrations.py";
   "backend/app/core/security.py";
+  "backend/app/domain/__init__.py";
   "backend/app/domain/afe_costing.py";
   "backend/app/main.py";
   "backend/app/models/__init__.py";
@@ -219,6 +220,7 @@ digraph WellCostingPro {
   "backend/app/seed.py" -> "backend/app/core/migrations.py";
   "backend/app/seed.py" -> "backend/app/services/__init__.py";
   "backend/app/seed.py" -> "backend/app/services/provisioning.py";
+  "backend/app/services/afe.py" -> "backend/app/domain/__init__.py";
   "backend/app/services/afe.py" -> "backend/app/models/__init__.py";
   "backend/app/services/afe.py" -> "backend/app/models/afe.py";
   "backend/app/services/afe.py" -> "backend/app/models/catalogue.py";

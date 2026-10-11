@@ -9,7 +9,7 @@ import { ImportDialog } from '../ImportDialog'
 import { useAuth } from '../../context/AuthContext'
 import { api, body } from '../../lib/api'
 import type { ImportRow } from '../../lib/export'
-import { amountText, totalsText, type Afe, type AfeReference, type ImportResponse } from '../../lib/afe'
+import { afeTotalText, type Afe, type AfeReference, type ImportResponse } from '../../lib/afe'
 import { AfeFormDialog } from './AfeFormDialog'
 import { ErrorDetails, StatusTag } from './AfeShared'
 
@@ -129,7 +129,7 @@ export function AfeRegisterTab({ reference, onReferenceChanged }: {
     { headerName: 'WELL', field: 'well_name', minWidth: 180, flex: 1.1, valueFormatter: params => params.data ? `${params.data.well_code} · ${params.data.well_name}` : '' },
     { headerName: 'STATUS', field: 'status', minWidth: 125, maxWidth: 140, cellRenderer: ({ data }: { data: Afe }) => data && <Box display="flex" alignItems="center" height="100%"><StatusTag status={data.status}/></Box> },
     { headerName: 'ITEMS', field: 'service_count', minWidth: 120, maxWidth: 150, valueFormatter: params => params.data ? `${params.data.service_count} svc · ${params.data.consumable_count} cons · ${params.data.tangible_count} tang` : '' },
-    { headerName: 'ESTIMATE TOTAL', field: 'total_cost', minWidth: 170, flex: .9, valueFormatter: params => params.data ? (params.data.totals_by_currency.length ? totalsText(params.data.totals_by_currency) : amountText(params.value)) : '' },
+    { headerName: 'ESTIMATE TOTAL', field: 'total_cost', minWidth: 170, flex: .9, valueFormatter: params => params.data ? afeTotalText(params.data) : '' },
     { headerName: 'WARNINGS', field: 'warning_count', minWidth: 115, maxWidth: 130, cellRenderer: ({ value }: { value: number }) => <Box display="flex" alignItems="center" height="100%">{value > 0 ? <Tag tone="warning">{value} to review</Tag> : <Tag>None</Tag>}</Box> },
     { headerName: 'ESTIMATE SAVED', field: 'estimate_saved_at', minWidth: 150, valueFormatter: params => params.value ? new Date(params.value).toLocaleString() : 'Not saved' },
     { headerName: 'UPDATED', field: 'updated_at', minWidth: 135, valueFormatter: params => params.value ? new Date(params.value).toLocaleDateString() : '' },

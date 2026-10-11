@@ -39,6 +39,7 @@ from app.models.afe import (
     AfeServiceCharge,
     AfeServiceLine,
     AfeServiceRate,
+    AfeExchangeRate,
     AfeServiceSectionRate,
     AfeTangibleLine,
 )
@@ -47,6 +48,8 @@ from app.models.master_data import HoleSection, Phase
 from app.models.service_master import Service
 from app.schemas.afe import (
     AfeEstimateOut,
+    CurrencySetupOut,
+    ExchangeRateOut,
     AfeIDs,
     AfeOut,
     AfeOverview,
@@ -887,12 +890,32 @@ class Priced:
     summary: EstimateSummaryOut
 
 
-def _price(scope: engine.WellScope, resolved: Resolved, lookups: Lookups) -> Priced:
+def _currency_out(setup: engine.CurrencySetup) -> CurrencySetupOut:
+    return CurrencySetupOut(
+        standard_currency=setup.standard_currency,
+        currencies=list(setup.currencies),
+        multi_currency=setup.multi_currency,
+        converted=setup.converted,
+        standard_missing=setup.standard_missing,
+        missing_rates=list(setup.missing_rates),
+        exchange_rates=[ExchangeRateOut(currency_code=code, rate=rate) for code, rate in setup.exchange_rates],
+    )
+
+
+def _price(
+    scope: engine.WellScope,
+    resolved: Resolved,
+    lookups: Lookups,
+    standard_currency: str = "",
+    exchange_rates: dict[str, Decimal] | None = None,
+) -> Priced:
     result = engine.compile_estimate(
         scope,
         services=[row.line for row in resolved.services],
         consumables=[row.line for row in resolved.consumables],
         tangibles=[row.line for row in resolved.tangibles],
+        standard_currency=standard_currency,
+        exchange_rates=exchange_rates,
     )
     services = [
         _service_out(row, line, scope, lookups) for row, line in zip(resolved.services, result.services, strict=True)
@@ -910,6 +933,7 @@ def _price(scope: engine.WellScope, resolved: Resolved, lookups: Lookups) -> Pri
         tangibles_total=result.tangibles_total,
         total=result.total,
         totals_by_currency=[CurrencyTotalOut(currency=currency, amount=amount) for currency, amount in result.totals_by_currency],
+        currency=_currency_out(result.currency),
         by_section=[
             SectionSummaryOut(
                 hole_section_id=row.section_id,
@@ -999,6 +1023,8 @@ def _afe_out(afe: Afe, well: Well | None, priced: Priced, *, counts: tuple[int, 
         consumables_total=priced.result.consumables_total,
         tangibles_total=priced.result.tangibles_total,
         total_cost=priced.result.total,
+        standard_currency=priced.result.currency.standard_currency,
+        conversion_pending=not priced.result.currency.converted,
         totals_by_currency=[CurrencyTotalOut(currency=c, amount=a) for c, a in priced.result.totals_by_currency],
         warning_count=len(priced.result.warnings),
         is_deleted=afe.is_deleted,
@@ -1008,9 +1034,13 @@ def _afe_out(afe: Afe, well: Well | None, priced: Priced, *, counts: tuple[int, 
     )
 
 
+def _stored_rates(afe: Afe) -> dict[str, Decimal]:
+    return {row.currency_code: Decimal(row.rate) for row in afe.exchange_rates}
+
+
 def _stored_priced(afe: Afe, well: Well | None, lookups: Lookups) -> Priced:
     scope = _scope_for_well(well)
-    return _price(scope, _stored_resolved(afe, lookups), lookups)
+    return _price(scope, _stored_resolved(afe, lookups), lookups, afe.standard_currency, _stored_rates(afe))
 
 
 def _estimate_view(db: Session, organization_id: str, afe: Afe, *, persisted: bool) -> AfeEstimateOut:
@@ -1089,6 +1119,11 @@ def _check_well_and_rig(db: Session, organization_id: str, rig_id: str, well_id:
         raise HTTPException(
             status_code=422,
             detail="Configure the well's sections and phases in Rig & Well Management before creating an AFE.",
+        )
+    if well.config_status != "configured":
+        raise HTTPException(
+            status_code=422,
+            detail="Mark the well's plan as Configured in Rig & Well Management before creating an AFE for this well.",
         )
     return well
 
@@ -1293,7 +1328,12 @@ def change_status(
     if action == "submit":
         if not afe.estimate_saved_at:
             raise HTTPException(status_code=409, detail="Save the AFE cost estimate before submitting.")
-        priced = _stored_priced(afe, _wells_by_id(db, organization_id, [afe.well_id]).get(afe.well_id), _lookups_for_afes(db, organization_id, [afe]))
+        well = _wells_by_id(db, organization_id, [afe.well_id]).get(afe.well_id)
+        if well is None or well.config_status != "configured":
+            raise HTTPException(status_code=409, detail="The well's plan is not Configured. Configure the well before submitting this AFE.")
+        priced = _stored_priced(afe, well, _lookups_for_afes(db, organization_id, [afe]))
+        if priced.result.total is None:
+            raise HTTPException(status_code=409, detail="The saved estimate mixes currencies without a complete conversion. Save it with a standard currency and rates first.")
         if priced.result.total <= 0:
             raise HTTPException(status_code=409, detail="The saved estimate has no cost. Price the AFE before submitting.")
     previous = afe.status
@@ -1340,7 +1380,8 @@ def preview_estimate(db: Session, organization_id: str, afe_id: str, payload: Es
         tangible_ids=[row.tangible.id for row in resolved.tangibles if row.tangible],
         hole_section_ids=[row.section_id for row in resolved.consumables] + [row.section_id for row in resolved.services if row.section_id],
     )
-    priced = _price(scope, resolved, lookups)
+    rates = {row.currency_code: Decimal(row.rate) for row in payload.exchange_rates}
+    priced = _price(scope, resolved, lookups, payload.standard_currency, rates)
     counts = (len(resolved.services), len(resolved.consumables), len(resolved.tangibles))
     return AfeEstimateOut(
         afe=_afe_out(afe, well, priced, counts=counts),
@@ -1434,6 +1475,20 @@ def _tangible_rows(afe: Afe, resolved: Resolved) -> list[AfeTangibleLine]:
     ]
 
 
+def _exchange_rate_rows(afe: Afe, setup: engine.CurrencySetup) -> list[AfeExchangeRate]:
+    return [
+        AfeExchangeRate(organization_id=afe.organization_id, currency_code=code, rate=rate, sort_order=index)
+        for index, (code, rate) in enumerate(setup.exchange_rates)
+    ]
+
+
+def _conversion_problem(setup: engine.CurrencySetup) -> str:
+    if setup.standard_missing:
+        return "This estimate mixes currencies. Select the standard currency before saving."
+    missing = ", ".join(code or "no currency" for code in setup.missing_rates)
+    return f"Enter the conversion rate to {setup.standard_currency} for {missing} before saving."
+
+
 def save_estimate(
     db: Session, organization_id: str, afe_id: str, payload: EstimateIn, user: User, request: Request | None
 ) -> AfeEstimateOut:
@@ -1443,9 +1498,32 @@ def save_estimate(
             raise HTTPException(status_code=409, detail="Restore this AFE before editing its estimate.")
         _require_draft(afe, "edit its cost estimate")
         well = _wells_by_id(db, organization_id, [afe.well_id]).get(afe.well_id)
+        if well is None or well.config_status != "configured":
+            raise HTTPException(
+                status_code=409,
+                detail="The well's plan is in Draft. Mark the well as Configured in Rig & Well Management before saving this estimate.",
+            )
         scope = _scope_for_well(well)
         resolved = _validate_request(db, organization_id, scope, payload)
 
+        # A mixed-currency estimate is saved only when it can be converted to one standard currency.
+        rates = {row.currency_code: Decimal(row.rate) for row in payload.exchange_rates}
+        setup = engine.compile_estimate(
+            scope,
+            services=[row.line for row in resolved.services],
+            consumables=[row.line for row in resolved.consumables],
+            tangibles=[row.line for row in resolved.tangibles],
+            standard_currency=payload.standard_currency,
+            exchange_rates=rates,
+        ).currency
+        if not setup.converted:
+            raise HTTPException(status_code=422, detail=_conversion_problem(setup))
+
+        afe.standard_currency = setup.standard_currency
+        # Clear the old rates first: inserts run before orphan deletes, and the unique currency key would clash.
+        afe.exchange_rates = []
+        db.flush()
+        afe.exchange_rates = _exchange_rate_rows(afe, setup)
         afe.service_lines = _service_rows(afe, resolved)
         afe.consumable_lines = _consumable_rows(afe, resolved)
         afe.tangible_lines = _tangible_rows(afe, resolved)
@@ -1460,7 +1538,7 @@ def save_estimate(
             summary=(
                 f"Saved estimate for {afe.afe_code}: {len(resolved.services)} service, "
                 f"{len(resolved.consumables)} consumable and {len(resolved.tangibles)} tangible line(s); "
-                f"total {_money_text(priced.result.total)}"
+                f"total {_money_text(priced.result.total) + ' ' + afe.standard_currency if priced.result.total is not None else 'pending currency conversion'}"
             ),
             request=request,
         )
@@ -1608,13 +1686,19 @@ def overview(db: Session, organization_id: str, user: User) -> AfeOverview:
     approved_totals: dict[str, Decimal] = {}
     well_totals: dict[str, dict[str, Decimal]] = {}
     well_labels: dict[str, str] = {}
+    conversion_pending = 0
+    # Each AFE contributes its converted total in its own standard currency. AFEs whose
+    # conversion is incomplete are counted separately and are not added in.
     for afe, out in zip(active, outs, strict=True):
-        for item in out.totals_by_currency:
-            totals[item.currency] = totals.get(item.currency, Decimal("0")) + item.amount
+        if out.total_cost is None:
+            conversion_pending += 1
+        elif out.standard_currency and out.total_cost:
+            code, amount = out.standard_currency, out.total_cost
+            totals[code] = totals.get(code, Decimal("0")) + amount
             if afe.status == "approval":
-                approved_totals[item.currency] = approved_totals.get(item.currency, Decimal("0")) + item.amount
+                approved_totals[code] = approved_totals.get(code, Decimal("0")) + amount
             bucket = well_totals.setdefault(afe.well_id, {})
-            bucket[item.currency] = bucket.get(item.currency, Decimal("0")) + item.amount
+            bucket[code] = bucket.get(code, Decimal("0")) + amount
         well_labels[afe.well_id] = _label(out.well_code, out.well_name)
 
     top_wells: list[AfeOverviewWell] = []
@@ -1656,6 +1740,7 @@ def overview(db: Session, organization_id: str, user: User) -> AfeOverview:
         wells_with_afes=len({afe.well_id for afe in active}),
         totals_by_currency=[CurrencyTotalOut(currency=c, amount=engine.money(a)) for c, a in sorted(totals.items())],
         approved_by_currency=[CurrencyTotalOut(currency=c, amount=engine.money(a)) for c, a in sorted(approved_totals.items())],
+        conversion_pending_afes=conversion_pending,
         statuses=[
             AfeOverviewStatus(status=status, label=AFE_STATUS_LABELS[status], count=status_counts[status])
             for status in AFE_STATUSES

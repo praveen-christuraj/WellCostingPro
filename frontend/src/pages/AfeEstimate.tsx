@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import { AddRounded, ArrowBackRounded, DeleteOutlineRounded, EditOutlined, PrintOutlined, SaveOutlined, TableRowsOutlined, UndoRounded } from '@mui/icons-material'
-import { Alert, Box, Button, CircularProgress, Paper, Table, TableBody, TableCell, TableHead, TableRow, Tooltip, Typography } from '@mui/material'
+import { Alert, Box, Button, CircularProgress, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material'
 import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
@@ -15,9 +15,9 @@ import { TangibleLineDialog } from '../components/afe/TangibleLineDialog'
 import { useAuth } from '../context/AuthContext'
 import { ApiError, api, body } from '../lib/api'
 import {
-  STATUS_ACTIONS, amountText, consumableProblems, daysText, estimateToInput, nextActions, serviceProblems, stableJson, tangibleProblems, toNumber, totalsText,
+  STATUS_ACTIONS, amountText, consumableProblems, daysText, estimateToInput, nextActions, serviceProblems, stableJson, tangibleProblems, toNumber,
   type Afe, type AfeComponent, type AfeEstimate, type AfeReference, type AfeStatusAction, type ConsumableLineInput, type ConsumableLineOut,
-  type EstimateInput, type ServiceLineInput, type ServiceLineOut, type TangibleLineInput, type TangibleLineOut, type WellScope,
+  type EstimateInput, type ExchangeRateInput, type ServiceLineInput, type ServiceLineOut, type TangibleLineInput, type TangibleLineOut, type WellScope,
 } from '../lib/afe'
 
 type LineKind = 'service' | 'consumable' | 'tangible'
@@ -94,7 +94,7 @@ export default function AfeEstimate() {
   const [afe, setAfe] = useState<Afe | null>(null)
   const [saved, setSaved] = useState<AfeEstimate | null>(null)
   const [reference, setReference] = useState<AfeReference | null>(null)
-  const [inputs, setInputs] = useState<EstimateInput>({ services: [], consumables: [], tangibles: [] })
+  const [inputs, setInputs] = useState<EstimateInput>({ services: [], consumables: [], tangibles: [], standard_currency: '', exchange_rates: [] })
   const [preview, setPreview] = useState<AfeEstimate | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [previewError, setPreviewError] = useState<unknown>(null)
@@ -104,7 +104,7 @@ export default function AfeEstimate() {
   const [saveError, setSaveError] = useState<unknown>(null)
   const [notice, setNotice] = useState('')
   const [editor, setEditor] = useState<Editor>(null)
-  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkOpen, setBulkOpen] = useState<null | 'service' | 'consumable'>(null)
   const [breakdown, setBreakdown] = useState<{ title: string; currency: string; components: AfeComponent[]; warnings: string[] } | null>(null)
   const [statusTarget, setStatusTarget] = useState<AfeStatusAction | null>(null)
   const [leaveOpen, setLeaveOpen] = useState(false)
@@ -145,6 +145,8 @@ export default function AfeEstimate() {
     services: inputs.services.filter(line => serviceProblems(line).length === 0),
     consumables: inputs.consumables.filter(line => consumableProblems(line).length === 0),
     tangibles: inputs.tangibles.filter(line => tangibleProblems(line).length === 0),
+    standard_currency: inputs.standard_currency,
+    exchange_rates: inputs.exchange_rates.filter(rate => rate.currency_code && toNumber(rate.rate) > 0),
   }), [inputs])
   const previewSignature = useMemo(() => stableJson(validInputs), [validInputs])
   const savedSignature = useMemo(() => (saved ? stableJson(estimateToInput(saved)) : ''), [saved])
@@ -192,6 +194,21 @@ export default function AfeEstimate() {
 
   const shown: AfeEstimate | null = editable && preview ? preview : saved
   const showingPreview = Boolean(editable && preview && shown === preview)
+
+  // Currency. Only a mixed-currency estimate needs a standard currency and conversion rates.
+  const detectedCurrencies = shown?.summary.currency.currencies ?? []
+  const multiCurrency = detectedCurrencies.length > 1
+  const currencyLabel = (code: string) => code || 'No currency'
+  const standardMissing = multiCurrency && !inputs.standard_currency
+  const currencyNeeds: string[] = !multiCurrency || standardMissing ? []
+    : detectedCurrencies.filter(code => code !== inputs.standard_currency
+      && !(toNumber(inputs.exchange_rates.find(rate => rate.currency_code === code)?.rate) > 0))
+  const currencyBlocked = standardMissing || currencyNeeds.length > 0
+  const currencyBlockedText = !inputs.standard_currency
+    ? 'Select the standard currency before saving.'
+    : `Enter a conversion rate to ${inputs.standard_currency} for ${currencyNeeds.map(currencyLabel).join(', ')} before saving.`
+  const standardCode = shown?.summary.currency.standard_currency ?? ''
+  const hasLines = (shown?.summary.totals_by_currency.length ?? 0) > 0
 
   const serviceRows = useMemo<ServiceRow[]>(() => {
     if (!reference || !saved) return []
@@ -310,13 +327,25 @@ export default function AfeEstimate() {
       : [...current.tangibles, line],
   }))
 
+  const setStandardCurrency = (code: string) => setInputs(current => ({ ...current, standard_currency: code }))
+  const setExchangeRate = (code: string, value: string) => {
+    const rate = value.replace(/[^0-9.]/g, '')
+    setInputs(current => {
+      const exists = current.exchange_rates.some(item => item.currency_code === code)
+      const exchange_rates: ExchangeRateInput[] = exists
+        ? current.exchange_rates.map(item => (item.currency_code === code ? { currency_code: code, rate } : item))
+        : [...current.exchange_rates, { currency_code: code, rate }]
+      return { ...current, exchange_rates }
+    })
+  }
+
   const applyBulk = (result: BulkResult) => {
     setInputs(current => ({
       ...current,
       services: [...current.services, ...result.services],
       consumables: [...current.consumables, ...result.consumables],
     }))
-    setBulkOpen(false)
+    setBulkOpen(null)
     setNotice(`${result.consumables.length + result.services.length} line${result.consumables.length + result.services.length === 1 ? '' : 's'} added from the bulk estimate. Review them, then save.`)
   }
 
@@ -324,6 +353,10 @@ export default function AfeEstimate() {
     if (!afe) return
     if (incompleteCount) {
       setSaveError(new ApiError(`Fix ${incompleteCount} incomplete line${incompleteCount === 1 ? '' : 's'} before saving.`, 422, []))
+      return
+    }
+    if (currencyBlocked) {
+      setSaveError(new ApiError(currencyBlockedText, 422, []))
       return
     }
     setSaving(true)
@@ -334,7 +367,7 @@ export default function AfeEstimate() {
       setAfe(result.afe)
       setInputs(estimateToInput(result))
       setPreview(null)
-      setNotice(`Estimate saved for ${result.afe.afe_code}. Total ${totalsText(result.summary.totals_by_currency)}.`)
+      setNotice(`Estimate saved for ${result.afe.afe_code}. Total ${result.summary.total === null ? 'pending conversion' : amountText(result.summary.total, result.summary.currency.standard_currency)}.`)
     } catch (caught) {
       setSaveError(caught)
     } finally {
@@ -463,8 +496,8 @@ export default function AfeEstimate() {
         {canPrint && <Tooltip title={dirty ? 'Save the estimate before printing.' : estimateReady ? 'Print the complete AFE' : 'Save an estimate before printing.'}><span>
           <Button variant="outlined" startIcon={<PrintOutlined/>} onClick={() => void print()} disabled={!estimateReady || dirty || printing}>{printing ? 'Preparing...' : 'Print AFE'}</Button>
         </span></Tooltip>}
-        {editable && <Tooltip title={incompleteCount ? `Fix ${incompleteCount} incomplete line${incompleteCount === 1 ? '' : 's'} first.` : !dirty ? 'No changes to save.' : 'Save the estimate'}><span>
-          <Button variant="contained" startIcon={<SaveOutlined/>} onClick={() => void save()} disabled={saving || !dirty || incompleteCount > 0}>{saving ? 'Saving...' : 'Save estimate'}</Button>
+        {editable && <Tooltip title={incompleteCount ? `Fix ${incompleteCount} incomplete line${incompleteCount === 1 ? '' : 's'} first.` : currencyBlocked ? currencyBlockedText : !dirty ? 'No changes to save.' : 'Save the estimate'}><span>
+          <Button variant="contained" startIcon={<SaveOutlined/>} onClick={() => void save()} disabled={saving || !dirty || incompleteCount > 0 || currencyBlocked}>{saving ? 'Saving...' : 'Save estimate'}</Button>
         </span></Tooltip>}
         {editable && dirty && <Button color="inherit" startIcon={<UndoRounded/>} onClick={() => setDiscardOpen(true)}>Discard changes</Button>}
         {statusActions.map(action => {
@@ -488,6 +521,9 @@ export default function AfeEstimate() {
     </Box>
 
     {notice && <Alert severity="success" onClose={() => setNotice('')} sx={{ mb: 1.5 }}>{notice}</Alert>}
+    {saved.well.config_status !== 'configured' && <Alert severity="warning" sx={{ mb: 1.5 }}>
+      The well plan is in Draft. Mark the well as Configured in Rig & Well Management before saving or submitting this estimate.
+    </Alert>}
     {!editable && afe.status === 'draft' && !can('afe:estimate') && <Alert severity="info" sx={{ mb: 1.5 }}>You can view this estimate. Changing it requires the AFE estimate permission.</Alert>}
     {editable && incompleteCount > 0 && <Alert severity="warning" sx={{ mb: 1.5 }}>
       {incompleteCount} line{incompleteCount === 1 ? ' is' : 's are'} incomplete. Incomplete lines are left out of the preview and block saving. Use Edit on the flagged line to complete it.
@@ -538,26 +574,83 @@ export default function AfeEstimate() {
         </Box>}
     </Paper>
 
-    {/* Totals strip */}
+    {/* Daily cost tracking is not built yet. The note records the agreed rule; nothing is deducted today. */}
+    <Alert severity="info" sx={{ mb: 1.5 }}>
+      Daily cost tracking is not available yet. When it is, daily expenses entered either as one bulk amount per service or per line item
+      will be deducted from this estimate. This is for information only.
+    </Alert>
+
+    {/* Totals strip. Figures are in the standard currency; a mixed estimate shows them only after every rate is entered. */}
     <Box display="grid" gap={1.5} mb={2} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' } }}>
       {[
-        { label: 'Services', value: shown?.summary.services_total ?? '0' },
-        { label: 'Consumables', value: shown?.summary.consumables_total ?? '0' },
-        { label: 'Tangibles', value: shown?.summary.tangibles_total ?? '0' },
+        { label: 'Services', value: shown?.summary.services_total ?? null },
+        { label: 'Consumables', value: shown?.summary.consumables_total ?? null },
+        { label: 'Tangibles', value: shown?.summary.tangibles_total ?? null },
       ].map(item => <Paper key={item.label} variant="outlined" sx={{ p: 1.8, borderRadius: 2 }}>
         <Typography fontSize={11} fontWeight={800} color="text.secondary" textTransform="uppercase" letterSpacing={.7}>{item.label}</Typography>
-        <Typography fontSize={18} fontWeight={800} mt={.4}>{shown?.summary.totals_by_currency.length ? amountText(item.value) : '—'}</Typography>
+        <Typography fontSize={18} fontWeight={800} mt={.4}>{hasLines && !currencyBlocked ? amountText(item.value, standardCode) : '—'}</Typography>
       </Paper>)}
       <Paper variant="outlined" sx={{ p: 1.8, borderRadius: 2, borderColor: 'primary.main', borderWidth: 1.5 }}>
         <Typography fontSize={11} fontWeight={800} color="primary.main" textTransform="uppercase" letterSpacing={.7}>Total estimate</Typography>
-        <Typography fontSize={18} fontWeight={800} mt={.4}>{totalsText(shown?.summary.totals_by_currency ?? [])}</Typography>
-        <Typography fontSize={11.5} color="text.secondary">{showingPreview ? 'Live preview' : 'Saved estimate'}</Typography>
+        <Typography fontSize={18} fontWeight={800} mt={.4}>
+          {currencyBlocked ? 'Pending conversion' : hasLines ? amountText(shown?.summary.total ?? null, standardCode) : '—'}
+        </Typography>
+        <Typography fontSize={11.5} color="text.secondary">
+          {showingPreview ? 'Live preview' : 'Saved estimate'}{multiCurrency && standardCode ? ` · in ${standardCode}` : ''}
+        </Typography>
       </Paper>
     </Box>
 
+    {/* Currency panel. Shown only when the estimate mixes currencies. */}
+    {multiCurrency && <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, mb: 2, borderRadius: 2 }}>
+      <Typography fontWeight={800} fontSize={15}>Currency and conversion</Typography>
+      <Typography color="text.secondary" fontSize={12} mt={.3} mb={1.5}>
+        This estimate mixes {detectedCurrencies.length} currencies. Choose the standard currency, then enter how many units of it one unit of each other currency is worth at today&apos;s rate. Totals are converted only when every rate is entered.
+      </Typography>
+      <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '280px' }, mb: 1.5 }}>
+        <TextField
+          select size="small" label="Standard currency" value={inputs.standard_currency} disabled={!editable}
+          onChange={event => setStandardCurrency(event.target.value)}
+          error={editable && standardMissing}
+          helperText={editable ? 'All totals are shown in this currency.' : 'Saved standard currency.'}
+        >
+          {reference.currencies.map(item => <MenuItem key={item.code} value={item.code}>{item.code} · {item.name}</MenuItem>)}
+        </TextField>
+      </Box>
+      <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1.5, overflow: 'hidden' }}>
+        <Box display="grid" gap={1} px={1.4} py={.8} sx={{ gridTemplateColumns: '1fr 1.2fr 1.2fr 1.2fr', bgcolor: 'action.hover' }}>
+          <Typography fontSize={11} fontWeight={800} color="text.secondary" textTransform="uppercase">Currency</Typography>
+          <Typography fontSize={11} fontWeight={800} color="text.secondary" textTransform="uppercase">Entered total</Typography>
+          <Typography fontSize={11} fontWeight={800} color="text.secondary" textTransform="uppercase">Rate to {inputs.standard_currency || 'standard'}</Typography>
+          <Typography fontSize={11} fontWeight={800} color="text.secondary" textTransform="uppercase">In {inputs.standard_currency || 'standard'}</Typography>
+        </Box>
+        {detectedCurrencies.map(code => {
+          const isStandard = code === inputs.standard_currency
+          const entered = shown?.summary.totals_by_currency.find(item => item.currency === code)?.amount ?? null
+          const rate = isStandard ? '1' : inputs.exchange_rates.find(item => item.currency_code === code)?.rate ?? ''
+          const converted = inputs.standard_currency && (isStandard || toNumber(rate) > 0) ? toNumber(entered) * toNumber(rate) : null
+          const needed = currencyNeeds.includes(code)
+          return <Box key={code || 'none'} display="grid" alignItems="center" gap={1} px={1.4} py={.8} sx={{ gridTemplateColumns: '1fr 1.2fr 1.2fr 1.2fr', borderTop: 1, borderColor: 'divider' }}>
+            <Typography fontSize={13} fontWeight={700}>{currencyLabel(code)}{isStandard ? ' · standard' : ''}</Typography>
+            <Typography fontSize={13}>{amountText(entered, code)}</Typography>
+            {isStandard
+              ? <Typography fontSize={13} color="text.secondary">1 (standard)</Typography>
+              : <TextField
+                size="small" value={rate} disabled={!editable} error={editable && needed}
+                onChange={event => setExchangeRate(code, event.target.value)}
+                inputProps={{ inputMode: 'decimal', 'aria-label': `Conversion rate for ${currencyLabel(code)} to ${inputs.standard_currency || 'standard currency'}` }}
+                placeholder="e.g. 1.0850"
+              />}
+            <Typography fontSize={13} fontWeight={800}>{converted === null ? '—' : amountText(converted, inputs.standard_currency)}</Typography>
+          </Box>
+        })}
+      </Box>
+      {editable && currencyBlocked && <Typography fontSize={12.5} color="error" mt={1}>{currencyBlockedText}</Typography>}
+    </Paper>}
+
     {/* By-section rollup. Daily-rate lines are split per section, never shown well-wide. */}
     <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, mb: 2, borderRadius: 2 }}>
-      <Typography fontWeight={800} fontSize={15}>By hole section and phase</Typography>
+      <Typography fontWeight={800} fontSize={15}>By hole section and phase{standardCode ? ` · in ${standardCode}` : ''}</Typography>
       <Typography color="text.secondary" fontSize={12} mt={.3} mb={1.2}>Well-wide day rates are split by each section’s planned days. Lines not tied to a section appear under Well-level.</Typography>
       {rollup.length === 0
         ? <Typography fontSize={13} color="text.secondary">Add lines to see the section split.</Typography>
@@ -593,10 +686,12 @@ export default function AfeEstimate() {
       count={serviceRows.length}
       actions={<>
         {editable && selected.service.length > 0 && <Button color="error" variant="outlined" size="small" onClick={() => setBulkDelete('service')}>Delete {selected.service.length} selected</Button>}
+        {editable && <Button variant="outlined" size="small" startIcon={<TableRowsOutlined/>} onClick={() => setBulkOpen('service')}>Bulk by section</Button>}
         {editable && <Button variant="contained" size="small" startIcon={<AddRounded/>} onClick={() => setEditor({ kind: 'service', key: null })}>Add service</Button>}
       </>}
     >
       <DataTable
+        rowKey="key"
         rows={serviceRows}
         columns={serviceColumns}
         searchPlaceholder="Search services by code, name, basis or section..."
@@ -616,11 +711,12 @@ export default function AfeEstimate() {
       count={consumableRows.length}
       actions={<>
         {editable && selected.consumable.length > 0 && <Button color="error" variant="outlined" size="small" onClick={() => setBulkDelete('consumable')}>Delete {selected.consumable.length} selected</Button>}
-        {editable && <Button variant="outlined" size="small" startIcon={<TableRowsOutlined/>} onClick={() => setBulkOpen(true)}>Bulk by section</Button>}
+        {editable && <Button variant="outlined" size="small" startIcon={<TableRowsOutlined/>} onClick={() => setBulkOpen('consumable')}>Bulk by section</Button>}
         {editable && <Button variant="contained" size="small" startIcon={<AddRounded/>} onClick={() => setEditor({ kind: 'consumable', key: null })}>Add consumable</Button>}
       </>}
     >
       <DataTable
+        rowKey="key"
         rows={consumableRows}
         columns={consumableColumns}
         searchPlaceholder="Search consumables by category, drill bit, section or status..."
@@ -644,6 +740,7 @@ export default function AfeEstimate() {
       </>}
     >
       <DataTable
+        rowKey="key"
         rows={tangibleRows}
         columns={tangibleColumns}
         searchPlaceholder="Search tangibles by code, name, manufacturer or description..."
@@ -681,7 +778,7 @@ export default function AfeEstimate() {
       onClose={() => setEditor(null)}
       onSave={line => { upsertTangible(line); setEditor(null) }}
     />}
-    <BulkEstimateDialog open={bulkOpen} scope={saved.well} reference={reference} onClose={() => setBulkOpen(false)} onApply={applyBulk}/>
+    <BulkEstimateDialog open={bulkOpen !== null} initialMode={bulkOpen ?? 'consumable'} scope={saved.well} reference={reference} onClose={() => setBulkOpen(null)} onApply={applyBulk}/>
 
     <BreakdownDialog
       open={Boolean(breakdown)}

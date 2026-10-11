@@ -112,7 +112,8 @@ export default function AfeOverview() {
       <Box display="grid" gap={2} sx={{ gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1.1fr) minmax(0, 1fr)' } }}>
         <Paper variant="outlined" sx={{ p: 2.2, borderRadius: 2 }}>
           <Typography fontWeight={800} fontSize={15}>Approval progress</Typography>
-          <Typography color="text.secondary" fontSize={12} mt={.35} mb={1.5}>Estimated value across all active AFEs: {totalsText(overview.totals_by_currency)}</Typography>
+          <Typography color="text.secondary" fontSize={12} mt={.35} mb={overview.conversion_pending_afes ? .6 : 1.5}>Estimated value across all active AFEs, each in its standard currency: {totalsText(overview.totals_by_currency)}</Typography>
+        {overview.conversion_pending_afes > 0 && <Typography color="warning.main" fontSize={12} mb={1.5}>{overview.conversion_pending_afes} AFE{overview.conversion_pending_afes === 1 ? ' is' : 's are'} left out until its currency conversion rates are entered.</Typography>}
           <Box height={300}><ReactECharts option={statusOption} notMerge lazyUpdate style={{ height: '100%', width: '100%' }}/></Box>
         </Paper>
         <Paper variant="outlined" sx={{ p: 2.2, borderRadius: 2 }}>

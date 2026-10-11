@@ -21,9 +21,11 @@ function fieldDefs<T extends object>(columns: ColDef<T>[]): FieldDef[] {
     })
 }
 
-export function DataTable<T extends object>({ rows, columns, searchPlaceholder = 'Search records...', exportName = 'export', onImport, canExport = true, selectable = false, onSelectionChange, onExport }: {
+export function DataTable<T extends object>({ rows, columns, rowKey = 'id', searchPlaceholder = 'Search records...', exportName = 'export', onImport, canExport = true, selectable = false, onSelectionChange, onExport }: {
   rows: T[]
   columns: ColDef<T>[]
+  // Field that uniquely identifies a row. AG Grid collapses rows that share an id, so this must be unique.
+  rowKey?: string
   searchPlaceholder?: string
   exportName?: string
   onImport?: () => void
@@ -171,7 +173,7 @@ export function DataTable<T extends object>({ rows, columns, searchPlaceholder =
         onPaginationChanged={e => setPageSize(e.api.paginationGetPageSize())}
         rowSelection={selectable ? { mode: 'multiRow', checkboxes: true, headerCheckbox: true, selectAll: 'filtered' } : undefined}
         onSelectionChanged={event => onSelectionChange?.(event.api.getSelectedRows())}
-        getRowId={p => (p.data as { id: string }).id}
+        getRowId={p => String((p.data as Record<string, unknown>)[rowKey])}
         overlayNoRowsTemplate="No records found"
         suppressCellFocus
       />
