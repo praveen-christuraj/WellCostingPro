@@ -144,11 +144,15 @@ def _database_http_error(error: SQLAlchemyError, *, operation: str) -> HTTPExcep
             detail="A value on this daily sheet is outside the range the cost ledger accepts. "
                    "Reduce the quantity or rate and save again.",
         )
-    log.exception("Daily cost %s failed with a database error", operation)
+    reference = uuid4().hex[:12]
+    # The traceback is the only place the real driver error survives; the reference
+    # ties this log line to the message the user sees, so an administrator can find
+    # the failing statement without asking the user to reproduce anything.
+    log.exception("Daily cost %s failed with a database error [%s]", operation, reference)
     return HTTPException(
         status_code=503,
         detail="The daily cost ledger could not complete this change because the database rejected it. "
-               "Retry; if it continues, contact the administrator.",
+               f"Retry; if it continues, contact the administrator quoting reference {reference}.",
     )
 
 
@@ -187,6 +191,25 @@ def _audit(
     )
 
 
+def _lock_row_id(db: Session, model: type[Any], *criteria: Any) -> str | None:
+    """Row-lock one workspace row with a statement PostgreSQL will accept.
+
+    ``SELECT ... FOR UPDATE`` is rejected by PostgreSQL when the statement joins
+    the nullable side of an outer join ("FOR UPDATE cannot be applied to the
+    nullable side of an outer join").  The Daily Cost models declare several
+    ``lazy="joined"`` many-to-one references, so locking an entity-shaped SELECT
+    -- or any SELECT that eager-loads one -- raises a driver error on PostgreSQL
+    while SQLite silently ignores the locking clause, which is why the SQLite
+    test suite stayed green.  Selecting only the primary key keeps the locking
+    statement single-table by construction, no matter which loader strategies the
+    models declare now or later.  The row is then read normally inside the same
+    transaction, while the lock is held.
+
+    Returns the locked row id, or ``None`` when no row matched.
+    """
+    return db.scalar(select(model.id).where(*criteria).with_for_update())  # type: ignore[attr-defined]
+
+
 def _get_entry(
     db: Session,
     entry_id: str,
@@ -195,6 +218,16 @@ def _get_entry(
     deleted: bool | None = False,
     lock: bool = False,
 ) -> DailyCostEntry:
+    if lock:
+        # Lock first, load second: the lock must not join (see _lock_row_id) while
+        # the sheet and its baseline still need their usual eager loading.
+        criteria: list[Any] = [
+            DailyCostEntry.id == entry_id, DailyCostEntry.organization_id == organization_id,
+        ]
+        if deleted is not None:
+            criteria.append(DailyCostEntry.is_deleted.is_(deleted))
+        if _lock_row_id(db, DailyCostEntry, *criteria) is None:
+            raise HTTPException(status_code=404, detail="Daily cost entry not found in this workspace")
     statement = (
         select(DailyCostEntry)
         .options(
@@ -211,8 +244,6 @@ def _get_entry(
     )
     if deleted is not None:
         statement = statement.where(DailyCostEntry.is_deleted.is_(deleted))
-    if lock:
-        statement = statement.with_for_update()
     entry = db.scalars(statement.execution_options(populate_existing=True)).unique().first()
     if entry is None:
         raise HTTPException(status_code=404, detail="Daily cost entry not found in this workspace")
@@ -334,15 +365,49 @@ def _capture_catalogue_rates(db: Session, organization_id: str, well: Well, base
     return snapshots
 
 
+def _rate_baseline_by_id(
+    db: Session, organization_id: str, rate_baseline_id: str,
+) -> DailyCostWellRateBaseline:
+    """The well's immutable catalogue-rate snapshot, with its captured rates."""
+    baseline = db.scalars(
+        select(DailyCostWellRateBaseline)
+        .options(selectinload(DailyCostWellRateBaseline.catalogue_rates))
+        .where(DailyCostWellRateBaseline.id == rate_baseline_id,
+               DailyCostWellRateBaseline.organization_id == organization_id)
+        .execution_options(populate_existing=True)
+    ).unique().first()
+    if baseline is None:
+        raise HTTPException(status_code=404, detail="Daily cost rate baseline not found in this workspace")
+    return baseline
+
+
+def _baseline_for(db: Session, organization_id: str, baseline_id: str) -> DailyCostBaseline:
+    """The AFE's locked baseline snapshot, with every child the day sheet prices from."""
+    baseline = db.scalars(
+        select(DailyCostBaseline)
+        .options(
+            selectinload(DailyCostBaseline.budget_lines), selectinload(DailyCostBaseline.service_rates),
+            selectinload(DailyCostBaseline.well_sections).selectinload(DailyCostBaselineSection.phases),
+            selectinload(DailyCostBaseline.exchange_rates),
+            selectinload(DailyCostBaseline.rate_baseline).selectinload(DailyCostWellRateBaseline.catalogue_rates),
+        )
+        .where(DailyCostBaseline.id == baseline_id, DailyCostBaseline.organization_id == organization_id)
+        .execution_options(populate_existing=True)
+    ).unique().first()
+    if baseline is None:
+        raise HTTPException(status_code=404, detail="Daily cost baseline not found in this workspace")
+    return baseline
+
+
 def _ensure_rate_baseline(db: Session, organization_id: str, well: Well, user: User) -> DailyCostWellRateBaseline:
     with _WRITE_LOCK:
-        existing = db.scalar(
-            select(DailyCostWellRateBaseline).options(selectinload(DailyCostWellRateBaseline.catalogue_rates))
-            .where(DailyCostWellRateBaseline.organization_id == organization_id, DailyCostWellRateBaseline.well_id == well.id)
-            .with_for_update()
+        locked_id = _lock_row_id(
+            db, DailyCostWellRateBaseline,
+            DailyCostWellRateBaseline.organization_id == organization_id,
+            DailyCostWellRateBaseline.well_id == well.id,
         )
-        if existing is not None:
-            return existing
+        if locked_id is not None:
+            return _rate_baseline_by_id(db, organization_id, locked_id)
         baseline = DailyCostWellRateBaseline(
             id=uid(), organization_id=organization_id, well_id=well.id, locked_at=_now(), locked_by=_actor_name(user)
         )
@@ -357,16 +422,13 @@ def _ensure_rate_baseline(db: Session, organization_id: str, well: Well, user: U
             # found after the transaction was rolled back.
             if error.status_code != 409:
                 raise
-            existing = db.scalar(
-                select(DailyCostWellRateBaseline).options(selectinload(DailyCostWellRateBaseline.catalogue_rates))
-                .where(
-                    DailyCostWellRateBaseline.organization_id == organization_id,
-                    DailyCostWellRateBaseline.well_id == well.id,
-                )
-            )
-            if existing is None:
+            existing_id = db.scalar(select(DailyCostWellRateBaseline.id).where(
+                DailyCostWellRateBaseline.organization_id == organization_id,
+                DailyCostWellRateBaseline.well_id == well.id,
+            ))
+            if existing_id is None:
                 raise
-            return existing
+            return _rate_baseline_by_id(db, organization_id, existing_id)
         return baseline
 
 
@@ -392,15 +454,15 @@ def _ensure_afe_baseline(
     rate_baseline: DailyCostWellRateBaseline, user: User,
 ) -> DailyCostBaseline:
     with _WRITE_LOCK:
-        existing = db.scalar(
-            select(DailyCostBaseline).options(
-                selectinload(DailyCostBaseline.budget_lines), selectinload(DailyCostBaseline.service_rates),
-                selectinload(DailyCostBaseline.well_sections).selectinload(DailyCostBaselineSection.phases),
-                selectinload(DailyCostBaseline.exchange_rates),
-            ).where(DailyCostBaseline.organization_id == organization_id, DailyCostBaseline.afe_id == afe.id).with_for_update()
+        # Lock the AFE's baseline row (if it exists) without joining: the baseline
+        # model loads its rate baseline with ``lazy="joined"``, and PostgreSQL
+        # refuses ``FOR UPDATE`` over the nullable side of an outer join.
+        locked_id = _lock_row_id(
+            db, DailyCostBaseline,
+            DailyCostBaseline.organization_id == organization_id, DailyCostBaseline.afe_id == afe.id,
         )
-        if existing is not None:
-            return existing
+        if locked_id is not None:
+            return _baseline_for(db, organization_id, locked_id)
         estimate = _estimate_for_daily_cost(db, organization_id, afe)
         if estimate.summary.total is None or not estimate.summary.currency.converted:
             raise HTTPException(status_code=422, detail="AFE estimate must have a complete standard-currency total")
@@ -540,19 +602,13 @@ def _ensure_afe_baseline(
             # won the race instead of presenting a transient server failure.
             if error.status_code != 409:
                 raise
-            existing = db.scalar(
-                select(DailyCostBaseline).options(
-                    selectinload(DailyCostBaseline.budget_lines), selectinload(DailyCostBaseline.service_rates),
-                    selectinload(DailyCostBaseline.well_sections).selectinload(DailyCostBaselineSection.phases),
-                    selectinload(DailyCostBaseline.exchange_rates),
-                ).where(
-                    DailyCostBaseline.organization_id == organization_id,
-                    DailyCostBaseline.afe_id == afe.id,
-                )
-            )
-            if existing is None:
+            existing_id = db.scalar(select(DailyCostBaseline.id).where(
+                DailyCostBaseline.organization_id == organization_id,
+                DailyCostBaseline.afe_id == afe.id,
+            ))
+            if existing_id is None:
                 raise
-            return existing
+            return _baseline_for(db, organization_id, existing_id)
         return baseline
 
 
@@ -2596,7 +2652,14 @@ def well_cost_summary(
             meta.setdefault(key, budget_line)
     unplanned_names: dict[tuple[str, str], str] = {}
     for row in db.execute(
-        select(lines.c.cost_group, lines.c.budget_key, lines.c.activity_name, lines.c.party_name)
+        select(
+            lines.c.cost_group, lines.c.budget_key,
+            # PostgreSQL rejects ungrouped projections (SQLite silently picks an
+            # arbitrary row), so the representative activity and party labels are
+            # aggregated. min() keeps the same one-label-per-budget-key shape and
+            # makes the chosen label deterministic on every dialect.
+            func.min(lines.c.activity_name), func.min(lines.c.party_name),
+        )
         .select_from(lines)
         .where(lines.c.budget_key.like("unplanned:%"))
         .group_by(lines.c.cost_group, lines.c.budget_key)

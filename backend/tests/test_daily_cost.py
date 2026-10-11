@@ -2,20 +2,28 @@ import os
 import tempfile
 
 _db_path = tempfile.mktemp(suffix=".sqlite3")
-os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
+# Set TEST_DATABASE_URL (a PostgreSQL URL, as CI does) to run this suite against
+# a real server instead of the throwaway SQLite file.
+os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL") or f"sqlite:///{_db_path}"
 os.environ["SECRET_KEY"] = "test-only-secret-do-not-deploy-12345"
 
+from contextlib import contextmanager
 from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import event
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
 from app.core.database import Base, SessionLocal, engine
 from app.core.security import hash_password
 from app.main import app
-from app.models import AuditLog, Organization, Permission, Role, User
+from app.models import (
+    AuditLog, DailyCostBaseline, DailyCostEntry, DailyCostWellRateBaseline, Organization,
+    Permission, Role, User,
+)
 from app.services import daily_cost as daily_cost_service
 
 
@@ -510,3 +518,88 @@ def test_daily_cost_flush_database_errors_return_an_actionable_conflict():
         daily_cost_service._flush(session, operation="test baseline")
     assert raised.value.status_code == 409
     assert session.rolled_back is True
+
+
+# ---------------------------------------------------------------------------
+# Production-parity guard: PostgreSQL rejects FOR UPDATE over an outer join.
+#
+# Every Daily Cost write locks a row. The models load several many-to-one
+# references with ``lazy="joined"``, so an entity-shaped (or eager-loading)
+# locked SELECT emits LEFT OUTER JOIN ... FOR UPDATE, which PostgreSQL refuses
+# with "FOR UPDATE cannot be applied to the nullable side of an outer join"
+# (SQLSTATE 0A000). SQLite ignores the clause, so the suite stayed green while
+# production answered 503 on every create/save/submit/delete call. These tests
+# re-compile each executed statement for the PostgreSQL dialect, which is what
+# makes the difference visible without a PostgreSQL server in CI. Set
+# TEST_DATABASE_URL to a PostgreSQL URL to run the whole suite on the real thing.
+# --------------------------------------------------------------------------
+
+
+@contextmanager
+def _postgres_row_locks():
+    """Collect the row-locking statements the API issues inside the block."""
+    seen: list[str] = []
+
+    def capture(conn, clauseelement, multiparams, params, execution_options):
+        try:
+            sql = str(clauseelement.compile(dialect=postgresql.dialect()))
+        except Exception:  # non-SQL elements and raw text are never row locks
+            return
+        if "FOR UPDATE" in sql.upper():
+            seen.append(sql)
+
+    event.listen(engine, "before_execute", capture)
+    try:
+        yield seen
+    finally:
+        event.remove(engine, "before_execute", capture)
+
+
+def test_row_lock_helper_stays_single_table_for_every_daily_cost_model():
+    with TestClient(app):
+        with _postgres_row_locks() as locked:
+            with SessionLocal() as db:
+                assert daily_cost_service._lock_row_id(db, DailyCostEntry, DailyCostEntry.id == "missing") is None
+                assert daily_cost_service._lock_row_id(db, DailyCostBaseline, DailyCostBaseline.id == "missing") is None
+                assert daily_cost_service._lock_row_id(
+                    db, DailyCostWellRateBaseline, DailyCostWellRateBaseline.id == "missing"
+                ) is None
+    assert len(locked) == 3, "each lock must still reach the database with FOR UPDATE"
+    offenders = [sql for sql in locked if " JOIN " in sql.upper()]
+    assert offenders == [], "row locks must never join; PostgreSQL rejects FOR UPDATE over an outer join"
+
+
+def test_every_daily_cost_write_locks_without_a_join():
+    """The whole write lifecycle, checked against the PostgreSQL dialect."""
+    with TestClient(app) as client:
+        headers = login(client)
+        with _postgres_row_locks() as locked:
+            setup = _setup_daily_sheet(client, headers)  # POST /entries locks both baselines
+            entry_id = setup["entry"]["id"]
+            rate = setup["baseline"]["service_rates"][0]
+            payload = {
+                "remarks": "Regression flow",
+                "services": [{
+                    "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
+                    "phase_id": setup["phase"]["id"], "classification": "Planned", "vendor_id": setup["vendor"]["id"],
+                    "quantity": "12", "quantity_unit": "hours", "currency": "USD", "override_rate": None,
+                    "override_reason": "", "remarks": "Drilling", "service_id": setup["service"]["id"],
+                    "baseline_service_rate_id": rate["id"], "charging_basis": "Day Rate",
+                    "charge_category": "Operation",
+                }],
+                "consumables": [], "tangibles": [],
+            }
+            assert client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json=payload).status_code == 200
+            assert client.post(f"/api/v1/daily-cost/entries/{entry_id}/submit", headers=headers,
+                               json={"remarks": "Reviewed"}).status_code == 200
+            assert client.post(f"/api/v1/daily-cost/entries/{entry_id}/reopen", headers=headers,
+                               json={"remarks": "Correction"}).status_code == 200
+            assert client.delete(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers).status_code == 200
+            assert client.post(f"/api/v1/daily-cost/entries/{entry_id}/restore", headers=headers).status_code == 200
+
+        assert locked, "the daily cost write paths must take row locks"
+        offenders = [sql for sql in locked if " JOIN " in sql.upper()]
+        assert offenders == [], (
+            "PostgreSQL rejects FOR UPDATE over the nullable side of an outer join "
+            "(HTTP 503 on every write). Keep row locks single-table:\n" + "\n".join(offenders)
+        )
