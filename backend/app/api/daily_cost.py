@@ -69,6 +69,11 @@ def baseline(entry_id: str, db: Db, user: Current) -> DailyCostBaselineOut:
     return service.context_for_entry(db, user.organization_id, entry_id)
 
 
+@router.get("/entries/{entry_id}/previous", response_model=DailyCostDayOut, dependencies=[Depends(require("daily-cost:read"))])
+def previous_entry(entry_id: str, db: Db, user: Current) -> DailyCostDayOut:
+    return service.previous_day(db, user.organization_id, entry_id)
+
+
 @router.get("/entries/{entry_id}", response_model=DailyCostDayOut, dependencies=[Depends(require("daily-cost:read"))])
 def get_entry(entry_id: str, db: Db, user: Current) -> DailyCostDayOut:
     return service.get_day(db, user.organization_id, entry_id)

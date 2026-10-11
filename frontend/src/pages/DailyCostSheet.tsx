@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useParams } from 'react-router-dom'
 import {
   AddRounded, ArrowBackRounded, CloudUploadOutlined, DeleteOutlineRounded, DownloadOutlined,
-  EditOutlined, LockOutlined, RefreshRounded, SaveOutlined, SendRounded, UndoRounded,
+  EditOutlined, LibraryAddOutlined, LockOutlined, RefreshRounded, SaveOutlined, SendRounded, UndoRounded,
 } from '@mui/icons-material'
 import {
   Alert, Box, Button, CircularProgress, Paper, Table, TableBody, TableCell, TableHead,
@@ -75,6 +75,9 @@ export default function DailyCostSheet() {
   const [importFileName, setImportFileName] = useState('')
   const [importErrors, setImportErrors] = useState<string[]>([])
   const [importError, setImportError] = useState('')
+  const [copyBusy, setCopyBusy] = useState(false)
+  const [copyError, setCopyError] = useState('')
+  const [copyConfirm, setCopyConfirm] = useState<{ previous: DailyCostDay } | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -273,6 +276,43 @@ export default function DailyCostSheet() {
     await api('/daily-cost/export-audit', { method: 'POST', body: body({
       module: 'day-sheet', format, record_count: recordCount, include_deleted: false,
     }) })
+  }
+
+  // Carry the previous day's lines into this draft. Line ids are dropped so the
+  // backend creates fresh rows on this sheet; everything else (rates chosen from
+  // the shared locked baseline, overrides with their reasons, activity scope and
+  // classifications) is reused as-is and revalidated on save.
+  const copyPreviousDay = async (previous: DailyCostDay) => {
+    const saved = saveFromDay(previous)
+    const strip = <T extends { id?: string | null }>(line: T): T => ({ ...line, id: null })
+    setPayload(current => ({
+      remarks: current.remarks,
+      services: saved.services.map(strip),
+      consumables: saved.consumables.map(strip),
+      tangibles: saved.tangibles.map(strip),
+    }))
+    setCopyConfirm(null)
+    setPreview(null)
+    setNotice('Previous day lines copied into this draft. Adjust quantities, then save to price them against the locked baseline.')
+  }
+
+  const openCopyPrevious = async () => {
+    setCopyError('')
+    setCopyBusy(true)
+    try {
+      const previous = await api<DailyCostDay>(`/daily-cost/entries/${entryId}/previous`)
+      const lineCount = previous.services.length + previous.consumables.length + previous.tangibles.length
+      if (!lineCount) {
+        setCopyError(`The previous sheet (${displayDate(previous.entry.cost_date)}) has no lines to copy.`)
+        return
+      }
+      if (payload.services.length || payload.consumables.length || payload.tangibles.length) setCopyConfirm({ previous })
+      else await copyPreviousDay(previous)
+    } catch (caught) {
+      setCopyError(caught instanceof Error ? caught.message : 'The previous daily sheet could not be loaded')
+    } finally {
+      setCopyBusy(false)
+    }
   }
 
   if (loading && !day) return <Box py={12} display="grid" sx={{ placeItems: 'center' }}><CircularProgress/></Box>
@@ -494,6 +534,9 @@ export default function DailyCostSheet() {
         <Button component={RouterLink} to="/daily-cost" variant="outlined" startIcon={<ArrowBackRounded/>}>Register</Button>
         <Button variant="outlined" startIcon={<RefreshRounded/>} onClick={() => void load()} disabled={loading || dirty}>{loading ? 'Refreshing…' : 'Refresh'}</Button>
         {entry.status === 'draft' && editable && <>
+          <Tooltip title="Prefill this draft from the closest earlier sheet of the same well and AFE.">
+            <span><Button variant="outlined" startIcon={<LibraryAddOutlined/>} onClick={() => void openCopyPrevious()} disabled={copyBusy || dirty}>Copy previous day</Button></span>
+          </Tooltip>
           <Button variant="outlined" startIcon={<CloudUploadOutlined/>} onClick={openImport}>Import lines</Button>
           {can('daily-cost:update') && <Button variant="contained" startIcon={<SaveOutlined/>} onClick={() => void save()} disabled={!dirty || saving}>{saving ? 'Saving…' : 'Save sheet'}</Button>}
         </>}
@@ -504,6 +547,7 @@ export default function DailyCostSheet() {
 
     {notice && <Alert severity="success" sx={{ mb: 1.5 }} onClose={() => setNotice('')}>{notice}</Alert>}
     <ErrorMessage message={saveError}/>
+    {copyError && <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setCopyError('')}>{copyError}</Alert>}
     {previewError && <Alert severity="error" sx={{ mb: 1.5 }} action={can('daily-cost:update') ? <Button color="inherit" size="small" onClick={() => { setPreviewError(''); setPreview(null) }}>Retry preview</Button> : undefined}>{previewError}</Alert>}
     {entry.status === 'submitted' && <Alert severity="info" icon={<LockOutlined/>} sx={{ mb: 1.5 }}>
       Submitted by {entry.submitted_by || 'workspace user'}{entry.submitted_at ? ` on ${new Date(entry.submitted_at).toLocaleString()}` : ''}. The daily sheet is read-only{entry.status_remarks ? ` · ${entry.status_remarks}` : ''}.
@@ -597,6 +641,17 @@ export default function DailyCostSheet() {
 
     <FormDialog open={Boolean(lineDelete)} title={`Remove ${lineDelete?.label ?? 'line'}?`} subtitle="This removes the line from this unsaved daily sheet. A saved line is deleted only after you save the sheet." onClose={() => setLineDelete(null)} onSubmit={removeLine} submitLabel="Remove line">
       <Alert severity="warning">This change will affect the AFE actual-to-date and remaining balance after you save.</Alert>
+    </FormDialog>
+
+    <FormDialog
+      open={Boolean(copyConfirm)} title="Replace current lines with the previous day?"
+      subtitle={copyConfirm ? `${copyConfirm.previous.entry.daily_cost_code} of ${displayDate(copyConfirm.previous.entry.cost_date)} will overwrite this draft's lines. Your current remarks are kept.` : ''}
+      onClose={() => setCopyConfirm(null)} onSubmit={() => void copyPreviousDay(copyConfirm!.previous)} submitLabel="Copy previous day"
+    >
+      <Alert severity="warning">
+        This draft already has lines. Copying replaces them with the previous day's lines
+        ({copyConfirm?.previous.services.length ?? 0} service, {copyConfirm?.previous.consumables.length ?? 0} consumable, {copyConfirm?.previous.tangibles.length ?? 0} tangible).
+      </Alert>
     </FormDialog>
 
     <FormDialog open={Boolean(statusAction)} title={statusTitle} subtitle={statusSubtitle} onClose={() => { if (!statusBusy) setStatusAction(null) }} onSubmit={() => void completeStatusAction()} busy={statusBusy} submitLabel={statusAction === 'submit' ? 'Submit daily sheet' : 'Reopen as Draft'} submitDisabled={statusAction === 'reopen' && statusRemarks.trim().length < 3}>

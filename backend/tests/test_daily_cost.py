@@ -254,6 +254,21 @@ def test_daily_cost_locks_rates_prices_bulk_actuals_and_tracks_submission():
         assert client.post(f"/api/v1/daily-cost/entries/{entry_id}/restore", headers=headers).status_code == 200
         assert client.get("/api/v1/daily-cost/entries", headers=headers).json()[0]["id"] == entry_id
 
+        # The closest earlier sheet of the same well and AFE feeds the copy-forward flow.
+        day_two = client.post("/api/v1/daily-cost/entries", headers=headers, json={
+            "well_id": setup["well"]["id"], "afe_id": setup["afe"]["id"], "cost_date": "2026-10-11", "remarks": "Next day",
+        })
+        assert day_two.status_code == 201, day_two.text
+        day_two_id = day_two.json()["entry"]["id"]
+        previous = client.get(f"/api/v1/daily-cost/entries/{day_two_id}/previous", headers=headers)
+        assert previous.status_code == 200, previous.text
+        assert previous.json()["entry"]["id"] == entry_id
+        assert len(previous.json()["services"]) == 3
+        # A first sheet has nothing earlier to copy from.
+        first_sheet_previous = client.get(f"/api/v1/daily-cost/entries/{entry_id}/previous", headers=headers)
+        assert first_sheet_previous.status_code == 404
+        assert "no earlier daily cost sheet" in first_sheet_previous.json()["detail"]
+
         with SessionLocal() as db:
             actions = {row.action for row in db.query(AuditLog).all()}
             assert {"rate_override", "import", "submit", "reopen", "soft_delete", "restore"}.issubset(actions)
@@ -278,3 +293,29 @@ def test_daily_cost_is_tenant_scoped_and_rejects_unjustified_upa():
         })
         assert invalid.status_code == 422
         assert "reason" in invalid.text.lower()
+
+
+def test_locked_queries_stay_single_table_for_postgresql():
+    """Row locks must never ride on an outer join.
+
+    PostgreSQL rejects ``SELECT ... FOR UPDATE`` over the nullable side of a
+    LEFT OUTER JOIN with ``FeatureNotSupported``; SQLite silently accepts it.
+    The daily-cost models declare ``lazy="joined"`` references, so every locked
+    statement must override them with selectin loads. This was a live
+    production 500 on ``POST /api/v1/daily-cost/entries`` (and on save, submit,
+    reopen, delete and restore) for PostgreSQL deployments.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.dialects import postgresql
+
+    from app.services import daily_cost as service
+
+    # The statement builders used by every write path must produce a
+    # single-table statement: FOR UPDATE without any JOIN.
+    for statement in (
+        service._entry_statement(deleted=False, lock=True),
+        service._baseline_statement("org-1", "afe-1", lock=True),
+    ):
+        sql = str(statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": False}))
+        assert "FOR UPDATE" in sql
+        assert "JOIN" not in sql, f"Locked daily-cost query must stay single-table, got: {sql}"
