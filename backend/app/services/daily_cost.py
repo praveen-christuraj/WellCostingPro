@@ -13,14 +13,14 @@ import logging
 import threading
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, DecimalException, ROUND_HALF_UP
 from typing import Any, Iterable, Sequence
 from uuid import uuid4
 
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 from sqlalchemy import Select, func, literal, select, union_all
-from sqlalchemy.exc import DataError, DatabaseError, IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models import (
@@ -124,32 +124,49 @@ def _actor_name(user: User) -> str:
     return user.full_name or user.email
 
 
-def _commit(db: Session) -> None:
-    try:
-        db.commit()
-    except IntegrityError as error:
-        db.rollback()
-        raise HTTPException(
+def _database_http_error(error: SQLAlchemyError, *, operation: str) -> HTTPException:
+    """Turn SQLAlchemy write failures into actionable API errors.
+
+    Flushes are deliberately handled the same way as commits.  A flush is a
+    write too, and baseline creation performs several flushes before the final
+    commit.  Letting one escape as a raw driver exception was the source of
+    opaque HTTP 500 responses for otherwise recoverable daily-sheet errors.
+    """
+    if isinstance(error, IntegrityError):
+        return HTTPException(
             status_code=409,
-            detail="This daily cost change conflicts with an existing entry or dependent workspace record",
-        ) from error
-    except DataError as error:
-        # PostgreSQL raises a driver error (not an IntegrityError) when a value
-        # exceeds its column precision. Report it as validation, never as a 500.
-        db.rollback()
-        raise HTTPException(
+            detail="This daily cost change conflicts with an existing entry or dependent workspace record. "
+                   "Refresh the register and retry.",
+        )
+    if isinstance(error, DataError):
+        return HTTPException(
             status_code=422,
             detail="A value on this daily sheet is outside the range the cost ledger accepts. "
                    "Reduce the quantity or rate and save again.",
-        ) from error
-    except DatabaseError as error:
+        )
+    log.exception("Daily cost %s failed with a database error", operation)
+    return HTTPException(
+        status_code=503,
+        detail="The daily cost ledger could not complete this change because the database rejected it. "
+               "Retry; if it continues, contact the administrator.",
+    )
+
+
+def _flush(db: Session, *, operation: str) -> None:
+    """Flush a Daily Cost write without leaking a driver exception as HTTP 500."""
+    try:
+        db.flush()
+    except SQLAlchemyError as error:
         db.rollback()
-        log.exception("Daily cost write failed with a database error")
-        raise HTTPException(
-            status_code=503,
-            detail="The daily cost ledger could not be saved because the database rejected the change. "
-                   "Retry; if it continues, contact the administrator.",
-        ) from error
+        raise _database_http_error(error, operation=operation) from error
+
+
+def _commit(db: Session) -> None:
+    try:
+        db.commit()
+    except SQLAlchemyError as error:
+        db.rollback()
+        raise _database_http_error(error, operation="save") from error
 
 
 def _audit(
@@ -247,6 +264,31 @@ def _well_or_422(db: Session, organization_id: str, well_id: str) -> Well:
     return well
 
 
+def _estimate_for_daily_cost(db: Session, organization_id: str, afe: Afe) -> AfeEstimateOut:
+    """Load an AFE estimate with a user-facing error for malformed legacy data.
+
+    Daily-sheet creation is a workflow boundary. A stale or partially migrated
+    AFE must not make that boundary return an unhelpful driver/serialization
+    500; it should tell the operator which prerequisite needs attention.
+    """
+    afe_code = afe.afe_code
+    try:
+        return afe_service.get_estimate(db, organization_id, afe.id)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as error:
+        db.rollback()
+        raise _database_http_error(error, operation="reading the AFE estimate") from error
+    except Exception as error:  # noqa: BLE001 - isolate malformed legacy AFE data from Daily Cost
+        db.rollback()
+        log.exception("Unable to load AFE %s while starting a daily cost sheet", afe_code)
+        raise HTTPException(
+            status_code=422,
+            detail=f"The saved estimate for {afe_code} cannot be used for Daily Cost Management. "
+                   "Open the AFE, correct or resave its estimate, then retry.",
+        ) from error
+
+
 def _afe_or_422(db: Session, organization_id: str, afe_id: str, well_id: str) -> Afe:
     afe = db.scalar(select(Afe).where(Afe.id == afe_id, Afe.organization_id == organization_id))
     if afe is None or afe.is_deleted:
@@ -255,7 +297,7 @@ def _afe_or_422(db: Session, organization_id: str, afe_id: str, well_id: str) ->
         raise HTTPException(status_code=422, detail="The selected AFE does not belong to this well")
     if afe.estimate_saved_at is None:
         raise HTTPException(status_code=422, detail=f"Save the estimate for {afe.afe_code} before starting daily cost tracking")
-    estimate = afe_service.get_estimate(db, organization_id, afe.id)
+    estimate = _estimate_for_daily_cost(db, organization_id, afe)
     if estimate.summary.total is None or not estimate.summary.currency.converted:
         raise HTTPException(status_code=422, detail=f"Complete the AFE currency setup for {afe.afe_code} before comparing daily costs")
     return afe
@@ -306,7 +348,25 @@ def _ensure_rate_baseline(db: Session, organization_id: str, well: Well, user: U
         )
         baseline.catalogue_rates = _capture_catalogue_rates(db, organization_id, well, baseline)
         db.add(baseline)
-        db.flush()
+        try:
+            _flush(db, operation="locking the well catalogue-rate baseline")
+        except HTTPException as error:
+            # Another application worker may have created the immutable
+            # well-level snapshot between our existence check and flush. The
+            # winner's snapshot is safe to reuse; only re-raise if it cannot be
+            # found after the transaction was rolled back.
+            if error.status_code != 409:
+                raise
+            existing = db.scalar(
+                select(DailyCostWellRateBaseline).options(selectinload(DailyCostWellRateBaseline.catalogue_rates))
+                .where(
+                    DailyCostWellRateBaseline.organization_id == organization_id,
+                    DailyCostWellRateBaseline.well_id == well.id,
+                )
+            )
+            if existing is None:
+                raise
+            return existing
         return baseline
 
 
@@ -341,7 +401,7 @@ def _ensure_afe_baseline(
         )
         if existing is not None:
             return existing
-        estimate: AfeEstimateOut = afe_service.get_estimate(db, organization_id, afe.id)
+        estimate = _estimate_for_daily_cost(db, organization_id, afe)
         if estimate.summary.total is None or not estimate.summary.currency.converted:
             raise HTTPException(status_code=422, detail="AFE estimate must have a complete standard-currency total")
         standard = estimate.summary.currency.standard_currency.upper()
@@ -472,7 +532,27 @@ def _ensure_afe_baseline(
         baseline.budget_lines = budgets
         baseline.service_rates = service_rates
         db.add(baseline)
-        db.flush()
+        try:
+            _flush(db, operation="locking the AFE baseline")
+        except HTTPException as error:
+            # A second worker can race the first sheet for the same AFE. Once
+            # the insert conflict rolls back, reuse the immutable baseline that
+            # won the race instead of presenting a transient server failure.
+            if error.status_code != 409:
+                raise
+            existing = db.scalar(
+                select(DailyCostBaseline).options(
+                    selectinload(DailyCostBaseline.budget_lines), selectinload(DailyCostBaseline.service_rates),
+                    selectinload(DailyCostBaseline.well_sections).selectinload(DailyCostBaselineSection.phases),
+                    selectinload(DailyCostBaseline.exchange_rates),
+                ).where(
+                    DailyCostBaseline.organization_id == organization_id,
+                    DailyCostBaseline.afe_id == afe.id,
+                )
+            )
+            if existing is None:
+                raise
+            return existing
         return baseline
 
 
@@ -653,37 +733,82 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
     )
 
 
+def _created_day_or_503(db: Session, organization_id: str, entry_id: str) -> DailyCostDayOut:
+    """Read the newly committed sheet without turning a read failure into a raw 500."""
+    try:
+        return get_day(db, organization_id, entry_id)
+    except HTTPException:
+        raise
+    except SQLAlchemyError as error:
+        db.rollback()
+        raise _database_http_error(error, operation="reading the created daily cost sheet") from error
+    except Exception as error:  # noqa: BLE001 - response hydration is a workflow boundary
+        db.rollback()
+        log.exception("Daily cost %s was committed but could not be read back", entry_id)
+        raise HTTPException(
+            status_code=503,
+            detail="The daily cost sheet was created, but the server could not load its details. "
+                   "Refresh the register before trying again.",
+        ) from error
+
+
 def create_entry(db: Session, organization_id: str, data: DailyCostEntryCreate, user: User, request: Request | None) -> DailyCostDayOut:
-    with _WRITE_LOCK:
-        well = _well_or_422(db, organization_id, data.well_id)
-        afe = _afe_or_422(db, organization_id, data.afe_id, well.id)
-        duplicate = db.scalar(select(DailyCostEntry.id).where(
-            DailyCostEntry.organization_id == organization_id, DailyCostEntry.well_id == well.id,
-            DailyCostEntry.afe_id == afe.id, DailyCostEntry.cost_date == data.cost_date,
-            DailyCostEntry.is_deleted.is_(False),
-        ))
-        if duplicate:
-            raise HTTPException(status_code=409, detail="A daily cost sheet already exists for this well, AFE and date")
-        rate_baseline = _ensure_rate_baseline(db, organization_id, well, user)
-        baseline = _ensure_afe_baseline(db, organization_id, well, afe, rate_baseline, user)
-        cost_code = f"DC-{well.well_code[:35]}-{data.cost_date:%Y%m%d}-{afe.afe_code[:35]}"[:100]
-        entry = DailyCostEntry(
-            id=uid(), organization_id=organization_id, rig_id=well.rig_id,
-            rig_code_snapshot=well.rig.rig_code, rig_name_snapshot=well.rig.rig_name,
-            well_id=well.id, well_code_snapshot=well.well_code, well_name_snapshot=well.well_name,
-            afe_id=afe.id, afe_code_snapshot=afe.afe_code, afe_name_snapshot=afe.afe_name,
-            afe_status_at_create=afe.status, rate_baseline_id=rate_baseline.id, baseline_id=baseline.id,
-            daily_cost_code=cost_code, cost_date=data.cost_date, standard_currency=baseline.standard_currency,
-            remarks=data.remarks, status="draft", created_by=_actor_name(user), updated_by=_actor_name(user),
-        )
-        db.add(entry)
-        _audit(
-            db, user=user, action="create", entity_type="daily_cost", entity_id=entry.id, label=cost_code,
-            summary=f"Started daily cost tracking for {well.well_code} on {data.cost_date.isoformat()} under AFE {afe.afe_code}; locked AFE budget and well catalogue rates",
-            request=request,
-        )
-        _commit(db)
-    return get_day(db, organization_id, entry.id)
+    try:
+        with _WRITE_LOCK:
+            well = _well_or_422(db, organization_id, data.well_id)
+            afe = _afe_or_422(db, organization_id, data.afe_id, well.id)
+            duplicate = db.scalar(select(DailyCostEntry.id).where(
+                DailyCostEntry.organization_id == organization_id, DailyCostEntry.well_id == well.id,
+                DailyCostEntry.afe_id == afe.id, DailyCostEntry.cost_date == data.cost_date,
+                DailyCostEntry.is_deleted.is_(False),
+            ))
+            if duplicate:
+                raise HTTPException(status_code=409, detail="A daily cost sheet already exists for this well, AFE and date")
+            rate_baseline = _ensure_rate_baseline(db, organization_id, well, user)
+            baseline = _ensure_afe_baseline(db, organization_id, well, afe, rate_baseline, user)
+            cost_code = f"DC-{well.well_code[:35]}-{data.cost_date:%Y%m%d}-{afe.afe_code[:35]}"[:100]
+            entry = DailyCostEntry(
+                id=uid(), organization_id=organization_id, rig_id=well.rig_id,
+                rig_code_snapshot=well.rig.rig_code, rig_name_snapshot=well.rig.rig_name,
+                well_id=well.id, well_code_snapshot=well.well_code, well_name_snapshot=well.well_name,
+                afe_id=afe.id, afe_code_snapshot=afe.afe_code, afe_name_snapshot=afe.afe_name,
+                afe_status_at_create=afe.status, rate_baseline_id=rate_baseline.id, baseline_id=baseline.id,
+                daily_cost_code=cost_code, cost_date=data.cost_date, standard_currency=baseline.standard_currency,
+                remarks=data.remarks, status="draft", created_by=_actor_name(user), updated_by=_actor_name(user),
+            )
+            db.add(entry)
+            _audit(
+                db, user=user, action="create", entity_type="daily_cost", entity_id=entry.id, label=cost_code,
+                summary=f"Started daily cost tracking for {well.well_code} on {data.cost_date.isoformat()} under AFE {afe.afe_code}; locked AFE budget and well catalogue rates",
+                request=request,
+            )
+            _commit(db)
+    except HTTPException:
+        # Baseline construction can have flushed rows waiting in this
+        # transaction. Always clear them before the request returns an error so
+        # a dependency/session reuse cannot poison the next Daily Cost call.
+        db.rollback()
+        raise
+    except SQLAlchemyError as error:
+        db.rollback()
+        raise _database_http_error(error, operation="creating a daily cost sheet") from error
+    except (DecimalException, ValidationError, ValueError, TypeError, KeyError, AttributeError) as error:
+        db.rollback()
+        log.exception("Daily cost creation rejected data for organization %s", organization_id)
+        raise HTTPException(
+            status_code=422,
+            detail="The selected well or AFE contains data that cannot be used to start a Daily Cost Sheet. "
+                   "Correct the AFE estimate or well setup, then retry.",
+        ) from error
+    except Exception as error:  # noqa: BLE001 - do not expose an opaque 500 at this workflow boundary
+        db.rollback()
+        log.exception("Unexpected Daily Cost creation failure for organization %s", organization_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Daily Cost Management could not start this sheet right now. "
+                   "Refresh the register and retry; if it continues, contact the administrator.",
+        ) from error
+    return _created_day_or_503(db, organization_id, entry.id)
 
 
 # The remaining validators, save/read lifecycles and dashboard functions follow below.
@@ -1015,7 +1140,14 @@ def _normalise_service(
     if line.override_rate is not None:
         source = "daily_override" if rate else "manual_unplanned"
     quantity = Decimal(line.quantity)
-    billable_quantity = quantity / Decimal("24") if basis == "Day Rate" and line.quantity_unit == "hours" else quantity
+    if basis == "Day Rate" and line.charge_category in SERVICE_ONE_TIME:
+        # Mobilization, demobilization and fixed charges are unit-priced events,
+        # not quantities of days.  The UI still accepts a positive quantity so
+        # the line schema remains consistent, but the ledger must charge the
+        # selected rate exactly once.
+        billable_quantity = Decimal("1")
+    else:
+        billable_quantity = quantity / Decimal("24") if basis == "Day Rate" and line.quantity_unit == "hours" else quantity
     amount = _money(billable_quantity * selected_rate)
     old_override = Decimal(old.override_rate) if old and old.override_rate is not None else None
     old_reason = old.override_reason if old else ""
@@ -1295,7 +1427,7 @@ def _upsert_lines(
     _, service_overrides = _persist_group(entry, DailyCostServiceLine, services)
     _, consumable_overrides = _persist_group(entry, DailyCostConsumableLine, consumables)
     _, tangible_overrides = _persist_group(entry, DailyCostTangibleLine, tangibles)
-    db.flush()
+    _flush(db, operation="saving daily cost lines")
     all_lines = [*entry.service_lines, *entry.consumable_lines, *entry.tangible_lines]
     entry.services_total = _sum_group(entry.service_lines)
     entry.consumables_total = _sum_group(entry.consumable_lines)
@@ -1631,30 +1763,51 @@ def save_day(
     *,
     action: str = "update",
 ) -> DailyCostDayOut:
-    with _WRITE_LOCK:
-        entry = _get_entry(db, entry_id, organization_id, deleted=False, lock=True)
-        if entry.status != "draft":
-            raise HTTPException(status_code=409, detail="Submitted daily cost sheets are read-only. Reopen the sheet with the authorized workflow first.")
-        service_rows, consumable_rows, tangible_rows = _normalize_payload(db, entry, payload)
-        entry.remarks = payload.remarks
-        _upsert_lines(db, entry, service_rows, consumable_rows, tangible_rows, user=user, request=request)
-        entry.warning_count = int(bool(entry.upa_total)) + int(bool(entry.npt_total))
-        _audit(
-            db,
-            user=user,
-            action=action,
-            entity_type="daily_cost",
-            entity_id=entry.id,
-            label=entry.daily_cost_code,
-            summary=(
-                f"{'Imported' if action == 'import' else 'Saved'} daily costs for {entry.well_code_snapshot} on {entry.cost_date.isoformat()}: "
-                f"{len(service_rows)} service, {len(consumable_rows)} consumable and {len(tangible_rows)} tangible line(s); "
-                f"{entry.standard_currency} {entry.total_cost:,.2f}"
-            ),
-            request=request,
-        )
-        _commit(db)
-    return get_day(db, organization_id, entry.id)
+    try:
+        with _WRITE_LOCK:
+            entry = _get_entry(db, entry_id, organization_id, deleted=False, lock=True)
+            if entry.status != "draft":
+                raise HTTPException(status_code=409, detail="Submitted daily cost sheets are read-only. Reopen the sheet with the authorized workflow first.")
+            service_rows, consumable_rows, tangible_rows = _normalize_payload(db, entry, payload)
+            entry.remarks = payload.remarks
+            _upsert_lines(db, entry, service_rows, consumable_rows, tangible_rows, user=user, request=request)
+            entry.warning_count = int(bool(entry.upa_total)) + int(bool(entry.npt_total))
+            _audit(
+                db,
+                user=user,
+                action=action,
+                entity_type="daily_cost",
+                entity_id=entry.id,
+                label=entry.daily_cost_code,
+                summary=(
+                    f"{'Imported' if action == 'import' else 'Saved'} daily costs for {entry.well_code_snapshot} on {entry.cost_date.isoformat()}: "
+                    f"{len(service_rows)} service, {len(consumable_rows)} consumable and {len(tangible_rows)} tangible line(s); "
+                    f"{entry.standard_currency} {entry.total_cost:,.2f}"
+                ),
+                request=request,
+            )
+            _commit(db)
+    except HTTPException:
+        db.rollback()
+        raise
+    except SQLAlchemyError as error:
+        db.rollback()
+        raise _database_http_error(error, operation="saving a daily cost sheet") from error
+    except (DecimalException, ValidationError, ValueError, TypeError, KeyError, AttributeError) as error:
+        db.rollback()
+        log.exception("Daily cost save rejected data for entry %s", entry_id)
+        raise HTTPException(
+            status_code=422,
+            detail="The daily cost lines contain a value that cannot be saved. Review the highlighted line data and retry.",
+        ) from error
+    except Exception as error:  # noqa: BLE001 - protect the editing workflow from opaque 500s
+        db.rollback()
+        log.exception("Unexpected Daily Cost save failure for entry %s", entry_id)
+        raise HTTPException(
+            status_code=503,
+            detail="The daily cost sheet could not be saved right now. Refresh the sheet and retry; if it continues, contact the administrator.",
+        ) from error
+    return _created_day_or_503(db, organization_id, entry.id)
 
 
 def preview_day(
@@ -1810,7 +1963,7 @@ def submit_entry(
             request=request,
         )
         _commit(db)
-    return get_day(db, organization_id, entry.id)
+    return _created_day_or_503(db, organization_id, entry.id)
 
 
 def reopen_entry(
@@ -1836,7 +1989,7 @@ def reopen_entry(
             request=request,
         )
         _commit(db)
-    return get_day(db, organization_id, entry.id)
+    return _created_day_or_503(db, organization_id, entry.id)
 
 
 def soft_delete_entry(

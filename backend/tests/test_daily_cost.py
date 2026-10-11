@@ -8,12 +8,15 @@ os.environ["SECRET_KEY"] = "test-only-secret-do-not-deploy-12345"
 from decimal import Decimal
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
 from app.core.database import Base, SessionLocal, engine
 from app.core.security import hash_password
 from app.main import app
 from app.models import AuditLog, Organization, Permission, Role, User
+from app.services import daily_cost as daily_cost_service
 
 
 PERMISSIONS = [
@@ -440,3 +443,70 @@ def test_well_cost_summary_reports_daily_and_factor_views():
         assert [row["cost_date"] for row in filtered.json()] == ["2026-10-11"]
         assert client.get(
             "/api/v1/daily-cost/entries?status=submitted&from=2030-01-01", headers=headers).json() == []
+
+
+def test_one_time_day_rate_is_charged_once_even_when_quantity_is_entered():
+    """A unit-priced mobilisation must not multiply its rate by the UI quantity."""
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        one_time_afe = _post(client, "/api/v1/afe/afes", headers, {
+            "rig_id": setup["rig"]["id"], "well_id": setup["well"]["id"], "afe_code": "AFE-MOB",
+            "afe_name": "Mobilisation AFE", "afe_type": "Drilling", "remarks": "",
+        }, status=200)
+        estimate = client.put(f"/api/v1/afe/afes/{one_time_afe['id']}/estimate", headers=headers, json={
+            "services": [{
+                "client_key": "service-mobilisation", "service_id": setup["service"]["id"],
+                "charging_basis": "Day Rate", "hole_section_id": None, "phase_id": None,
+                "currency": "USD", "service_amount": "0", "remarks": "",
+                "rates": [{"category": "Mobilization", "unit_rate": "250"}],
+                "charges": [],
+                "section_rates": [],
+            }],
+            "consumables": [], "tangibles": [], "standard_currency": "", "exchange_rates": [],
+        })
+        assert estimate.status_code == 200, estimate.text
+        created = _post(client, "/api/v1/daily-cost/entries", headers, {
+            "well_id": setup["well"]["id"], "afe_id": one_time_afe["id"],
+            "cost_date": "2026-10-12", "remarks": "Mobilisation day",
+        })
+        baseline = client.get(f"/api/v1/daily-cost/entries/{created['entry']['id']}/baseline", headers=headers)
+        assert baseline.status_code == 200, baseline.text
+        rate = next(row for row in baseline.json()["service_rates"] if row["charge_category"] == "Mobilization")
+        payload = {
+            "remarks": "Mobilisation actual",
+            "services": [{
+                "activity_id": setup["activity"]["id"], "hole_section_id": None, "phase_id": None,
+                "classification": "Planned", "vendor_id": setup["vendor"]["id"], "party_name": "",
+                # A quantity above one is intentionally supplied: the category is still one unit.
+                "quantity": "7", "quantity_unit": "unit", "currency": "USD",
+                "override_rate": None, "override_reason": "", "remarks": "",
+                "service_id": setup["service"]["id"], "baseline_service_rate_id": rate["id"],
+                "charging_basis": "Day Rate", "charge_category": "Mobilization",
+            }],
+            "consumables": [], "tangibles": [],
+        }
+        preview = client.put(f"/api/v1/daily-cost/entries/{created['entry']['id']}/preview", headers=headers, json=payload)
+        assert preview.status_code == 200, preview.text
+        assert Decimal(preview.json()["services_total"]) == Decimal("250.00")
+        saved = client.put(f"/api/v1/daily-cost/entries/{created['entry']['id']}", headers=headers, json=payload)
+        assert saved.status_code == 200, saved.text
+        assert Decimal(saved.json()["entry"]["services_total"]) == Decimal("250.00")
+
+
+def test_daily_cost_flush_database_errors_return_an_actionable_conflict():
+    """Baseline flush failures must be mapped, not leaked as an HTTP 500."""
+    class BrokenSession:
+        rolled_back = False
+
+        def flush(self):
+            raise IntegrityError("duplicate baseline", {}, RuntimeError("duplicate"))
+
+        def rollback(self):
+            self.rolled_back = True
+
+    session = BrokenSession()
+    with pytest.raises(HTTPException) as raised:
+        daily_cost_service._flush(session, operation="test baseline")
+    assert raised.value.status_code == 409
+    assert session.rolled_back is True
