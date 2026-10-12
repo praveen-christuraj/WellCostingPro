@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Box, Divider, MenuItem, TextField, Typography } from '@mui/material'
+import { Link as RouterLink } from 'react-router-dom'
+import { Alert, Box, Button, Divider, MenuItem, TextField, Typography } from '@mui/material'
 import { FormDialog } from '../Common'
 import {
-  DAILY_CHARGE_CATEGORIES, DAILY_CHARGING_BASES, DAILY_CLASSIFICATIONS, DAILY_CONSUMABLE_CATEGORIES,
-  DAILY_ONE_TIME_CATEGORIES, dailyMoney, type ChargingBasis, type ChargeCategory, type ConsumableCategory,
-  type ConsumableKind, type CostClassification, type DailyCostBaseline, type DailyCostCatalogueOption,
+  DAILY_CHARGE_CATEGORIES, DAILY_CHARGING_BASES, DAILY_CONSUMABLE_CATEGORIES,
+  DAILY_ONE_TIME_CATEGORIES, dailyMoney, deriveClassification, type ChargingBasis, type ChargeCategory,
+  type ConsumableCategory, type ConsumableKind, type DailyCostBaseline, type DailyCostCatalogueOption,
   type DailyCostConsumableInput, type DailyCostLineBase, type DailyCostReference, type DailyCostServiceInput,
   type DailyCostTangibleInput, type DailyQuantityUnit,
 } from '../../lib/dailyCost'
@@ -16,6 +17,10 @@ type Props = {
   open: boolean
   kind: DailyCostLineKind | null
   initialLine: EditableDailyCostLine | null
+  /** Current service lines of the sheet, so a service can repeat only under a different sub activity. */
+  serviceLines: DailyCostServiceInput[]
+  /** Index of the edited line inside `serviceLines` (null when adding). */
+  lineIndex: number | null
   baseline: DailyCostBaseline
   reference: DailyCostReference
   wellId: string
@@ -40,7 +45,6 @@ function baseDefaults(reference: DailyCostReference, baseline: DailyCostBaseline
     hole_section_id: section?.hole_section_id ?? null,
     phase_id: section?.phases[0]?.phase_id ?? null,
     sub_activity_id: null,
-    classification: 'Planned',
     vendor_id: null,
     party_name: '',
     quantity: '1',
@@ -55,8 +59,14 @@ function initialFor(
   kind: DailyCostLineKind,
   reference: DailyCostReference,
   baseline: DailyCostBaseline,
+  wellId: string,
 ): EditableDailyCostLine {
   const base = baseDefaults(reference, baseline)
+  // The well sub activity is mandatory, so preselect the first one configured
+  // for the well and the defaulted Master Data Activity.
+  base.sub_activity_id = reference.sub_activities.find(
+    item => item.well_id === wellId && item.activity_id === base.activity_id,
+  )?.id ?? null
   if (kind === 'service') {
     const rate = baseline.service_rates[0]
     const service = reference.services.find(item => item.id === rate?.service_id) ?? reference.services[0]
@@ -128,17 +138,19 @@ function itemSnapshot(
   return baseline.catalogue_rates.find(rate => rate.item_kind === item.item_kind && rate.id === item.id) ?? item
 }
 
-export function DailyCostLineDialog({ open, kind, initialLine, baseline, reference, wellId, onClose, onSave }: Props) {
+export function DailyCostLineDialog({
+  open, kind, initialLine, serviceLines, lineIndex, baseline, reference, wellId, onClose, onSave,
+}: Props) {
   const [form, setForm] = useState<EditableDailyCostLine | null>(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!open || !kind) return
-    setForm(initialLine ?? initialFor(kind, reference, baseline))
+    setForm(initialLine ?? initialFor(kind, reference, baseline, wellId))
     setError('')
     setSaving(false)
-  }, [open, kind, initialLine, reference, baseline])
+  }, [open, kind, initialLine, reference, baseline, wellId])
 
   const selectedRate = useMemo(() => {
     if (!form || !isService(form) || !form.baseline_service_rate_id) return undefined
@@ -147,6 +159,8 @@ export function DailyCostLineDialog({ open, kind, initialLine, baseline, referen
   const sections = baseline.sections
   const selectedSection = sections.find(section => section.hole_section_id === form?.hole_section_id)
   const eligibleSubActivities = reference.sub_activities.filter(item => item.well_id === wellId && item.activity_id === form?.activity_id)
+  // Classification (Planned / UPA / NPT) is not entered: it follows the Master Data Activity.
+  const derivedClassification = deriveClassification(reference.activities.find(item => item.id === form?.activity_id))
 
   const catalogKind = form && isConsumable(form) ? form.item_kind : 'tangible'
   const initialCatalogId = form && isConsumable(form) ? form.item_id : form && !isService(form) ? form.tangible_id : null
@@ -165,9 +179,23 @@ export function DailyCostLineDialog({ open, kind, initialLine, baseline, referen
     setError('')
   }
   const updateActivity = (activityId: string) => {
-    const nextSub = eligibleSubActivities.some(item => item.id === form.sub_activity_id && item.activity_id === activityId)
+    const nextSub = reference.sub_activities.some(item => item.well_id === wellId && item.id === form.sub_activity_id && item.activity_id === activityId)
       ? form.sub_activity_id : null
-    update({ activity_id: activityId, sub_activity_id: nextSub })
+    const patch: Record<string, unknown> = { activity_id: activityId, sub_activity_id: nextSub }
+    // Planned activities price from the locked AFE rate; keep that rule attached
+    // to the Activity instead of a separate classification field.
+    const nextClassification = deriveClassification(reference.activities.find(item => item.id === activityId))
+    if (isService(form) && nextClassification === 'Planned' && !form.baseline_service_rate_id) {
+      const first = baseline.service_rates.find(rate => rate.service_id === form.service_id)
+      if (first) {
+        const category = (first.charge_category || 'Operation') as ChargeCategory
+        patch.baseline_service_rate_id = first.id
+        patch.charging_basis = first.charging_basis
+        patch.charge_category = category
+        patch.currency = first.currency
+      }
+    }
+    update(patch)
   }
   const updateService = (serviceId: string) => {
     if (!isService(form)) return
@@ -207,33 +235,22 @@ export function DailyCostLineDialog({ open, kind, initialLine, baseline, referen
       phase_id: rate.phase_id ?? form.phase_id,
     })
   }
-  const updateClassification = (classification: CostClassification) => {
-    if (!isService(form)) {
-      update({ classification })
-      return
-    }
-    if (classification === 'Planned' && !form.baseline_service_rate_id) {
-      const first = baseline.service_rates.find(rate => rate.service_id === form.service_id)
-      if (first) {
-        const category = (first.charge_category || 'Operation') as ChargeCategory
-        update({ classification, baseline_service_rate_id: first.id, charging_basis: first.charging_basis,
-          charge_category: category, currency: first.currency })
-        return
-      }
-    }
-    update({ classification })
-  }
 
   const validate = (): string => {
     if (!form.activity_id) return 'Select a Master Data Activity.'
+    if (!form.sub_activity_id) return 'Select the well sub activity configured in Rig & Well Management.'
     if (!form.quantity || Number(form.quantity) <= 0) return 'Quantity must be greater than zero.'
-    if (form.classification !== 'Planned' && !form.vendor_id && !form.party_name.trim()) return 'UPA and NPT lines need a responsible vendor or party.'
+    if (derivedClassification !== 'Planned' && !form.vendor_id && !form.party_name.trim()) return 'UPA and NPT lines need a responsible vendor or party.'
     if (form.override_rate !== null && (!form.override_rate || Number(form.override_rate) < 0)) return 'Enter a valid daily override rate.'
     if (form.override_rate !== null && form.override_reason.trim().length < 3) return 'Explain the rate override (at least 3 characters).'
     if (isService(form)) {
       if (!form.service_id) return 'Select a service.'
-      if (form.classification === 'Planned' && !form.baseline_service_rate_id) return 'Choose a saved AFE service rate for planned work.'
-      if (form.classification !== 'Planned' && !form.baseline_service_rate_id && form.override_rate === null) return 'Enter a manual rate for an unplanned service.'
+      const duplicate = serviceLines.some((row, index) => index !== lineIndex
+        && row.service_id === form.service_id
+        && (row.sub_activity_id ?? '') === (form.sub_activity_id ?? ''))
+      if (duplicate) return 'This service is already entered for the selected sub activity on this date. Enter the service again only with a different sub activity.'
+      if (derivedClassification === 'Planned' && !form.baseline_service_rate_id) return 'Choose a saved AFE service rate for planned work.'
+      if (derivedClassification !== 'Planned' && !form.baseline_service_rate_id && form.override_rate === null) return 'Enter a manual rate for an unplanned service.'
       if (!form.charging_basis) return 'Choose the service charging basis.'
       if (!form.currency) return 'The rate needs a currency included in the locked AFE currency setup.'
       if (form.quantity_unit === 'hours' && Number(form.quantity) > 24) return 'For a daily line, hours cannot exceed 24; enter days instead.'
@@ -275,14 +292,10 @@ export function DailyCostLineDialog({ open, kind, initialLine, baseline, referen
 
   return <FormDialog open title={title} subtitle="Daily actuals are priced from the AFE and rate snapshots locked when tracking began. Overrides are recorded with their reason." onClose={onClose} onSubmit={submit} busy={saving} submitLabel={form.id ? 'Save line' : 'Add line'} maxWidth="md">
     <Box display="grid" gap={1.8}>
-      <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
-        <TextField select required label="Classification" value={form.classification} onChange={event => updateClassification(event.target.value as CostClassification)}>
-          {DAILY_CLASSIFICATIONS.map(value => <MenuItem key={value} value={value}>{value === 'UPA' ? 'UPA · Unplanned Activity' : value === 'NPT' ? 'NPT · Non-Productive Time' : 'Planned'}</MenuItem>)}
-        </TextField>
-        <TextField select required label="Master Data Activity" value={form.activity_id} onChange={event => updateActivity(event.target.value)}>
-          {reference.activities.map(item => <MenuItem key={item.id} value={item.id}>{item.display_name}</MenuItem>)}
-        </TextField>
-      </Box>
+      <TextField select required label="Master Data Activity" value={form.activity_id} onChange={event => updateActivity(event.target.value)}
+        helperText="Classifies the line (Planned / UPA / NPT) and drives its sub activity list.">
+        {reference.activities.map(item => <MenuItem key={item.id} value={item.id}>{item.display_name}</MenuItem>)}
+      </TextField>
 
       {kind === 'service' && isService(form) && <>
         <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1.2fr .8fr' } }}>
@@ -290,7 +303,7 @@ export function DailyCostLineDialog({ open, kind, initialLine, baseline, referen
             {reference.services.map(item => <MenuItem key={item.id} value={item.id}>{item.display_name}</MenuItem>)}
           </TextField>
           <TextField select label="Locked AFE rate" value={form.baseline_service_rate_id ?? ''} onChange={event => updateRate(event.target.value)}>
-            {form.classification !== 'Planned' && <MenuItem value="">Manual UPA / NPT rate</MenuItem>}
+            {derivedClassification !== 'Planned' && <MenuItem value="">Manual UPA / NPT rate</MenuItem>}
             {baseline.service_rates.filter(rate => rate.service_id === form.service_id).map(rate => <MenuItem key={rate.id} value={rate.id}>{rate.display_name}</MenuItem>)}
           </TextField>
         </Box>
@@ -298,8 +311,8 @@ export function DailyCostLineDialog({ open, kind, initialLine, baseline, referen
           ? <Alert severity="info" sx={{ py: 0 }}>
               Locked AFE rate: {selectedRate.charging_basis}{selectedRate.charge_category ? ` · ${selectedRate.charge_category}` : ''} · {dailyMoney(selectedRate.unit_rate, selectedRate.currency)}. Later Master Data changes do not affect this value.
             </Alert>
-          : form.classification !== 'Planned' && <Alert severity="warning" sx={{ py: 0 }}>Manual UPA/NPT pricing requires a daily rate and a written reason.</Alert>}
-        {!form.baseline_service_rate_id && form.classification !== 'Planned' && <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+          : derivedClassification !== 'Planned' && <Alert severity="warning" sx={{ py: 0 }}>Manual UPA/NPT pricing requires a daily rate and a written reason.</Alert>}
+        {!form.baseline_service_rate_id && derivedClassification !== 'Planned' && <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
           <TextField select label="Charging basis" value={form.charging_basis ?? 'Day Rate'} onChange={event => update({ charging_basis: event.target.value as ChargingBasis })}>
             {DAILY_CHARGING_BASES.map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
           </TextField>
@@ -353,12 +366,16 @@ export function DailyCostLineDialog({ open, kind, initialLine, baseline, referen
 
       <Divider/>
       <Typography fontSize={12} fontWeight={800} letterSpacing={.5} color="text.secondary">ACTIVITY, SCOPE &amp; RESPONSIBILITY</Typography>
+      {eligibleSubActivities.length === 0 && <Alert severity="warning" sx={{ py: 0 }}
+        action={<Button component={RouterLink} to="/rig-well/sub-activities" size="small" color="inherit" onClick={onClose}>Open well sub activities</Button>}>
+        No sub activity is configured for this well and the selected Activity. Configuring the well sub activity in Rig &amp; Well Management is mandatory before entering daily costs.
+      </Alert>}
       <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
         <TextField select label="Hole section" value={form.hole_section_id ?? ''} disabled={Boolean(selectedRate?.hole_section_id)} onChange={event => {
           const sectionId = event.target.value || null
           const section = sections.find(item => item.hole_section_id === sectionId)
           const phaseId = section?.phases.some(phase => phase.phase_id === form.phase_id) ? form.phase_id : section?.phases[0]?.phase_id ?? null
-          update({ hole_section_id: sectionId, phase_id: phaseId, sub_activity_id: null })
+          update({ hole_section_id: sectionId, phase_id: phaseId })
         }}>
           <MenuItem value="">No hole section</MenuItem>
           {sections.map(section => <MenuItem key={section.hole_section_id} value={section.hole_section_id}>{sectionLabel(section)}</MenuItem>)}
@@ -367,11 +384,11 @@ export function DailyCostLineDialog({ open, kind, initialLine, baseline, referen
           <MenuItem value="">No phase</MenuItem>
           {selectedSection?.phases.map(phase => <MenuItem key={phase.phase_id} value={phase.phase_id}>{phase.phase_code} · {phase.phase_name}</MenuItem>)}
         </TextField>
-        <TextField select label="Well-configured Sub Activity" value={form.sub_activity_id ?? ''} onChange={event => {
+        <TextField select required label="Well sub activity" value={form.sub_activity_id ?? ''} onChange={event => {
           const sub = eligibleSubActivities.find(item => item.id === event.target.value)
           update({ sub_activity_id: event.target.value || null, party_name: !form.party_name && sub ? sub.responsible_party : form.party_name })
-        }}>
-          <MenuItem value="">None selected</MenuItem>
+        }} helperText="Mandatory. The same service can repeat on a date only under a different sub activity.">
+          {!eligibleSubActivities.length && <MenuItem value="">No sub activity configured</MenuItem>}
           {eligibleSubActivities.map(item => <MenuItem key={item.id} value={item.id}>{item.sub_activity_code} · {item.sub_activity_name}</MenuItem>)}
         </TextField>
         <TextField select label="Responsible vendor" value={form.vendor_id ?? ''} onChange={event => {
@@ -381,7 +398,7 @@ export function DailyCostLineDialog({ open, kind, initialLine, baseline, referen
           <MenuItem value="">No vendor selected</MenuItem>
           {reference.vendors.map(item => <MenuItem key={item.id} value={item.id}>{item.display_name}</MenuItem>)}
         </TextField>
-        <TextField label="Party / responsible team" value={form.party_name} onChange={event => update({ party_name: event.target.value })} inputProps={{ maxLength: 200 }} helperText={form.classification === 'Planned' ? 'Optional unless no vendor is assigned.' : 'Required for UPA/NPT if no vendor is selected.'}/>
+        <TextField label="Party / responsible team" value={form.party_name} onChange={event => update({ party_name: event.target.value })} inputProps={{ maxLength: 200 }} helperText={derivedClassification === 'Planned' ? 'Optional unless no vendor is assigned.' : 'Required for UPA/NPT if no vendor is selected.'}/>
         <TextField select required label="Currency" value={form.currency} disabled={isService(form) ? Boolean(form.baseline_service_rate_id) : catalogHasSnapshot} onChange={event => update({ currency: event.target.value })}>
           {Object.keys(baseline.exchange_rates).sort().map(currency => <MenuItem key={currency} value={currency}>{currency}{currency === baseline.standard_currency ? ' · AFE standard' : ''}</MenuItem>)}
         </TextField>

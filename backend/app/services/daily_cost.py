@@ -10,6 +10,7 @@ both their native currency and the AFE's standard currency for reconciliation.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -112,6 +113,22 @@ def _fx(value: Decimal | int | str) -> Decimal:
 
 def _label(code: str, name: str) -> str:
     return " — ".join(part for part in (code, name) if part)
+
+
+def classify_activity(activity: Any) -> str:
+    """Derive the Planned / UPA / NPT classification from a Master Data Activity.
+
+    The daily cost entry has no separate classification field: the selected
+    Activity already carries that meaning (organizations name/code their
+    activities accordingly), so the line classification is derived from the
+    activity's code and name and stored with each priced line.
+    """
+    text = f"{getattr(activity, 'activity_code', '')} {getattr(activity, 'activity_name', '')}".lower()
+    if re.search(r"\bnpt\b", text) or re.search(r"non[ -]?productive", text):
+        return "NPT"
+    if re.search(r"\bupa\b", text) or "unplanned" in text:
+        return "UPA"
+    return "Planned"
 
 
 def _normalise_basis(value: Any) -> str:
@@ -812,6 +829,21 @@ def create_entry(db: Session, organization_id: str, data: DailyCostEntryCreate, 
     try:
         with _WRITE_LOCK:
             well = _well_or_422(db, organization_id, data.well_id)
+            has_sub_activity = db.scalar(
+                select(WellSubActivity.id).where(
+                    WellSubActivity.organization_id == organization_id,
+                    WellSubActivity.well_id == well.id,
+                    WellSubActivity.is_deleted.is_(False),
+                ).limit(1)
+            )
+            if not has_sub_activity:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Configure the well sub activities for {well.well_code} in Rig & Well Management "
+                        "before entering daily costs. Every daily cost line needs the Activity and Sub activity."
+                    ),
+                )
             afe = _afe_or_422(db, organization_id, data.afe_id, well.id)
             duplicate = db.scalar(select(DailyCostEntry.id).where(
                 DailyCostEntry.organization_id == organization_id, DailyCostEntry.well_id == well.id,
@@ -941,9 +973,15 @@ def _get_sub_activity(
     *,
     existing: bool,
     label: str,
-) -> WellSubActivity | None:
+) -> WellSubActivity:
     if not sub_activity_id:
-        return None
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{label}: select the well sub activity for this line. Configuring the well's sub activities "
+                "in Rig & Well Management is mandatory before daily cost entry."
+            ),
+        )
     row = db.scalar(
         select(WellSubActivity).where(
             WellSubActivity.id == sub_activity_id,
@@ -998,9 +1036,12 @@ def _base_fields(
     quantity_unit: str = "unit",
     existing_row: Any | None,
     snapshots: dict[tuple[str, str], DailyCostCatalogueRateSnapshot],
-) -> tuple[dict[str, Any], Activity, DailyCostBaselineSection | None, DailyCostBaselinePhase | None, Vendor | None, WellSubActivity | None]:
+) -> tuple[dict[str, Any], Activity, DailyCostBaselineSection | None, DailyCostBaselinePhase | None, Vendor | None, WellSubActivity]:
     existing = existing_row is not None
     activity = _get_activity(db, entry.organization_id, data.activity_id, existing=existing, label=label)
+    # Classification (Planned / UPA / NPT) comes from the Master Data Activity,
+    # which already serves that job; nothing is entered on the daily line.
+    classification = classify_activity(activity)
     section, phase = _validate_scope(
         entry.baseline,
         hole_section_id=data.hole_section_id,
@@ -1013,7 +1054,7 @@ def _base_fields(
     )
     vendor = _get_vendor(db, entry.organization_id, data.vendor_id, existing=existing, label=label)
     party = data.party_name or (vendor.vendor_name if vendor else "")
-    if data.classification in ("UPA", "NPT") and not (vendor or party):
+    if classification in ("UPA", "NPT") and not (vendor or party):
         raise HTTPException(status_code=422, detail=f"{label}: identify the vendor or responsible party for UPA/NPT")
 
     code_currency = (data.currency or "").strip().upper()
@@ -1046,7 +1087,7 @@ def _base_fields(
             "sub_activity_party_snapshot": sub_activity.responsible_party if sub_activity else "",
             "hole_section_id": section.hole_section_id if section else None,
             "phase_id": phase.phase_id if phase else None,
-            "classification": data.classification,
+            "classification": classification,
             "vendor_id": vendor.id if vendor else None,
             "vendor_code_snapshot": vendor.vendor_code if vendor else "",
             "vendor_name_snapshot": vendor.vendor_name if vendor else "",
@@ -1087,6 +1128,7 @@ def _service_rate_or_422(
     entry: DailyCostEntry,
     line: DailyCostServiceLineIn,
     service: Service,
+    classification: str,
 ) -> DailyCostBaselineServiceRate | None:
     baseline = entry.baseline
     if line.baseline_service_rate_id:
@@ -1102,10 +1144,10 @@ def _service_rate_or_422(
         if rate.rate_kind == "day_rate" and line.charge_category != rate.charge_category:
             raise HTTPException(status_code=422, detail=f"Service {service.service_code}: charge category must match the selected Day Rate")
         return rate
-    if line.classification == "Planned":
+    if classification == "Planned":
         raise HTTPException(
             status_code=422,
-            detail=f"Service {service.service_code}: select its saved AFE rate, or classify an unplanned service as UPA/NPT with a justified rate.",
+            detail=f"Service {service.service_code}: select its saved AFE rate, or record the service under a UPA/NPT Master Data Activity with a justified rate.",
         )
     if line.override_rate is None:
         raise HTTPException(status_code=422, detail=f"Service {service.service_code}: an unplanned service needs an entered rate and reason")
@@ -1144,13 +1186,6 @@ def _normalise_service(
     )
     if service.is_deleted and old is None:
         raise HTTPException(status_code=422, detail=f"Service {service.service_code} is inactive in Master Data")
-    rate = _service_rate_or_422(entry, line, service)
-    basis = rate.charging_basis if rate else line.charging_basis
-    if not basis:
-        raise HTTPException(status_code=422, detail=f"Service {service.service_code}: select a charging basis for this line")
-    _validate_service_unit(line, basis, f"Service {service.service_code}")
-    if basis in ("Per Service Rate", "Per Section Rate") and not line.hole_section_id:
-        raise HTTPException(status_code=422, detail=f"Service {service.service_code}: select a hole section for this charging basis")
     base, activity, section, phase, selected_vendor, sub_activity = _base_fields(
         db,
         entry,
@@ -1160,6 +1195,13 @@ def _normalise_service(
         existing_row=old,
         snapshots=snapshots,
     )
+    rate = _service_rate_or_422(entry, line, service, base["classification"])
+    basis = rate.charging_basis if rate else line.charging_basis
+    if not basis:
+        raise HTTPException(status_code=422, detail=f"Service {service.service_code}: select a charging basis for this line")
+    _validate_service_unit(line, basis, f"Service {service.service_code}")
+    if basis in ("Per Service Rate", "Per Section Rate") and not line.hole_section_id:
+        raise HTTPException(status_code=422, detail=f"Service {service.service_code}: select a hole section for this charging basis")
     default_vendor = None
     if line.vendor_id is None and service.vendor_id:
         default_vendor = _get_vendor(db, entry.organization_id, service.vendor_id, existing=old is not None, label=f"Service {service.service_code}")
@@ -1392,6 +1434,29 @@ def _normalise_catalogue_line(
     return base, old, label
 
 
+def _reject_duplicate_service_sub_activity(services: list[dict[str, Any]]) -> None:
+    """One service may repeat on a date only under a different well sub activity.
+
+    A service operated 18h under sub activity 1, 3h under sub activity 2 and
+    3h under sub activity 3 is three separate lines; the same service recorded
+    twice for the same sub activity on the same well/date is a duplicate entry.
+    """
+    seen: dict[tuple[str, str], str] = {}
+    for fields in services:
+        key = (fields["service_id"], fields.get("sub_activity_id") or "")
+        code = fields.get("service_code_snapshot") or fields["service_id"]
+        sub_label = fields.get("sub_activity_code_snapshot") or "the same sub activity"
+        if key in seen:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Service {code} is already entered for sub activity {sub_label} on this date. "
+                    "The same service can be recorded again only with a different sub activity."
+                ),
+            )
+        seen[key] = code
+
+
 def _normalize_payload(
     db: Session,
     entry: DailyCostEntry,
@@ -1410,6 +1475,7 @@ def _normalize_payload(
         fields["sort_order"] = order
         fields["id"] = old.id if old else uid()
         services.append(fields)
+    _reject_duplicate_service_sub_activity(services)
     for order, line in enumerate(payload.consumables):
         fields, old, label = _normalise_catalogue_line(
             db, entry, line, CONSUMABLE_KIND_MODEL[line.item_kind][0], line.item_kind, line.item_id,
@@ -2803,7 +2869,7 @@ def _saved_inputs(entry: DailyCostEntry) -> tuple[list[DailyCostServiceLineIn], 
         return {
             "id": row.id, "activity_id": row.activity_id, "hole_section_id": row.hole_section_id,
             "phase_id": row.phase_id, "sub_activity_id": row.sub_activity_id,
-            "classification": row.classification, "vendor_id": row.vendor_id, "party_name": row.party_name,
+            "vendor_id": row.vendor_id, "party_name": row.party_name,
             "quantity": row.quantity, "currency": row.currency, "override_rate": row.override_rate,
             "override_reason": row.override_reason, "remarks": row.remarks,
         }
@@ -2896,13 +2962,19 @@ def import_daily_cost(
                 if phase is None:
                     raise ValueError(f"Phase '{phase_value}' is not configured under section {section.section_code_snapshot}")
             sub_value = _import_value(row, "sub_activity_code", "sub_activity_id", "sub_activity")
-            sub_activity = _import_lookup(sub_activity_rows, sub_value, "sub_activity_code", "Sub Activity") if sub_value else None
-            if sub_activity and sub_activity.activity_id != activity.id:
+            if not sub_value:
+                raise ValueError(
+                    "Sub Activity code is required; configure the well's sub activities "
+                    "in Rig & Well Management first"
+                )
+            sub_activity = _import_lookup(sub_activity_rows, sub_value, "sub_activity_code", "Sub Activity")
+            if sub_activity.activity_id != activity.id:
                 raise ValueError("The selected Sub Activity does not belong to the selected Activity")
             vendor_value = _import_value(row, "vendor_code", "vendor_id", "vendor")
             vendor = _import_lookup(vendor_rows, vendor_value, "vendor_code", "Vendor") if vendor_value else None
-            classification = str(_import_value(row, "classification", default="Planned")).strip().upper()
-            classification = {"PLANNED": "Planned", "UPA": "UPA", "NPT": "NPT"}.get(classification, classification)
+            # Classification (Planned / UPA / NPT) is derived from the Master Data
+            # Activity; a legacy "classification" column in the file is ignored.
+            classification = classify_activity(activity)
             quantity = _import_value(row, "quantity", "qty", default="1")
             currency = str(_import_value(row, "currency", "currency_code", default="")).strip().upper()
             override_value = _import_value(row, "override_rate", "daily_rate_override", default=None)
@@ -2913,8 +2985,7 @@ def import_daily_cost(
                 "activity_id": activity.id,
                 "hole_section_id": section.hole_section_id if section else None,
                 "phase_id": phase.phase_id if phase else None,
-                "sub_activity_id": sub_activity.id if sub_activity else None,
-                "classification": classification,
+                "sub_activity_id": sub_activity.id,
                 "vendor_id": vendor.id if vendor else None,
                 "party_name": party_name,
                 "quantity": quantity,

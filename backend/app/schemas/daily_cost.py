@@ -6,6 +6,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Classification (Planned / UPA / NPT) is no longer entered on daily cost
+# lines: the Master Data Activity already carries that meaning, so every line's
+# classification is derived from its selected Activity. The type is kept only
+# for read/analysis outputs.
 CostClassification = Literal["Planned", "UPA", "NPT"]
 ChargingBasis = Literal["Day Rate", "Per Service Rate", "Per Section Rate"]
 ChargeCategory = Literal[
@@ -56,7 +60,13 @@ class DailyCostEntryCreate(_Strict):
 
 
 class DailyCostLineInput(_Strict):
-    """Common typed fields for each actual cost line."""
+    """Common typed fields for each actual cost line.
+
+    ``sub_activity_id`` is mandatory on every saved line (the well's sub
+    activities must be configured in Rig & Well Management first); the service
+    layer enforces it together with the well/activity match. Classification is
+    intentionally absent: it is derived from the selected Master Data Activity.
+    """
 
     id: str | None = Field(default=None, max_length=36)
     client_key: str | None = Field(default=None, max_length=64)
@@ -64,7 +74,6 @@ class DailyCostLineInput(_Strict):
     hole_section_id: str | None = Field(default=None, max_length=36)
     phase_id: str | None = Field(default=None, max_length=36)
     sub_activity_id: str | None = Field(default=None, max_length=36)
-    classification: CostClassification = "Planned"
     vendor_id: str | None = Field(default=None, max_length=36)
     party_name: str = Field(default="", max_length=200)
     quantity: Decimal = Field(gt=0, le=Decimal("1000000"), max_digits=18, decimal_places=4)
@@ -94,8 +103,6 @@ class DailyCostLineInput(_Strict):
             raise ValueError("Give a reason of at least 3 characters for a daily rate override.")
         if self.override_rate is None and self.override_reason:
             raise ValueError("An override reason is only valid when an override rate is entered.")
-        if self.classification in ("UPA", "NPT") and not self.vendor_id and not self.party_name:
-            raise ValueError("UPA and NPT lines must identify the responsible vendor or party.")
         if self.phase_id and not self.hole_section_id:
             raise ValueError("Choose a hole section before selecting a phase.")
         return self

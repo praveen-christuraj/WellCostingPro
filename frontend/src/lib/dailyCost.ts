@@ -83,7 +83,7 @@ export type DailyCostEntry = {
 
 export type DailyCostLineBase = {
   id?: string | null; activity_id: string; hole_section_id: string | null; phase_id: string | null
-  sub_activity_id: string | null; classification: CostClassification; vendor_id: string | null; party_name: string
+  sub_activity_id: string | null; vendor_id: string | null; party_name: string
   quantity: string; currency: string; override_rate: string | null; override_reason: string; remarks: string
 }
 export type DailyCostServiceInput = DailyCostLineBase & {
@@ -103,6 +103,8 @@ export type DailyCostLineOutput = DailyCostLineBase & {
   id: string; activity_code: string; activity_name: string; section_code: string; section_name: string
   phase_code: string; phase_name: string; sub_activity_code: string; sub_activity_name: string
   sub_activity_party: string; vendor_code: string; vendor_name: string; quantity_unit: DailyQuantityUnit
+  /** Derived from the Master Data Activity; not entered on the line. */
+  classification: CostClassification
   captured_rate: string; effective_rate: string; exchange_rate: string; amount: string; standard_amount: string
   rate_source: string; rate_revision_number: number | null; rate_effective_date: string | null
   baseline_budget_line_id: string | null; budget_key: string; budget_name: string
@@ -154,7 +156,20 @@ export type DailyCostOverview = {
 export type DailyCostImportResult = { imported_count: number; error_count: number; errors: string[]; success: boolean }
 
 export const DAILY_COST_STATUSES: Record<DailyCostStatus, string> = { draft: 'Draft', submitted: 'Submitted' }
-export const DAILY_CLASSIFICATIONS: CostClassification[] = ['Planned', 'UPA', 'NPT']
+
+/**
+ * Classification (Planned / UPA / NPT) is not entered on daily cost lines: the
+ * Master Data Activity already carries that meaning. Mirrors the server rule in
+ * `app.services.daily_cost.classify_activity`.
+ */
+export function deriveClassification(
+  activity: Pick<DailyCostActivityOption, 'activity_code' | 'activity_name'> | null | undefined,
+): CostClassification {
+  const text = `${activity?.activity_code ?? ''} ${activity?.activity_name ?? ''}`.toLowerCase()
+  if (/\bnpt\b/.test(text) || /non[ -]?productive/.test(text)) return 'NPT'
+  if (/\bupa\b/.test(text) || text.includes('unplanned')) return 'UPA'
+  return 'Planned'
+}
 export const DAILY_CHARGE_CATEGORIES: ChargeCategory[] = [
   'Mobilization', 'Demobilization', 'Operation', 'Standby', 'Personnel-Operation', 'Personnel-Standby', 'Fixed Charge', 'Others',
 ]
@@ -186,7 +201,7 @@ export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
     remarks: day.entry.remarks,
     services: day.services.map(line => ({
       id: line.id, activity_id: line.activity_id, hole_section_id: line.hole_section_id,
-      phase_id: line.phase_id, sub_activity_id: line.sub_activity_id, classification: line.classification,
+      phase_id: line.phase_id, sub_activity_id: line.sub_activity_id,
       vendor_id: line.vendor_id, party_name: line.party_name, quantity: line.quantity,
       currency: line.currency, override_rate: line.override_rate, override_reason: line.override_reason,
       remarks: line.remarks, service_id: line.service_id, baseline_service_rate_id: line.baseline_service_rate_id,
@@ -194,14 +209,14 @@ export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
     })),
     consumables: day.consumables.map(line => ({
       id: line.id, activity_id: line.activity_id, hole_section_id: line.hole_section_id,
-      phase_id: line.phase_id, sub_activity_id: line.sub_activity_id, classification: line.classification,
+      phase_id: line.phase_id, sub_activity_id: line.sub_activity_id,
       vendor_id: line.vendor_id, party_name: line.party_name, quantity: line.quantity,
       currency: line.currency, override_rate: line.override_rate, override_reason: line.override_reason,
       remarks: line.remarks, category: line.category, item_kind: line.item_kind, item_id: line.item_id,
     })),
     tangibles: day.tangibles.map(line => ({
       id: line.id, activity_id: line.activity_id, hole_section_id: line.hole_section_id,
-      phase_id: line.phase_id, sub_activity_id: line.sub_activity_id, classification: line.classification,
+      phase_id: line.phase_id, sub_activity_id: line.sub_activity_id,
       vendor_id: line.vendor_id, party_name: line.party_name, quantity: line.quantity,
       currency: line.currency, override_rate: line.override_rate, override_reason: line.override_reason,
       remarks: line.remarks, tangible_id: line.tangible_id,

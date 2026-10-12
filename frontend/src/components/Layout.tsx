@@ -74,17 +74,17 @@ export default function Layout() {
 
   return <Box display="flex" flexDirection="column" minHeight="100vh">
     <AppBar position="sticky" elevation={0} sx={{ bgcolor: 'background.paper', color: 'text.primary', borderBottom: '1px solid', borderColor: 'divider' }}>
-      <Toolbar sx={{ gap: 2, minHeight: 64, px: { xs: 2, sm: 3.5 } }}>
+      <Toolbar sx={{ gap: { xs: 1, sm: 1.5 }, minHeight: { xs: 58, sm: 62 }, px: { xs: 1.5, sm: 2.5 }, flexWrap: 'wrap' }}>
         <IconButton sx={{ display: { md: 'none' }, color: 'text.primary' }} onClick={e => setMobileAnchor(e.currentTarget)} aria-label="Open navigation"><MenuRounded/></IconButton>
         <Brand/>
-        {!compact && <Box display="flex" alignItems="center" gap={.5} ml={3}>
+        {!compact && <Box display="flex" alignItems="center" flexWrap="wrap" rowGap={.25} columnGap={.25} sx={{ ml: { xs: 0, md: 2 }, minWidth: 0, flex: '1 1 auto' }}>
           <NavLink to="/" end className={({ isActive }) => `topnav-item${isActive ? ' active' : ''}`}><DashboardOutlined sx={{ fontSize: 17 }}/>&nbsp;Dashboard</NavLink>
           {modulesForUser.map(module => {
             const active = currentModule?.label === module.label
             return <Button key={module.label} className={`topnav-item${active ? ' active' : ''}`} onClick={e => setModuleAnchor({ el: e.currentTarget, module })} endIcon={<KeyboardArrowDownRounded sx={{ fontSize: 18 }}/>}>{module.label}</Button>
           })}
         </Box>}
-        <Box display="flex" alignItems="center" gap={1.2} ml="auto">
+        <Box display="flex" alignItems="center" gap={1.2} ml="auto" sx={{ flex: '0 0 auto' }}>
           <Tooltip title={mode === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}>
             <IconButton onClick={toggle} size="small" aria-label="Toggle color theme" sx={{ color: 'text.secondary' }}>{mode === 'light' ? <DarkModeOutlined sx={{ fontSize: 20 }}/> : <LightModeOutlined sx={{ fontSize: 20 }}/>}</IconButton>
           </Tooltip>
@@ -113,8 +113,8 @@ export default function Layout() {
       <MenuItem onClick={() => { setAccountAnchor(null); logout() }}><LogoutRounded sx={{ mr: 1, fontSize: 18 }}/> Sign out</MenuItem>
     </Menu>
 
-    <Box component="main" sx={{ flexGrow: 1, minWidth: 0 }}>
-      <Box sx={{ px: { xs: 2.5, sm: 4, xl: 6 }, py: { xs: 3, sm: 4 }, maxWidth: 1600, mx: 'auto' }}><Outlet/></Box>
+    <Box component="main" sx={{ flexGrow: 1, minWidth: 0, width: '100%', overflowX: 'clip' }}>
+      <Box sx={{ px: { xs: 2, sm: 3, xl: 4 }, py: { xs: 2.5, sm: 3 }, maxWidth: 1600, mx: 'auto' }}><Outlet/></Box>
     </Box>
 
     <FormDialog open={passwordDialog} title="Change your password" subtitle="You will be signed out of all sessions after updating." onClose={() => setPasswordDialog(false)} onSubmit={changePassword} busy={savingPassword} submitLabel="Update password">
