@@ -112,6 +112,10 @@ export default function DailyCostManagement() {
   const selectedAfe = afes.find(afe => afe.id === afeId)
   const createDateValid = isValidCostDate(costDate)
   const selectedDuplicate = rows.find(row => row.well_id === wellId && row.afe_id === afeId && row.cost_date === costDate)
+  // Configuring the well sub activity in Rig & Well Management is mandatory
+  // before daily cost entry: every line is recorded under an Activity + Sub activity.
+  const wellSubActivities = useMemo(() => reference?.sub_activities.filter(item => item.well_id === wellId) ?? [], [reference, wellId])
+  const missingSubActivities = Boolean(selectedWell) && wellSubActivities.length === 0
 
   useEffect(() => {
     if (!createOpen || !reference) return
@@ -133,6 +137,10 @@ export default function DailyCostManagement() {
   const createEntry = async () => {
     if (!selectedWell || !selectedAfe) {
       setCreateError('Choose a configured well and a saved AFE estimate.')
+      return
+    }
+    if (missingSubActivities) {
+      setCreateError('Configure the well sub activities for this well in Rig & Well Management before entering daily costs.')
       return
     }
     if (!isValidCostDate(costDate)) {
@@ -403,7 +411,7 @@ export default function DailyCostManagement() {
       </Typography>}
     </>}
 
-    <FormDialog open={createOpen} title="Start a daily cost sheet" subtitle="The first sheet locks the AFE estimate, FX factors, well plan, service rates and Master Data catalogue prices for this well/AFE." onClose={() => setCreateOpen(false)} onSubmit={() => void createEntry()} busy={creating} submitLabel="Create daily sheet" submitDisabled={!selectedAfe || !selectedWell || !createDateValid || Boolean(selectedDuplicate)}>
+    <FormDialog open={createOpen} title="Start a daily cost sheet" subtitle="The first sheet locks the AFE estimate, FX factors, well plan, service rates and Master Data catalogue prices for this well/AFE." onClose={() => setCreateOpen(false)} onSubmit={() => void createEntry()} busy={creating} submitLabel="Create daily sheet" submitDisabled={!selectedAfe || !selectedWell || !createDateValid || Boolean(selectedDuplicate) || missingSubActivities}>
       <Box display="grid" gap={1.6}>
         {!wells.length && <Alert severity="warning">Create and sign off a well plan in Rig &amp; Well Management before starting daily cost tracking.</Alert>}
         <TextField select required label="Configured well" value={wellId} onChange={event => {
@@ -416,6 +424,9 @@ export default function DailyCostManagement() {
             return <MenuItem key={well.id} value={well.id}>{well.well_code} · {well.well_name} — {rig?.rig_code ?? 'Rig'}</MenuItem>
           })}
         </TextField>
+        {missingSubActivities && <Alert severity="warning" sx={{ py: 0 }} action={<Button component={RouterLink} to="/rig-well/sub-activities" size="small" color="inherit" onClick={() => setCreateOpen(false)}>Open well sub activities</Button>}>
+          Configuring the well sub activity in Rig &amp; Well Management is mandatory for daily cost entry. Add the well's sub activities first — every cost line is recorded under an Activity and Sub activity.
+        </Alert>}
         <TextField select required label="Saved AFE estimate" value={afeId} onChange={event => setAfeId(event.target.value)} disabled={!afes.length}>
           {afes.map(afe => <MenuItem key={afe.id} value={afe.id}>{afe.display_name}</MenuItem>)}
         </TextField>

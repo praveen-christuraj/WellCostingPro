@@ -24,7 +24,7 @@ import {
 } from '../lib/dailyCost'
 
 type GridLine = {
-  id: string; lineIndex: number; item: string; activity: string; section: string; classification: string
+  id: string; lineIndex: number; item: string; activity: string; section: string; subActivity: string
   vendor: string; quantity: string; quantityUnit: string; rate: string; currency: string
   amount: string; standardAmount: string; source: string; budget: string; overrideReason: string; remarks: string
 }
@@ -45,10 +45,6 @@ function amountForRate(rate: string, quantity: string, unit: string, basis?: str
     : Number(quantity) / (basis === 'Day Rate' && unit === 'hours' ? 24 : 1)
   const amount = Number(rate) * billableQuantity
   return Number.isFinite(amount) ? amount.toFixed(2) : '—'
-}
-
-function classificationTone(value: string): 'neutral' | 'warning' | 'info' {
-  return value === 'UPA' ? 'warning' : value === 'NPT' ? 'info' : 'neutral'
 }
 
 export default function DailyCostSheet() {
@@ -459,9 +455,12 @@ export default function DailyCostSheet() {
       else if (sourceRate !== '0') localAmount = amountForRate(sourceRate, line.quantity, 'unit')
       const activity = activityName(line.activity_id)
       const vendor = vendorName(line.vendor_id, line.party_name)
+      const sub = priced
+        ? (priced.sub_activity_code ? `${priced.sub_activity_code} · ${priced.sub_activity_name}` : priced.sub_activity_name || '—')
+        : reference.sub_activities.find(item => item.id === line.sub_activity_id)?.display_name ?? '—'
       return {
         id: line.id || `${kind}-${index}`, lineIndex: index, item, activity,
-        section: scopeName(line.hole_section_id, line.phase_id), classification: line.classification,
+        section: scopeName(line.hole_section_id, line.phase_id), subActivity: sub,
         vendor, quantity: line.quantity, quantityUnit: 'quantity_unit' in line ? line.quantity_unit : '',
         rate: `${dailyMoney(priced?.effective_rate ?? sourceRate, priced?.currency ?? sourceCurrency)}${sourceLabel ? ` · ${sourceLabel}` : ''}`,
         currency: priced?.currency ?? sourceCurrency,
@@ -479,8 +478,8 @@ export default function DailyCostSheet() {
     const columns: ColDef<GridLine>[] = [
       { headerName: 'ITEM', field: 'item', minWidth: 190, flex: 1.2 },
       { headerName: 'ACTIVITY', field: 'activity', minWidth: 140 },
+      { headerName: 'SUB ACTIVITY', field: 'subActivity', minWidth: 140 },
       { headerName: 'SECTION / PHASE', field: 'section', minWidth: 140 },
-      { headerName: 'CLASS', field: 'classification', minWidth: 105, cellRenderer: (params: ICellRendererParams<GridLine>) => <Tag tone={classificationTone(String(params.value ?? ''))}>{String(params.value ?? '')}</Tag> },
       { headerName: 'RESPONSIBLE PARTY', field: 'vendor', minWidth: 150 },
       { headerName: 'QUANTITY', field: 'quantity', minWidth: 115, valueGetter: params => params.data ? `${params.data.quantity} ${params.data.quantityUnit}`.trim() : '' },
       { headerName: 'RATE / SOURCE', field: 'rate', minWidth: 190, tooltipField: 'overrideReason' },
@@ -513,7 +512,7 @@ export default function DailyCostSheet() {
     setImportOpen(true)
   }
   const importHeaders = [
-    'line_type', 'activity_code', 'section_code', 'phase_code', 'sub_activity_code', 'classification',
+    'line_type', 'activity_code', 'section_code', 'phase_code', 'sub_activity_code',
     'vendor_code', 'party_name', 'service_code', 'baseline_service_rate_id', 'charging_basis', 'charge_category',
     'quantity_unit', 'category', 'item_kind', 'item_code', 'quantity', 'currency', 'override_rate', 'override_reason', 'remarks',
   ]
@@ -527,7 +526,8 @@ export default function DailyCostSheet() {
         : ['Mobilization', 'Demobilization', 'Fixed Charge'].includes(category) ? 'unit' : 'days'
     downloadTemplate('daily-cost-import-template.csv', importHeaders, {
       line_type: 'Service', activity_code: reference.activities[0]?.activity_code || 'DRILL',
-      section_code: section?.section_code ?? '', phase_code: phase?.phase_code ?? '', classification: 'Planned',
+      section_code: section?.section_code ?? '', phase_code: phase?.phase_code ?? '',
+      sub_activity_code: reference.sub_activities.find(item => item.well_id === entry.well_id)?.sub_activity_code ?? '',
       vendor_code: '', service_code: rate?.service_code ?? 'SERVICE-001',
       baseline_service_rate_id: rate?.id ?? '', charging_basis: rate?.charging_basis ?? 'Day Rate',
       charge_category: category, quantity_unit: unit, quantity: '1', currency: rate?.currency ?? standard,
@@ -679,6 +679,8 @@ export default function DailyCostSheet() {
       initialLine={lineEditor?.index === null || !lineEditor ? null : lineEditor.kind === 'service'
         ? payload.services[lineEditor.index] : lineEditor.kind === 'consumable'
           ? payload.consumables[lineEditor.index] : payload.tangibles[lineEditor.index]}
+      serviceLines={payload.services}
+      lineIndex={lineEditor?.kind === 'service' ? lineEditor.index : null}
       baseline={baseline} reference={reference} wellId={entry.well_id}
       onClose={() => setLineEditor(null)} onSave={addOrEditLine}
     />
@@ -696,7 +698,7 @@ export default function DailyCostSheet() {
 
     <FormDialog open={importOpen} title="Import daily actuals" subtitle="Upload one CSV or Excel file. Rows are validated as a batch; invalid files make no changes and existing lines are retained." onClose={() => { if (!importBusy) setImportOpen(false) }} onSubmit={() => void importDailyCosts()} busy={importBusy} submitLabel={`Validate and import${importRows.length ? ` (${importRows.length})` : ''}`} submitDisabled={!importRows.length || !editable} maxWidth="md">
       <Box display="grid" gap={1.4}>
-        <Alert severity="info">Use the template for line_type (Service, Consumable or Tangible), activity_code and the item/service code. Planned services must include their baseline_service_rate_id; UPA/NPT manual rates require an override reason.</Alert>
+        <Alert severity="info">Use the template for line_type (Service, Consumable or Tangible), activity_code, sub_activity_code and the item/service code. The Activity classifies the line (Planned / UPA / NPT); planned services must include their baseline_service_rate_id, while UPA/NPT manual rates require an override reason. The same service can appear again only under a different sub_activity_code.</Alert>
         <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
           <Button variant="outlined" startIcon={<CloudUploadOutlined/>} onClick={() => fileInput.current?.click()}>Choose CSV / XLSX</Button>
           <Button variant="text" startIcon={<DownloadOutlined/>} onClick={exportTemplate}>Download CSV template</Button>

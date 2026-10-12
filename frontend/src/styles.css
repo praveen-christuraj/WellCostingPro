@@ -17,6 +17,13 @@ html[data-theme='dark'] {
   --login-panel-fg: #E6EDF5;
   --login-panel-muted: #A7B8CB;
 }
+/* Default page zoom 87.5% (12.5% smaller): the whole application fits every
+   resolution — laptop, wide desktop and scaled displays — without page-level
+   horizontal scrolling. Tables/grid areas keep their own contained scrolling. */
+html { zoom: 0.875; }
+/* Safety net: nothing may push the page sideways; wide content scrolls inside
+   its own table/grid container instead. */
+html, body { overflow-x: clip; }
 body { margin: 0; } * { box-sizing: border-box; }
 
 .brand-mark { width: 38px; height: 38px; border-radius: 8px; background: #123A63; position: relative; overflow: hidden; flex: none; }
@@ -25,10 +32,10 @@ body { margin: 0; } * { box-sizing: border-box; }
 .brand-dot { position: absolute; right: 6px; top: 8px; width: 5px; height: 5px; border-radius: 50%; background: #8FB8E4; }
 
 .topnav-item {
-  display: inline-flex; align-items: center; gap: 7px;
+  display: inline-flex; align-items: center; gap: 6px;
   color: #5B6B7F; text-decoration: none;
-  padding: 8px 13px; border-radius: 6px;
-  font: 600 13px 'DM Sans', sans-serif;
+  padding: 7px 10px; border-radius: 6px;
+  font: 600 12.5px 'DM Sans', sans-serif;
   background: transparent; border: 0; cursor: pointer; white-space: nowrap;
 }
 .topnav-item:hover { background: #EDF2F8; color: #123A63; }

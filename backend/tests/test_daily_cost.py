@@ -83,7 +83,7 @@ def _post(client, path, headers, payload, status=201):
     return response.json()
 
 
-def _setup_daily_sheet(client, headers):
+def _setup_daily_sheet(client, headers, *, with_sub_activities=True, create_entry=True):
     assert client.post("/api/v1/master-data/currencies", headers=headers, json={
         "code": "USD", "name": "US Dollar", "symbol": "$",
     }).status_code == 201
@@ -93,6 +93,8 @@ def _setup_daily_sheet(client, headers):
     hole = _post(client, "/api/v1/master-data/hole-sections", headers, {"code": "17-1/2", "name": "Surface hole"})
     phase = _post(client, "/api/v1/master-data/phases", headers, {"code": "DRILL", "name": "Drilling"})
     activity = _post(client, "/api/v1/master-data/activities", headers, {"code": "DRL", "name": "Drilling"})
+    activity_upa = _post(client, "/api/v1/master-data/activities", headers, {"code": "UPA", "name": "Unplanned activity"})
+    activity_npt = _post(client, "/api/v1/master-data/activities", headers, {"code": "NPT", "name": "Non-productive time"})
     group = _post(client, "/api/v1/master-data/catalogue-options", headers, {
         "list_key": "mud_chemical_group", "value": "Weighting agent",
     })
@@ -125,6 +127,19 @@ def _setup_daily_sheet(client, headers):
         "action": "configure", "remarks": "Plan checked",
     })
     assert transition.status_code == 200, transition.text
+
+    def make_sub(code, activity_id):
+        return _post(client, "/api/v1/rig-well/sub-activities", headers, {
+            "well_id": well["id"], "sub_activity_code": code, "sub_activity_name": f"Sub activity {code}",
+            "activity_id": activity_id, "responsible_party": "Operations team",
+            "description": "Execute the planned work step.",
+        })
+
+    sub1 = make_sub("SA-D1", activity["id"]) if with_sub_activities else None
+    sub2 = make_sub("SA-D2", activity["id"]) if with_sub_activities else None
+    sub3 = make_sub("SA-D3", activity["id"]) if with_sub_activities else None
+    sub_upa = make_sub("SA-U1", activity_upa["id"]) if with_sub_activities else None
+    sub_npt = make_sub("SA-N1", activity_npt["id"]) if with_sub_activities else None
     afe = _post(client, "/api/v1/afe/afes", headers, {
         "rig_id": rig["id"], "well_id": well["id"], "afe_code": "AFE-01", "afe_name": "Drilling AFE",
         "afe_type": "Drilling", "remarks": "",
@@ -145,11 +160,15 @@ def _setup_daily_sheet(client, headers):
         "tangibles": [], "standard_currency": "", "exchange_rates": [],
     })
     assert estimate.status_code == 200, estimate.text
-    created = _post(client, "/api/v1/daily-cost/entries", headers, {
-        "well_id": well["id"], "afe_id": afe["id"], "cost_date": "2026-10-10", "remarks": "Night shift",
-    })
-    return {
+    setup = {
         "activity": activity,
+        "activity_upa": activity_upa,
+        "activity_npt": activity_npt,
+        "sub1": sub1,
+        "sub2": sub2,
+        "sub3": sub3,
+        "sub_upa": sub_upa,
+        "sub_npt": sub_npt,
         "chemical": chemical,
         "vendor": vendor,
         "service": service,
@@ -158,9 +177,15 @@ def _setup_daily_sheet(client, headers):
         "rig": rig,
         "well": well,
         "afe": afe,
-        "entry": created["entry"],
-        "baseline": client.get(f"/api/v1/daily-cost/entries/{created['entry']['id']}/baseline", headers=headers).json(),
     }
+    if not create_entry:
+        return setup
+    created = _post(client, "/api/v1/daily-cost/entries", headers, {
+        "well_id": well["id"], "afe_id": afe["id"], "cost_date": "2026-10-10", "remarks": "Night shift",
+    })
+    setup["entry"] = created["entry"]
+    setup["baseline"] = client.get(f"/api/v1/daily-cost/entries/{created['entry']['id']}/baseline", headers=headers).json()
+    return setup
 
 
 def test_daily_cost_locks_rates_prices_bulk_actuals_and_tracks_submission():
@@ -181,7 +206,8 @@ def test_daily_cost_locks_rates_prices_bulk_actuals_and_tracks_submission():
             "remarks": "Night shift actuals",
             "services": [{
                 "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
-                "phase_id": setup["phase"]["id"], "classification": "Planned", "vendor_id": setup["vendor"]["id"],
+                "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub1"]["id"],
+                "vendor_id": setup["vendor"]["id"],
                 "quantity": "12", "quantity_unit": "hours", "currency": "USD", "override_rate": "80",
                 "override_reason": "Agreed reduced rate for night shift", "remarks": "Half-day operation",
                 "service_id": setup["service"]["id"], "baseline_service_rate_id": rate["id"],
@@ -189,7 +215,7 @@ def test_daily_cost_locks_rates_prices_bulk_actuals_and_tracks_submission():
             }],
             "consumables": [{
                 "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
-                "phase_id": setup["phase"]["id"], "classification": "Planned", "vendor_id": None,
+                "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub1"]["id"], "vendor_id": None,
                 "quantity": "10", "currency": "USD", "override_rate": None, "override_reason": "",
                 "remarks": "Barite usage", "category": "Mud Chemicals", "item_kind": "mud_chemical",
                 "item_id": setup["chemical"]["id"],
@@ -216,8 +242,9 @@ def test_daily_cost_locks_rates_prices_bulk_actuals_and_tracks_submission():
         assert bulk_budget["item_code"].startswith("BULK-")
 
         upline = {
-            "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
-            "phase_id": setup["phase"]["id"], "classification": "UPA", "vendor_id": setup["vendor"]["id"],
+            "activity_id": setup["activity_upa"]["id"], "hole_section_id": setup["hole"]["id"],
+            "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub_upa"]["id"],
+            "vendor_id": setup["vendor"]["id"],
             "quantity": "1", "quantity_unit": "days", "currency": "USD", "override_rate": "300",
             "override_reason": "Unplanned diagnostic call-out", "remarks": "", "service_id": setup["service"]["id"],
             "baseline_service_rate_id": None, "charging_basis": "Day Rate", "charge_category": "Operation",
@@ -229,8 +256,8 @@ def test_daily_cost_locks_rates_prices_bulk_actuals_and_tracks_submission():
         assert updated.json()["warnings"]
 
         imported = client.post(f"/api/v1/daily-cost/entries/{entry_id}/import", headers=headers, json={"rows": [{
-            "line_type": "Service", "activity_code": "DRL", "service_code": "MUD-LOG",
-            "baseline_service_rate_id": rate["id"], "classification": "Planned", "charge_category": "Operation",
+            "line_type": "Service", "activity_code": "DRL", "sub_activity_code": "SA-D2", "service_code": "MUD-LOG",
+            "baseline_service_rate_id": rate["id"], "charge_category": "Operation",
             "quantity": "1", "quantity_unit": "days", "currency": "USD", "remarks": "Imported day",
         }]})
         assert imported.status_code == 200, imported.text
@@ -281,14 +308,26 @@ def test_daily_cost_is_tenant_scoped_and_rejects_unjustified_upa():
 
         invalid = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=north, json={
             "remarks": "", "services": [{
-                "activity_id": setup["activity"]["id"], "classification": "UPA", "quantity": "1",
-                "currency": "USD", "service_id": setup["service"]["id"], "charging_basis": "Day Rate",
-                "charge_category": "Operation", "quantity_unit": "days", "override_rate": "200",
-                "override_reason": "", "party_name": "Acme Services",
+                "activity_id": setup["activity_upa"]["id"], "sub_activity_id": setup["sub_upa"]["id"],
+                "quantity": "1", "currency": "USD", "service_id": setup["service"]["id"],
+                "charging_basis": "Day Rate", "charge_category": "Operation", "quantity_unit": "days",
+                "override_rate": "200", "override_reason": "", "party_name": "Acme Services",
             }], "consumables": [], "tangibles": [],
         })
         assert invalid.status_code == 422
         assert "reason" in invalid.text.lower()
+
+        # UPA/NPT work (derived from the Master Data Activity) must identify who is responsible.
+        unattributed = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=north, json={
+            "remarks": "", "services": [{
+                "activity_id": setup["activity_upa"]["id"], "sub_activity_id": setup["sub_upa"]["id"],
+                "quantity": "1", "currency": "USD", "service_id": setup["service"]["id"],
+                "charging_basis": "Day Rate", "charge_category": "Operation", "quantity_unit": "days",
+                "override_rate": "200", "override_reason": "Unplanned call-out", "party_name": "",
+            }], "consumables": [], "tangibles": [],
+        })
+        assert unattributed.status_code == 422
+        assert "vendor or responsible party" in unattributed.text.lower()
 
 
 def test_daily_cost_import_reports_an_unknown_charging_basis_instead_of_failing():
@@ -298,7 +337,9 @@ def test_daily_cost_import_reports_an_unknown_charging_basis_instead_of_failing(
         setup = _setup_daily_sheet(client, headers)
         entry_id = setup["entry"]["id"]
         response = client.post(f"/api/v1/daily-cost/entries/{entry_id}/import", headers=headers, json={"rows": [{
-            "line_type": "Service", "activity_code": "DRL", "service_code": "MUD-LOG",
+            "line_type": "Service", "activity_code": "NPT", "sub_activity_code": "SA-N1", "service_code": "MUD-LOG",
+            # A legacy "classification" column is accepted in files but ignored:
+            # classification is derived from the selected Master Data Activity.
             "classification": "NPT", "charging_basis": "Monthly", "quantity": "1",
             "quantity_unit": "days", "currency": "USD", "override_rate": "150",
             "override_reason": "Unplanned call-out", "party_name": "Acme Services",
@@ -309,13 +350,15 @@ def test_daily_cost_import_reports_an_unknown_charging_basis_instead_of_failing(
 
         # The same value written the way an operator types it is accepted.
         accepted = client.post(f"/api/v1/daily-cost/entries/{entry_id}/import", headers=headers, json={"rows": [{
-            "line_type": "Service", "activity_code": "DRL", "service_code": "MUD-LOG",
+            "line_type": "Service", "activity_code": "NPT", "sub_activity_code": "SA-N1", "service_code": "MUD-LOG",
             "classification": "NPT", "charging_basis": "day rate", "quantity": "1",
             "quantity_unit": "days", "currency": "USD", "override_rate": "150",
             "override_reason": "Unplanned call-out", "party_name": "Acme Services",
         }]})
         assert accepted.status_code == 200, accepted.text
         assert accepted.json()["success"] is True, accepted.text
+        saved_line = client.get(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers).json()["services"][0]
+        assert saved_line["classification"] == "NPT"
 
 
 def test_daily_cost_reference_and_sheet_survive_an_unusable_afe():
@@ -374,15 +417,15 @@ def test_well_cost_summary_reports_daily_and_factor_views():
                 "remarks": "day actuals",
                 "services": [{
                     "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
-                    "phase_id": setup["phase"]["id"], "classification": "Planned",
+                    "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub1"]["id"],
                     "vendor_id": setup["vendor"]["id"], "quantity": "12", "quantity_unit": "hours",
                     "currency": "USD", "service_id": setup["service"]["id"],
                     "baseline_service_rate_id": rate["id"], "charging_basis": "Day Rate",
                     "charge_category": "Operation",
                 }],
                 "consumables": [{
-                    "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
-                    "phase_id": setup["phase"]["id"], "classification": "UPA",
+                    "activity_id": setup["activity_upa"]["id"], "hole_section_id": setup["hole"]["id"],
+                    "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub_upa"]["id"],
                     "vendor_id": setup["vendor"]["id"], "quantity": "3", "currency": "USD",
                     "override_rate": "50", "override_reason": "Extra mud on the margin",
                     "category": "Mud Chemicals", "item_kind": "mud_chemical", "item_id": setup["chemical"]["id"],
@@ -419,9 +462,11 @@ def test_well_cost_summary_reports_daily_and_factor_views():
         factors = {group["dimension"]: group for group in data["factors"]}
         assert factors["classification"]["rows"][0]["code"] == "UPA"
         assert {row["code"] for row in factors["classification"]["rows"]} == {"Planned", "UPA"}
-        activity = factors["activity"]["rows"][0]
-        assert activity["code"] == "DRL" and Decimal(activity["amount"]) == Decimal("400.00")
-        assert Decimal(activity["share"]) == Decimal("100.00")
+        # Classification comes from the Master Data Activity (DRL = planned, UPA = unplanned).
+        activity_rows = {row["code"]: row for row in factors["activity"]["rows"]}
+        assert Decimal(activity_rows["DRL"]["amount"]) == Decimal("100.00")
+        assert Decimal(activity_rows["UPA"]["amount"]) == Decimal("300.00")
+        assert Decimal(factors["activity"]["rows"][0]["share"]) == Decimal("75.00")
         party = factors["party"]["rows"][0]
         assert party["name"] == "Acme Services"
         assert sorted(row["name"] for row in factors["rate_source"]["rows"]) == [
@@ -485,7 +530,7 @@ def test_one_time_day_rate_is_charged_once_even_when_quantity_is_entered():
             "remarks": "Mobilisation actual",
             "services": [{
                 "activity_id": setup["activity"]["id"], "hole_section_id": None, "phase_id": None,
-                "classification": "Planned", "vendor_id": setup["vendor"]["id"], "party_name": "",
+                "sub_activity_id": setup["sub1"]["id"], "vendor_id": setup["vendor"]["id"], "party_name": "",
                 # A quantity above one is intentionally supplied: the category is still one unit.
                 "quantity": "7", "quantity_unit": "unit", "currency": "USD",
                 "override_rate": None, "override_reason": "", "remarks": "",
@@ -518,6 +563,132 @@ def test_daily_cost_flush_database_errors_return_an_actionable_conflict():
         daily_cost_service._flush(session, operation="test baseline")
     assert raised.value.status_code == 409
     assert session.rolled_back is True
+
+
+def test_classify_activity_derives_planned_upa_and_npt():
+    """Classification is the Activity's job; naming conventions map to Planned/UPA/NPT."""
+    from types import SimpleNamespace
+
+    classify = daily_cost_service.classify_activity
+    assert classify(SimpleNamespace(activity_code="DRL", activity_name="Drilling")) == "Planned"
+    assert classify(SimpleNamespace(activity_code="UPA", activity_name="Unplanned activity")) == "UPA"
+    assert classify(SimpleNamespace(activity_code="X", activity_name="Unplanned fishing job")) == "UPA"
+    assert classify(SimpleNamespace(activity_code="NPT", activity_name="Waiting on weather")) == "NPT"
+    assert classify(SimpleNamespace(activity_code="X", activity_name="Non-Productive Time")) == "NPT"
+    assert classify(SimpleNamespace(activity_code="X", activity_name="Non productive")) == "NPT"
+
+
+def test_daily_cost_requires_configured_well_sub_activities():
+    """Daily cost entry for a well is blocked until its sub activities exist in Rig & Well Management."""
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers, with_sub_activities=False, create_entry=False)
+        blocked = client.post("/api/v1/daily-cost/entries", headers=headers, json={
+            "well_id": setup["well"]["id"], "afe_id": setup["afe"]["id"], "cost_date": "2026-10-10", "remarks": "",
+        })
+        assert blocked.status_code == 422, blocked.text
+        assert "sub activity" in blocked.text.lower()
+        assert "rig & well management" in blocked.text.lower()
+
+        _post(client, "/api/v1/rig-well/sub-activities", headers, {
+            "well_id": setup["well"]["id"], "sub_activity_code": "SA-D1", "sub_activity_name": "Sub activity SA-D1",
+            "activity_id": setup["activity"]["id"], "responsible_party": "Operations team",
+            "description": "Execute the planned work step.",
+        })
+        created = client.post("/api/v1/daily-cost/entries", headers=headers, json={
+            "well_id": setup["well"]["id"], "afe_id": setup["afe"]["id"], "cost_date": "2026-10-10", "remarks": "",
+        })
+        assert created.status_code == 201, created.text
+
+
+def test_daily_cost_lines_require_sub_activity_and_split_service_by_sub_activity():
+    """Same date + well: one service may repeat only when the sub activity changes (18h/3h/3h)."""
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        entry_id = setup["entry"]["id"]
+        rate = setup["baseline"]["service_rates"][0]
+
+        def line(sub_id, quantity):
+            return {
+                "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
+                "phase_id": setup["phase"]["id"], "sub_activity_id": sub_id,
+                "vendor_id": setup["vendor"]["id"], "quantity": quantity, "quantity_unit": "hours",
+                "currency": "USD", "service_id": setup["service"]["id"],
+                "baseline_service_rate_id": rate["id"], "charging_basis": "Day Rate",
+                "charge_category": "Operation",
+            }
+
+        def save(services):
+            return client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json={
+                "remarks": "Split operation", "services": services, "consumables": [], "tangibles": [],
+            })
+
+        # Every line must name the well sub activity configured in Rig & Well Management.
+        missing = save([{**line(setup["sub1"]["id"], "18"), "sub_activity_id": None}])
+        assert missing.status_code == 422, missing.text
+        assert "sub activity" in missing.text.lower()
+
+        # The same service twice under the same sub activity is a duplicate entry.
+        duplicate = save([line(setup["sub1"]["id"], "18"), line(setup["sub1"]["id"], "3")])
+        assert duplicate.status_code == 422, duplicate.text
+        assert "different sub activity" in duplicate.text.lower()
+
+        # The same service split across sub activities is recorded as separate costed lines.
+        saved = save([line(setup["sub1"]["id"], "18"), line(setup["sub2"]["id"], "3"), line(setup["sub3"]["id"], "3")])
+        assert saved.status_code == 200, saved.text
+        rows = saved.json()["services"]
+        assert [row["sub_activity_code"] for row in rows] == ["SA-D1", "SA-D2", "SA-D3"]
+        assert [Decimal(str(row["quantity"])) for row in rows] == [Decimal("18"), Decimal("3"), Decimal("3")]
+        assert Decimal(saved.json()["entry"]["services_total"]) == Decimal("100.00")  # 24h = 1 x $100 day rate
+
+
+def test_daily_cost_classification_is_derived_from_the_master_data_activity():
+    """UPA/NPT totals come from the selected Activity; classification is not an input."""
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        entry_id = setup["entry"]["id"]
+        rate = setup["baseline"]["service_rates"][0]
+        planned = {
+            "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
+            "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub1"]["id"],
+            "vendor_id": setup["vendor"]["id"], "quantity": "1", "quantity_unit": "days",
+            "currency": "USD", "service_id": setup["service"]["id"],
+            "baseline_service_rate_id": rate["id"], "charging_basis": "Day Rate",
+            "charge_category": "Operation",
+        }
+        upa = {
+            "activity_id": setup["activity_upa"]["id"], "hole_section_id": setup["hole"]["id"],
+            "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub_upa"]["id"],
+            "vendor_id": setup["vendor"]["id"], "quantity": "1", "quantity_unit": "days",
+            "currency": "USD", "service_id": setup["service"]["id"], "baseline_service_rate_id": None,
+            "charging_basis": "Day Rate", "charge_category": "Operation",
+            "override_rate": "300", "override_reason": "Unplanned diagnostic call-out",
+        }
+        npt = {
+            "activity_id": setup["activity_npt"]["id"], "hole_section_id": setup["hole"]["id"],
+            "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub_npt"]["id"],
+            "vendor_id": setup["vendor"]["id"], "quantity": "1", "quantity_unit": "days",
+            "currency": "USD", "service_id": setup["service"]["id"], "baseline_service_rate_id": None,
+            "charging_basis": "Day Rate", "charge_category": "Operation",
+            "override_rate": "500", "override_reason": "Stuck downhole fishing job",
+        }
+        saved = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json={
+            "remarks": "Classification derives from the Activity",
+            "services": [planned, upa, npt], "consumables": [], "tangibles": [],
+        })
+        assert saved.status_code == 200, saved.text
+        result = saved.json()
+        assert [row["classification"] for row in result["services"]] == ["Planned", "UPA", "NPT"]
+        assert Decimal(result["entry"]["upa_total"]) == Decimal("300.00")
+        assert Decimal(result["entry"]["npt_total"]) == Decimal("500.00")
+
+        # Classification is no longer an accepted line field.
+        rejected = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json={
+            "remarks": "", "services": [{**planned, "classification": "NPT"}], "consumables": [], "tangibles": [],
+        })
+        assert rejected.status_code == 422, rejected.text
 
 
 # ---------------------------------------------------------------------------
@@ -581,7 +752,8 @@ def test_every_daily_cost_write_locks_without_a_join():
                 "remarks": "Regression flow",
                 "services": [{
                     "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
-                    "phase_id": setup["phase"]["id"], "classification": "Planned", "vendor_id": setup["vendor"]["id"],
+                    "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub1"]["id"],
+                    "vendor_id": setup["vendor"]["id"],
                     "quantity": "12", "quantity_unit": "hours", "currency": "USD", "override_rate": None,
                     "override_reason": "", "remarks": "Drilling", "service_id": setup["service"]["id"],
                     "baseline_service_rate_id": rate["id"], "charging_basis": "Day Rate",
