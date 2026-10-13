@@ -60,6 +60,10 @@ export const buildTheme = (mode: 'light' | 'dark'): Theme => {
           // One consistent keyboard focus ring; never removed with `outline: none`.
           ':focus-visible': ring,
           '.Mui-focusVisible': ring,
+          // A dialog container that takes focus after a keyboard interaction must not draw the
+          // ring around the whole panel: its border already separates it, and the FocusTrap puts
+          // the visible focus on the first control inside.
+          '.MuiDialog-container:focus-visible, [role="dialog"]:focus-visible': { outline: 'none' },
           '::selection': { background: light ? navy[200] : navy[800], color: s.text },
           '::-webkit-scrollbar': { width: 11, height: 11 },
           '::-webkit-scrollbar-track': { background: 'transparent' },
