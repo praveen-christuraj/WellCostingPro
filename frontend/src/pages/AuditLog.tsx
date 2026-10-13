@@ -8,9 +8,9 @@ import { ErrorMessage, PageHeading, Tag } from '../components/Common'
 import { DataTable } from '../components/DataTable'
 
 const ACTIONS = ['login', 'login_failed', 'logout', 'create', 'update', 'delete', 'soft_delete', 'restore', 'permanent_delete', 'import', 'export', 'assign']
-const ENTITIES = ['auth', 'user', 'role', 'permission', 'master_data', 'rig', 'well', 'well_configuration', 'well_sub_activity', 'rig_well_export', 'rig_well_deleted', 'afe', 'afe_estimate', 'afe_export']
+const ENTITIES = ['auth', 'user', 'role', 'permission', 'master_data', 'rig', 'well', 'well_configuration', 'well_sub_activity', 'rig_well_export', 'rig_well_deleted', 'afe', 'afe_estimate', 'afe_export', 'database_browser']
 
-// Auditing module: read-only action trail with server-side filters and export.
+// Other Managements → Audit Log: read-only action trail with server-side filters and export.
 export default function AuditLog() {
   const [rows, setRows] = useState<AuditEntry[]>([])
   const [total, setTotal] = useState(0)
@@ -47,7 +47,7 @@ export default function AuditLog() {
     { headerName: 'IP ADDRESS', field: 'ip_address', minWidth: 125, valueFormatter: p => p.value || '—' },
   ], [])
 
-  return <><PageHeading eyebrow="AUDITING / ACTION TRAIL" title="Audit Log" subtitle="Every action across the workspace, with actor, entity and source. Read-only." action={<Button variant="contained" startIcon={<RefreshRounded/>} onClick={load} disabled={busy}>{busy ? 'Refreshing...' : 'Refresh'}</Button>}/>
+  return <><PageHeading eyebrow="OTHER MANAGEMENTS / AUDIT LOG" title="Audit Log" subtitle="Every action across the workspace, with actor, entity and source. Read-only." action={<Button variant="contained" startIcon={<RefreshRounded/>} onClick={load} disabled={busy}>{busy ? 'Refreshing...' : 'Refresh'}</Button>}/>
     <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 2, mb: 2.2, bgcolor: 'background.paper' }}>
       <Box display="flex" alignItems="center" gap={1} mb={1.6}><FilterListRounded sx={{ fontSize: 17, color: 'text.secondary' }}/><Typography fontWeight={800} fontSize={12} textTransform="uppercase" letterSpacing={0.8}>Filters</Typography></Box>
       <Box display="flex" gap={1.5} flexWrap="wrap" alignItems="center">

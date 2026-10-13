@@ -130,7 +130,7 @@ export default function RigWellOverview() {
       {can('audit:read') && <Paper variant="outlined" sx={{ mt: 2.2, p: { xs: 2, sm: 2.5 }, borderRadius: 2 }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap" mb={.5}>
           <Box><Typography fontFamily="Manrope" fontWeight={800} fontSize={15}>Recent module activity</Typography><Typography color="text.secondary" fontSize={12} mt={.35}>The latest audited rig, well, configuration and sub activity changes.</Typography></Box>
-          <Button component={RouterLink} to="/audit" size="small" variant="outlined">Open audit log</Button>
+          <Button component={RouterLink} to="/other-management/audit" size="small" variant="outlined">Open audit log</Button>
         </Box>
         {overview.recent_activity.length ? <List disablePadding>
           {overview.recent_activity.map(item => <ListItem key={item.id} divider sx={{ px: 0, py: 1.1, gap: 1.4, alignItems: 'flex-start' }}>
