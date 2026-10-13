@@ -790,3 +790,127 @@ def test_single_currency_estimate_needs_no_rates_and_ignores_a_stored_standard()
         assert body["afe"]["standard_currency"] == "USD"
         dup = client.put(url, headers=headers, json={**payload, "exchange_rates": [{"currency_code": "EUR", "rate": "1"}, {"currency_code": "EUR", "rate": "2"}]})
         assert dup.status_code == 422
+
+
+def test_scoped_plans_keep_rows_units_days_and_lifecycles_independent():
+    with TestClient(app) as client:
+        headers = login(client)
+        master, rig, well, drilling_afe = _setup(client, headers)
+        url = f"/api/v1/rig-well/wells/{well['id']}"
+        drilling = client.get(f"{url}/configuration", headers=headers).json()
+        empty = client.get(f"{url}/configuration?scope=completion", headers=headers).json()
+        assert empty["sections"] == [] and empty["config_status"] == "draft"
+        plan = {"scope": "completion", "depth_unit": "ft", "sections": [{
+            "hole_section_id": master["hole_1"], "from_depth": "0", "to_depth": "2000",
+            "phases": [{"phase_id": master["phase"], "days": "3.5"}],
+        }]}
+        saved = client.put(f"{url}/configuration", headers=headers, json=plan)
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["scope"] == "completion"
+        assert saved.json()["total_days"] == "3.50"
+        assert saved.json()["depth_unit"] == "ft"
+        # Replacing Completion rows must not touch any Drilling row IDs or values.
+        plan["sections"][0]["phases"][0]["days"] = "4"
+        assert client.put(f"{url}/configuration", headers=headers, json=plan).status_code == 200
+        assert client.get(f"{url}/configuration", headers=headers).json() == drilling
+        assert client.put(f"{url}/configuration", headers=headers, json={**plan, "scope": "drilling"}).status_code == 409
+        assert client.get(f"{url}/configuration?scope=unknown", headers=headers).status_code == 422
+        other = login(client, "south")
+        assert client.get(f"{url}/configuration?scope=completion", headers=other).status_code == 404
+        assert client.put(f"{url}/configuration", headers=other, json=plan).status_code == 404
+        assert client.post(f"{url}/transition", headers=other, json={"scope": "completion", "action": "configure", "remarks": "Checked"}).status_code == 404
+
+        def transition(scope, action):
+            response = client.post(f"{url}/transition", headers=headers, json={"scope": scope, "action": action, "remarks": "Checked scope"})
+            assert response.status_code == 200, response.text
+
+        transition("drilling", "complete")
+        transition("completion", "configure")
+        transition("completion", "complete")
+        completion = client.get(f"{url}/configuration?scope=completion", headers=headers).json()
+        assert completion["status"] == "completed" and completion["config_status"] == "configured"
+        transition("completion", "activate")
+        transition("completion", "draft")
+        assert client.get(f"{url}/configuration", headers=headers).json()["status"] == "completed"
+        assert client.get(f"{url}/configuration", headers=headers).json()["config_status"] == "configured"
+        assert client.put(f"{url}/configuration", headers=headers, json=plan).status_code == 200
+        with SessionLocal() as db:
+            assert any("completion" in entry.summary for entry in db.scalars(select(AuditLog)).all())
+
+
+def test_afe_prices_and_validates_only_the_selected_configuration_scope():
+    with TestClient(app) as client:
+        headers = login(client)
+        master, rig, well, drilling = _setup(client, headers)
+        url = f"/api/v1/rig-well/wells/{well['id']}"
+        afe_body = {"rig_id": rig["id"], "well_id": well["id"], "afe_code": "AFE-COMP", "afe_name": "Complete well", "afe_type": "Completion", "configuration_scope": "completion"}
+        assert client.post("/api/v1/afe/afes", headers=headers, json=afe_body).status_code == 422
+        phase_response = client.post("/api/v1/master-data/phases", headers=headers, json={"code": "COMP", "name": "Completion"})
+        assert phase_response.status_code == 201, phase_response.text
+        completion_phase = phase_response.json()["id"]
+        plan = {"scope": "completion", "depth_unit": "ft", "sections": [{
+            "hole_section_id": master["hole_1"], "from_depth": "0", "to_depth": "2000",
+            "phases": [{"phase_id": completion_phase, "days": "3.5"}],
+        }]}
+        assert client.put(f"{url}/configuration", headers=headers, json=plan).status_code == 200
+        assert client.post("/api/v1/afe/afes", headers=headers, json=afe_body).status_code == 422
+        assert client.post(f"{url}/transition", headers=headers, json={"scope": "completion", "action": "configure", "remarks": "Checked"}).status_code == 200
+        assert client.post(f"{url}/transition", headers=headers, json={"scope": "drilling", "action": "complete", "remarks": "Drilling finished"}).status_code == 200
+        response = client.post("/api/v1/afe/afes", headers=headers, json=afe_body)
+        assert response.status_code == 200, response.text
+        completion = response.json()
+        assert completion["configuration_scope"] == "completion"
+        assert completion["well_status"] == "active"
+        estimate_url = f"/api/v1/afe/afes/{completion['id']}/estimate"
+        payload = _estimate_payload(master, consumables=[], tangibles=[])
+        saved = client.put(estimate_url, headers=headers, json=payload)
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["summary"]["total"] == "8500.00"  # 3.5 * 1000 + 5000
+        assert saved.json()["well"]["scope"] == "completion"
+        assert saved.json()["well"]["depth_unit"] == "ft"
+        assert len(saved.json()["well"]["sections"]) == 1
+        assert client.get(estimate_url, headers=headers).json()["summary"]["total"] == "8500.00"
+        drilling_preview = client.post(f"/api/v1/afe/afes/{drilling['id']}/estimate/preview", headers=headers, json=payload)
+        assert drilling_preview.json()["summary"]["total"] == "45000.00"
+        # A Drilling-only section is rejected for a Completion estimate.
+        invalid = _estimate_payload(master, tangibles=[])
+        assert client.post(f"{estimate_url}/preview", headers=headers, json=invalid).status_code == 422
+        invalid_phase = _estimate_payload(master, services=[_service_line(master, "wrong-phase", "USD", "100", hole_section_id=master["hole_1"])], consumables=[], tangibles=[])
+        assert client.post(f"{estimate_url}/preview", headers=headers, json=invalid_phase).status_code == 422
+        valid_phase = _estimate_payload(master, services=[_service_line(master, "comp-phase", "USD", "100", hole_section_id=master["hole_1"], phase_id=completion_phase)], consumables=[], tangibles=[])
+        assert client.post(f"{estimate_url}/preview", headers=headers, json=valid_phase).status_code == 200
+        # Stored lines cannot silently be repriced against a different scoped plan.
+        changed = client.patch(f"/api/v1/afe/afes/{completion['id']}", headers=headers, json={"configuration_scope": "drilling"})
+        assert changed.status_code == 409
+        # Reopening only Completion blocks Completion saves/submission, not Drilling.
+        assert client.post(f"{url}/transition", headers=headers, json={"scope": "completion", "action": "draft", "remarks": "Revise"}).status_code == 200
+        assert client.put(estimate_url, headers=headers, json=payload).status_code == 409
+        assert client.post(f"/api/v1/afe/afes/{completion['id']}/status", headers=headers, json={"action": "submit"}).status_code == 409
+        assert client.put(f"/api/v1/afe/afes/{drilling['id']}/estimate", headers=headers, json=payload).status_code == 200
+        reference = client.get("/api/v1/afe/reference", headers=headers).json()["wells"][0]
+        assert reference["config_status"] == "configured" and reference["completion_config_status"] == "draft"
+        assert reference["completion_section_count"] == 1
+
+
+def test_completion_only_well_supports_scoped_afe_creation_and_import():
+    with TestClient(app) as client:
+        headers = login(client)
+        master = _master_setup(client, headers)
+        rig = create_rig(client, headers)
+        well = create_well(client, headers, rig["id"])
+        url = f"/api/v1/rig-well/wells/{well['id']}"
+        plan = {"scope": "completion", "sections": [{"hole_section_id": master["hole_1"], "from_depth": 0, "to_depth": 100,
+                 "phases": [{"phase_id": master["phase"], "days": 2}]}]}
+        assert client.put(f"{url}/configuration", headers=headers, json=plan).status_code == 200
+        assert client.post(f"{url}/transition", headers=headers, json={"scope": "completion", "action": "configure", "remarks": "Checked"}).status_code == 200
+        row = {"rig_code": rig["rig_code"], "well_code": well["well_code"], "afe_code": "IMPORT-COMP", "afe_name": "Completion only", "afe_type": "Completion", "configuration_scope": "completion"}
+        imported = client.post("/api/v1/afe/afes/import", headers=headers, json={"rows": [row]})
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["imported_count"] == 1 and imported.json()["error_count"] == 0
+        rows = client.get("/api/v1/afe/afes", headers=headers).json()
+        assert rows[0]["configuration_scope"] == "completion"
+        assert client.get(f"{url}/configuration", headers=headers).json()["sections"] == []
+        afe_body = {"rig_id": rig["id"], "well_id": well["id"], "afe_code": "DIRECT-COMP", "afe_name": "Completion only", "afe_type": "Completion", "configuration_scope": "completion"}
+        created = client.post("/api/v1/afe/afes", headers=headers, json=afe_body)
+        assert created.status_code == 200, created.text
+        assert client.post("/api/v1/afe/afes", headers=headers, json={**afe_body, "afe_code": "NO-DRILL", "configuration_scope": "drilling"}).status_code == 422

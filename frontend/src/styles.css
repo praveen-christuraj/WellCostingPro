@@ -17,10 +17,11 @@ html[data-theme='dark'] {
   --login-panel-fg: #E6EDF5;
   --login-panel-muted: #A7B8CB;
 }
-/* Default page zoom 87.5% (12.5% smaller): the whole application fits every
-   resolution — laptop, wide desktop and scaled displays — without page-level
-   horizontal scrolling. Tables/grid areas keep their own contained scrolling. */
-html { zoom: 0.875; }
+/* Keep the fitted application density, but never zoom the document/portal host.
+   MUI measures anchors in viewport pixels; zooming html also zooms those portal
+   coordinates and displaces every Menu/Select/Popover and fixed dialog.
+   Body-level portals stay in the same unscaled coordinate space as the viewport. */
+#root { zoom: 0.875; }
 /* Safety net: nothing may push the page sideways; wide content scrolls inside
    its own table/grid container instead. */
 html, body { overflow-x: clip; }

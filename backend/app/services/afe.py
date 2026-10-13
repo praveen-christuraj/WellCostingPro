@@ -190,11 +190,11 @@ def _wells_by_id(db: Session, organization_id: str, well_ids: Iterable[str]) -> 
     return {well.id: well for well in rows}
 
 
-def _scope_for_well(well: Well | None) -> engine.WellScope:
+def _scope_for_well(well: Well | None, configuration_scope: str = "drilling") -> engine.WellScope:
     if well is None:
         return engine.WellScope()
     sections: list[engine.SectionScope] = []
-    for section in sorted(well.sections, key=lambda row: row.sort_order):
+    for section in sorted(well.sections_for_scope(configuration_scope), key=lambda row: row.sort_order):
         phases = tuple(
             engine.PhaseScope(
                 phase_id=row.phase_id,
@@ -951,9 +951,10 @@ def _price(
     return Priced(result=result, services=services, consumables=consumables, tangibles=tangibles, summary=summary)
 
 
-def _well_scope_out(well: Well) -> WellScopeOut:
-    sections = sorted(well.sections, key=lambda row: row.sort_order)
+def _well_scope_out(well: Well, configuration_scope: str = "drilling") -> WellScopeOut:
+    sections = sorted(well.sections_for_scope(configuration_scope), key=lambda row: row.sort_order)
     return WellScopeOut(
+        scope=configuration_scope,
         well_id=well.id,
         well_code=well.well_code,
         well_name=well.well_name,
@@ -962,9 +963,9 @@ def _well_scope_out(well: Well) -> WellScopeOut:
         objective=well.objective,
         rig_code=well.rig.rig_code if well.rig else "",
         rig_name=well.rig.rig_name if well.rig else "",
-        depth_unit=well.depth_unit,
-        status=well.status,
-        config_status=well.config_status,
+        depth_unit=well.scope_value(configuration_scope, "depth_unit"),
+        status=well.scope_value(configuration_scope, "status"),
+        config_status=well.scope_value(configuration_scope, "config_status"),
         total_depth=sections[-1].to_depth if sections else None,
         total_days=sum((phase.days for section in sections for phase in section.phases), Decimal("0")),
         sections=[
@@ -1005,10 +1006,11 @@ def _afe_out(afe: Afe, well: Well | None, priced: Priced, *, counts: tuple[int, 
         well_id=afe.well_id,
         well_code=well.well_code if well else "",
         well_name=well.well_name if well else "",
-        well_status=well.status if well else "",
+        well_status=well.scope_value(afe.configuration_scope, "status") if well else "",
         afe_code=afe.afe_code,
         afe_name=afe.afe_name,
         afe_type=afe.afe_type,
+        configuration_scope=afe.configuration_scope,
         remarks=afe.remarks,
         status=afe.status,
         status_remarks=afe.status_remarks,
@@ -1039,7 +1041,7 @@ def _stored_rates(afe: Afe) -> dict[str, Decimal]:
 
 
 def _stored_priced(afe: Afe, well: Well | None, lookups: Lookups) -> Priced:
-    scope = _scope_for_well(well)
+    scope = _scope_for_well(well, afe.configuration_scope)
     return _price(scope, _stored_resolved(afe, lookups), lookups, afe.standard_currency, _stored_rates(afe))
 
 
@@ -1049,7 +1051,7 @@ def _estimate_view(db: Session, organization_id: str, afe: Afe, *, persisted: bo
     priced = _stored_priced(afe, well, lookups)
     return AfeEstimateOut(
         afe=_afe_out(afe, well, priced),
-        well=_well_scope_out(well) if well else _missing_well_scope(afe),
+        well=_well_scope_out(well, afe.configuration_scope) if well else _missing_well_scope(afe),
         services=priced.services,
         consumables=priced.consumables,
         tangibles=priced.tangibles,
@@ -1062,6 +1064,7 @@ def _estimate_view(db: Session, organization_id: str, afe: Afe, *, persisted: bo
 
 def _missing_well_scope(afe: Afe) -> WellScopeOut:
     return WellScopeOut(
+        scope=afe.configuration_scope,
         well_id=afe.well_id, well_code="", well_name="", well_location="", block="", objective="",
         rig_code="", rig_name="", depth_unit="m", status="", config_status="", total_depth=None,
         total_days=Decimal("0"), sections=[],
@@ -1104,7 +1107,7 @@ def _require_draft(afe: Afe, verb: str) -> None:
         )
 
 
-def _check_well_and_rig(db: Session, organization_id: str, rig_id: str, well_id: str) -> Well:
+def _check_well_and_rig(db: Session, organization_id: str, rig_id: str, well_id: str, configuration_scope: str = "drilling") -> Well:
     well = _wells_by_id(db, organization_id, [well_id]).get(well_id)
     if well is None or well.is_deleted:
         raise HTTPException(status_code=422, detail="Select an active well from this workspace.")
@@ -1115,15 +1118,15 @@ def _check_well_and_rig(db: Session, organization_id: str, rig_id: str, well_id:
         raise HTTPException(status_code=422, detail="The selected well does not belong to the selected rig.")
     if well.rig is None or well.rig.is_deleted:
         raise HTTPException(status_code=409, detail="Restore the well's rig before creating AFEs for this well.")
-    if not well.sections:
+    if not well.sections_for_scope(configuration_scope):
         raise HTTPException(
             status_code=422,
-            detail="Configure the well's sections and phases in Rig & Well Management before creating an AFE.",
+            detail=f"Configure the well's sections and phases in Rig & Well Management before creating an AFE ({configuration_scope} scope).",
         )
-    if well.config_status != "configured":
+    if well.scope_value(configuration_scope, "config_status") != "configured":
         raise HTTPException(
             status_code=422,
-            detail="Mark the well's plan as Configured in Rig & Well Management before creating an AFE for this well.",
+            detail=f"Mark the well's plan as Configured in Rig & Well Management before creating an AFE for this well ({configuration_scope} scope).",
         )
     return well
 
@@ -1140,7 +1143,7 @@ def _code_conflict(db: Session, organization_id: str, code: str, exclude_id: str
 
 def create_afe(db: Session, organization_id: str, data: AfeCreate, user: User, request: Request | None) -> AfeOut:
     _code_conflict(db, organization_id, data.afe_code)
-    _check_well_and_rig(db, organization_id, data.rig_id, data.well_id)
+    _check_well_and_rig(db, organization_id, data.rig_id, data.well_id, data.configuration_scope)
     afe = Afe(
         organization_id=organization_id,
         rig_id=data.rig_id,
@@ -1148,6 +1151,7 @@ def create_afe(db: Session, organization_id: str, data: AfeCreate, user: User, r
         afe_code=data.afe_code,
         afe_name=data.afe_name,
         afe_type=data.afe_type,
+        configuration_scope=data.configuration_scope,
         remarks=data.remarks,
         status="draft",
     )
@@ -1155,7 +1159,7 @@ def create_afe(db: Session, organization_id: str, data: AfeCreate, user: User, r
     db.flush()
     _record_audit(
         db, user=user, action="create", entity_type="afe", record_id=afe.id, entity_label=afe.afe_code,
-        summary=f"Created {afe.afe_type} AFE {afe.afe_code} for well {_well_code(db, organization_id, afe.well_id)}",
+        summary=f"Created {afe.afe_type} AFE {afe.afe_code} ({afe.configuration_scope} configuration) for well {_well_code(db, organization_id, afe.well_id)}",
         request=request,
     )
     _commit(db)
@@ -1182,8 +1186,11 @@ def update_afe(
         _code_conflict(db, organization_id, changes["afe_code"], exclude_id=afe.id)
     rig_id = changes.get("rig_id", afe.rig_id) or afe.rig_id
     well_id = changes.get("well_id", afe.well_id) or afe.well_id
-    if rig_id != afe.rig_id or well_id != afe.well_id:
-        _check_well_and_rig(db, organization_id, rig_id, well_id)
+    configuration_scope = changes.get("configuration_scope") or afe.configuration_scope
+    if rig_id != afe.rig_id or well_id != afe.well_id or configuration_scope != afe.configuration_scope:
+        if configuration_scope != afe.configuration_scope and (afe.service_lines or afe.consumable_lines or afe.tangible_lines):
+            raise HTTPException(status_code=409, detail="Clear the saved estimate before changing its configuration scope.")
+        _check_well_and_rig(db, organization_id, rig_id, well_id, configuration_scope)
     before = afe.afe_code
     for key, value in changes.items():
         if value is not None:
@@ -1329,7 +1336,7 @@ def change_status(
         if not afe.estimate_saved_at:
             raise HTTPException(status_code=409, detail="Save the AFE cost estimate before submitting.")
         well = _wells_by_id(db, organization_id, [afe.well_id]).get(afe.well_id)
-        if well is None or well.config_status != "configured":
+        if well is None or well.scope_value(afe.configuration_scope, "config_status") != "configured":
             raise HTTPException(status_code=409, detail="The well's plan is not Configured. Configure the well before submitting this AFE.")
         priced = _stored_priced(afe, well, _lookups_for_afes(db, organization_id, [afe]))
         if priced.result.total is None:
@@ -1370,7 +1377,7 @@ def preview_estimate(db: Session, organization_id: str, afe_id: str, payload: Es
     if afe.is_deleted:
         raise HTTPException(status_code=404, detail="AFE not found in this workspace")
     well = _wells_by_id(db, organization_id, [afe.well_id]).get(afe.well_id)
-    scope = _scope_for_well(well)
+    scope = _scope_for_well(well, afe.configuration_scope)
     resolved = _validate_request(db, organization_id, scope, payload)
     lookups = _load_lookups(
         db,
@@ -1385,7 +1392,7 @@ def preview_estimate(db: Session, organization_id: str, afe_id: str, payload: Es
     counts = (len(resolved.services), len(resolved.consumables), len(resolved.tangibles))
     return AfeEstimateOut(
         afe=_afe_out(afe, well, priced, counts=counts),
-        well=_well_scope_out(well) if well else _missing_well_scope(afe),
+        well=_well_scope_out(well, afe.configuration_scope) if well else _missing_well_scope(afe),
         services=priced.services,
         consumables=priced.consumables,
         tangibles=priced.tangibles,
@@ -1498,12 +1505,12 @@ def save_estimate(
             raise HTTPException(status_code=409, detail="Restore this AFE before editing its estimate.")
         _require_draft(afe, "edit its cost estimate")
         well = _wells_by_id(db, organization_id, [afe.well_id]).get(afe.well_id)
-        if well is None or well.config_status != "configured":
+        if well is None or well.scope_value(afe.configuration_scope, "config_status") != "configured":
             raise HTTPException(
                 status_code=409,
                 detail="The well's plan is in Draft. Mark the well as Configured in Rig & Well Management before saving this estimate.",
             )
-        scope = _scope_for_well(well)
+        scope = _scope_for_well(well, afe.configuration_scope)
         resolved = _validate_request(db, organization_id, scope, payload)
 
         # A mixed-currency estimate is saved only when it can be converted to one standard currency.
@@ -1605,6 +1612,9 @@ def reference_data(db: Session, organization_id: str) -> AfeReference:
                 display_name=_label(well.well_code, well.well_name),
                 status=well.status,
                 config_status=well.config_status,
+                completion_config_status=well.completion_config_status,
+                completion_status=well.completion_status,
+                completion_section_count=len(well.completion_sections),
                 total_days=sum((phase.days for section in well.sections for phase in section.phases), Decimal("0")),
                 total_depth=sorted(well.sections, key=lambda row: row.sort_order)[-1].to_depth if well.sections else None,
                 depth_unit=well.depth_unit,
@@ -1791,6 +1801,7 @@ def import_afes(db: Session, organization_id: str, rows: list[dict[str, Any]], u
             "afe_code": _import_value(row, "afe_code", "afe", "code"),
             "afe_name": _import_value(row, "afe_name", "name"),
             "afe_type": _import_value(row, "afe_type", "type"),
+            "configuration_scope": _import_text(_import_value(row, "configuration_scope")).lower() or "drilling",
             "remarks": _import_value(row, "remarks", "remark") or "",
         }
         try:
@@ -1803,7 +1814,7 @@ def import_afes(db: Session, organization_id: str, rows: list[dict[str, Any]], u
             continue
         seen.add(payload.afe_code)
         try:
-            _check_well_and_rig(db, organization_id, payload.rig_id, payload.well_id)
+            _check_well_and_rig(db, organization_id, payload.rig_id, payload.well_id, payload.configuration_scope)
         except HTTPException as error:
             errors.append(f"Row {row_number} ({payload.afe_code}): {error.detail}")
             continue
@@ -1812,6 +1823,7 @@ def import_afes(db: Session, organization_id: str, rows: list[dict[str, Any]], u
             afe = Afe(
                 organization_id=organization_id, rig_id=payload.rig_id, well_id=payload.well_id,
                 afe_code=payload.afe_code, afe_name=payload.afe_name, afe_type=payload.afe_type,
+                configuration_scope=payload.configuration_scope,
                 remarks=payload.remarks, status="draft",
             )
             db.add(afe)
@@ -1824,11 +1836,16 @@ def import_afes(db: Session, organization_id: str, rows: list[dict[str, Any]], u
             if existing.status != "draft":
                 errors.append(f"Row {row_number} ({payload.afe_code}): restore is blocked for a non-draft AFE")
                 continue
+            if existing.configuration_scope != payload.configuration_scope:
+                if existing.service_lines or existing.consumable_lines or existing.tangible_lines:
+                    errors.append(f"Row {row_number} ({payload.afe_code}): clear the saved estimate before changing its configuration scope")
+                    continue
             action = "restore" if existing.is_deleted else "update"
             existing.rig_id = payload.rig_id
             existing.well_id = payload.well_id
             existing.afe_name = payload.afe_name
             existing.afe_type = payload.afe_type
+            existing.configuration_scope = payload.configuration_scope
             existing.remarks = payload.remarks
             existing.is_deleted = False
             existing.deleted_at = None

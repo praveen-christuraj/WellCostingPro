@@ -71,6 +71,7 @@ export function nextActions(status: AfeStatus): AfeStatusAction[] {
 export type CurrencyTotal = { currency: string; amount: string }
 
 export type Afe = {
+  configuration_scope: 'drilling' | 'completion'
   id: string
   rig_id: string
   rig_code: string
@@ -231,6 +232,7 @@ export type EstimateSummary = {
 }
 
 export type WellScope = {
+  scope: 'drilling' | 'completion'
   well_id: string
   well_code: string
   well_name: string
@@ -288,6 +290,9 @@ export type ImportResponse = { imported_count: number; error_count: number; erro
 export type AfeReference = {
   rigs: { id: string; rig_code: string; rig_name: string; display_name: string }[]
   wells: {
+    completion_config_status: string
+    completion_status: string
+    completion_section_count: number
     id: string; rig_id: string; well_code: string; well_name: string; display_name: string; status: string
     config_status: string; total_days: string; total_depth: string | null; depth_unit: string; section_count: number
   }[]

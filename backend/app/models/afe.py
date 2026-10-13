@@ -76,6 +76,7 @@ class Afe(Base):
     __tablename__ = "afes"
     __table_args__ = (
         UniqueConstraint("organization_id", "afe_code", name="uq_afes_org_code"),
+        CheckConstraint("configuration_scope IN ('drilling', 'completion')", name="ck_afes_configuration_scope"),
         CheckConstraint(_in("afe_type", AFE_TYPES), name="ck_afes_type"),
         CheckConstraint(_in("status", AFE_STATUSES), name="ck_afes_status"),
         Index("ix_afes_org_deleted", "organization_id", "is_deleted"),
@@ -90,6 +91,7 @@ class Afe(Base):
     well_id: Mapped[str] = mapped_column(ForeignKey("wells.id", ondelete="RESTRICT"), nullable=False, index=True)
     afe_code: Mapped[str] = mapped_column(String(50), nullable=False)
     afe_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    configuration_scope: Mapped[str] = mapped_column(String(20), default="drilling", server_default="drilling", nullable=False)
     afe_type: Mapped[str] = mapped_column(String(20), nullable=False)
     remarks: Mapped[str] = mapped_column(String(1000), default="", server_default="", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="draft", server_default="draft", nullable=False)

@@ -142,6 +142,9 @@ class WellUpdate(BaseModel):
 
 
 class WellOut(BaseModel):
+    completion_status: Literal["active", "completed"] = "active"
+    completion_config_status: Literal["draft", "configured"] = "draft"
+    completion_section_count: int = 0
     id: str
     rig_id: str
     rig_code: str
@@ -197,6 +200,7 @@ class ConfigurationSectionIn(BaseModel):
 
 
 class WellConfigurationIn(BaseModel):
+    scope: Literal["drilling", "completion"] = "drilling"
     depth_unit: Literal["m", "ft"] = "m"
     sections: list[ConfigurationSectionIn] = Field(min_length=1, max_length=50)
 
@@ -225,6 +229,7 @@ class ConfigurationSectionOut(BaseModel):
 
 
 class WellConfigurationOut(BaseModel):
+    scope: Literal["drilling", "completion"] = "drilling"
     well_id: str
     well_code: str
     well_name: str
@@ -239,6 +244,7 @@ class WellConfigurationOut(BaseModel):
 
 
 class WellTransitionIn(BaseModel):
+    scope: Literal["drilling", "completion"] = "drilling"
     action: Literal["configure", "draft", "complete", "activate"]
     remarks: str = Field(min_length=3, max_length=500)
 

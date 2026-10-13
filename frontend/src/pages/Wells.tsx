@@ -50,10 +50,10 @@ function WellActions({
     {(canEdit || canDelete) && <>
       <Button size="small" color="inherit" endIcon={<ArrowDropDownRounded/>} onClick={event => setAnchor(event.currentTarget)}>Status</Button>
       <Menu anchorEl={anchor} open={menuOpen} onClose={close}>
-        {canEdit && well.status === 'completed' && <MenuItem onClick={() => action('activate')}>Reactivate well</MenuItem>}
-        {canEdit && well.status === 'active' && well.config_status === 'configured' && <MenuItem onClick={() => action('draft')}>Reopen plan as Draft</MenuItem>}
-        {canEdit && well.status === 'active' && well.config_status === 'configured' && <MenuItem onClick={() => action('complete')}>Mark well completed</MenuItem>}
-        {canEdit && well.status === 'active' && well.config_status === 'draft' && well.section_count > 0 && <MenuItem onClick={() => action('configure')}>Mark plan configured</MenuItem>}
+        {canEdit && well.status === 'completed' && <MenuItem onClick={() => action('activate')}>Reactivate drilling scope</MenuItem>}
+        {canEdit && well.status === 'active' && well.config_status === 'configured' && <MenuItem onClick={() => action('draft')}>Reopen drilling as Draft</MenuItem>}
+        {canEdit && well.status === 'active' && well.config_status === 'configured' && <MenuItem onClick={() => action('complete')}>Mark drilling completed</MenuItem>}
+        {canEdit && well.status === 'active' && well.config_status === 'draft' && well.section_count > 0 && <MenuItem onClick={() => action('configure')}>Mark drilling configured</MenuItem>}
         {canEdit && well.status === 'active' && well.config_status === 'draft' && well.section_count === 0 && <MenuItem disabled>Save a plan before configuring</MenuItem>}
         {canDelete && <MenuItem sx={{ color: 'error.main' }} onClick={() => { close(); onDelete() }}>Move to Deleted Entries</MenuItem>}
       </Menu>
@@ -62,10 +62,10 @@ function WellActions({
 }
 
 const transitionCopy: Record<TransitionAction, { title: string; label: string; description: string }> = {
-  configure: { title: 'Mark well plan as configured?', label: 'Mark configured', description: 'The saved plan becomes a configured well baseline. Reopen it as Draft before editing.' },
-  draft: { title: 'Reopen well plan as Draft?', label: 'Reopen as Draft', description: 'This unlocks the well plan for edits. The change is recorded in the audit trail.' },
-  complete: { title: 'Mark well as completed?', label: 'Complete well', description: 'The well is marked complete. Its plan stays read-only until the well is reactivated.' },
-  activate: { title: 'Reactivate this well?', label: 'Reactivate well', description: 'The well will return to Active. Its configuration status remains unchanged.' },
+  configure: { title: 'Mark drilling plan as configured?', label: 'Mark configured', description: 'The saved plan becomes a configured well baseline. Reopen it as Draft before editing.' },
+  draft: { title: 'Reopen drilling plan as Draft?', label: 'Reopen as Draft', description: 'This unlocks the well plan for edits. The change is recorded in the audit trail.' },
+  complete: { title: 'Mark drilling scope completed?', label: 'Complete drilling scope', description: 'Only the drilling scope is marked complete. Its plan stays read-only until this scope is reactivated.' },
+  activate: { title: 'Reactivate drilling scope?', label: 'Reactivate drilling scope', description: 'Only the drilling scope returns to Active. Its configuration status remains unchanged.' },
 }
 
 export default function Wells() {
@@ -239,8 +239,10 @@ export default function Wells() {
     { headerName: 'RIG', field: 'rig_display', minWidth: 170, flex: 1 },
     { headerName: 'LOCATION / BLOCK', field: 'well_location', minWidth: 170, valueFormatter: params => params.data ? `${params.data.well_location} / ${params.data.block}` : '' },
     { headerName: 'OBJECTIVE', field: 'objective', minWidth: 145, flex: .9 },
-    { headerName: 'WELL STATUS', field: 'status', minWidth: 115, maxWidth: 130, cellRenderer: ({ value }: { value: string }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={value === 'completed' ? 'neutral' : 'success'}>{value}</Tag></Box> },
-    { headerName: 'PLAN STATUS', field: 'config_status', minWidth: 120, maxWidth: 145, cellRenderer: ({ value }: { value: string }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={value === 'configured' ? 'info' : 'warning'}>{value}</Tag></Box> },
+    { headerName: 'DRILLING STATUS', field: 'status', minWidth: 115, maxWidth: 130, cellRenderer: ({ value }: { value: string }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={value === 'completed' ? 'neutral' : 'success'}>{value}</Tag></Box> },
+    { headerName: 'DRILLING PLAN', field: 'config_status', minWidth: 120, maxWidth: 145, cellRenderer: ({ value }: { value: string }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={value === 'configured' ? 'info' : 'warning'}>{value}</Tag></Box> },
+    { headerName: 'COMPLETION STATUS', field: 'completion_status', minWidth: 150, cellRenderer: ({ data }: { data: Well }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={data.completion_status === 'completed' ? 'neutral' : 'info'}>{data.completion_section_count ? data.completion_status : 'Not added'}</Tag></Box> },
+    { headerName: 'COMPLETION PLAN', field: 'completion_config_status', minWidth: 145, cellRenderer: ({ data }: { data: Well }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={data.completion_config_status === 'configured' ? 'info' : 'warning'}>{data.completion_section_count ? data.completion_config_status : 'Not added'}</Tag></Box> },
     { headerName: 'PLANNED DEPTH', field: 'total_depth', minWidth: 140, valueFormatter: params => formatDepth(params.value, params.data?.depth_unit ?? 'm') },
     { headerName: 'PLANNED DAYS', field: 'total_days', minWidth: 125, valueFormatter: params => formatDays(params.value) },
     { headerName: 'SUB ACTIVITIES', field: 'sub_activity_count', minWidth: 125, maxWidth: 145, valueFormatter: params => Number(params.value ?? 0).toLocaleString() },
@@ -352,7 +354,7 @@ export default function Wells() {
       open={!!configurationTarget}
       well={configurationTarget}
       onClose={() => setConfigurationTarget(null)}
-      onSaved={() => { setNotice('Well plan saved as Draft.'); void load() }}
+      onSaved={() => { setNotice('Scoped well configuration updated.'); void load() }}
     />
 
     <FormDialog
