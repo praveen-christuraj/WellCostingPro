@@ -891,3 +891,373 @@ def test_well_analysis_never_sums_mixed_standard_currencies():
         assert response.status_code == 200, response.text
         assert [day["entry"]["standard_currency"] for day in response.json()] == ["USD", "EUR"]
         assert [day["comparison"]["planned_total"] for day in response.json()] == ["6000.00", "500.00"]
+
+
+# ---------------------------------------------------------------------------
+# Other expenses: unexpected charges (LIH, hole problems, claims) that are
+# accounted in their own group and deducted from the locked AFE total.
+# ---------------------------------------------------------------------------
+
+
+def _other_line(setup, *, expense_type="LIH", quantity="2", unit_rate="1500",
+                remarks="Drill collar lost in hole on tripping", **overrides):
+    line = {
+        "activity_id": setup["activity_npt"]["id"], "hole_section_id": setup["hole"]["id"],
+        "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub_npt"]["id"],
+        "vendor_id": setup["vendor"]["id"], "party_name": "", "quantity": quantity,
+        "quantity_unit": "unit", "currency": "USD", "expense_type": expense_type,
+        "expense_description": "6 5/8 in BHA, three joints left in hole", "unit_rate": unit_rate,
+        "override_rate": None, "override_reason": "", "remarks": remarks,
+    }
+    line.update(overrides)
+    return line
+
+
+def _service_line(setup, rate):
+    return {
+        "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
+        "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub1"]["id"],
+        "vendor_id": setup["vendor"]["id"], "quantity": "1", "quantity_unit": "days",
+        "currency": "USD", "remarks": "Drilling day", "service_id": setup["service"]["id"],
+        "baseline_service_rate_id": rate["id"], "charging_basis": "Day Rate", "charge_category": "Operation",
+    }
+
+
+def test_other_expenses_are_accounted_separately_and_deducted_from_the_afe():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        entry_id = setup["entry"]["id"]
+        rate = setup["baseline"]["service_rates"][0]
+        payload = {
+            "remarks": "Tripping incident",
+            "services": [_service_line(setup, rate)],
+            "consumables": [], "tangibles": [],
+            # 2 units at $1,500 = $3,000 on top of the $100 service day.
+            "other_expenses": [_other_line(setup)],
+        }
+
+        preview = client.put(f"/api/v1/daily-cost/entries/{entry_id}/preview", headers=headers, json=payload)
+        assert preview.status_code == 200, preview.text
+        assert Decimal(preview.json()["services_total"]) == Decimal("100.00")
+        assert Decimal(preview.json()["other_expenses_total"]) == Decimal("3000.00")
+        assert Decimal(preview.json()["total_cost"]) == Decimal("3100.00")
+        assert any(row["code"] == "other-expenses-preview" for row in preview.json()["warnings"])
+
+        saved = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json=payload)
+        assert saved.status_code == 200, saved.text
+        result = saved.json()
+        entry = result["entry"]
+        # The group is stored on its own, yet it belongs to the day's actual cost.
+        assert Decimal(entry["other_expenses_total"]) == Decimal("3000.00")
+        assert entry["other_expenses_count"] == 1
+        assert Decimal(entry["total_cost"]) == Decimal("3100.00")
+        assert Decimal(entry["npt_total"]) == Decimal("3000.00")  # NPT follows the Master Data Activity
+        assert entry["warning_count"] == 2  # the NPT charges and the deduction
+
+        line = result["other_expenses"][0]
+        assert line["expense_type"] == "LIH"
+        assert line["expense_type_label"] == "Lost In Hole (LIH)"
+        assert line["expense_description"] == "6 5/8 in BHA, three joints left in hole"
+        assert Decimal(line["quantity"]) == Decimal("2.0000") and line["quantity_unit"] == "unit"
+        assert Decimal(line["captured_rate"]) == Decimal("1500.0000")
+        assert line["override_rate"] is None and line["rate_source"] == "other_expense"
+        assert Decimal(line["amount"]) == Decimal("3000.00")
+        assert Decimal(line["standard_amount"]) == Decimal("3000.00")
+        assert Decimal(line["exchange_rate"]) == Decimal("1.000000")
+        assert line["budget_key"] == "other:LIH"
+        assert line["budget_name"] == "Other expenses — Lost In Hole (LIH)"
+        assert line["baseline_budget_line_id"] is None
+        assert line["classification"] == "NPT" and line["sub_activity_code"] == "SA-N1"
+        assert line["section_code"] == "17-1/2" and line["phase_code"] == "DRILL"
+        assert line["vendor_code"] == "VEND-01" and line["remarks"].startswith("Drill collar lost")
+
+        comparison = result["comparison"]
+        # The locked AFE is 6,000.00 and the 3,000.00 deduction is explicit, not hidden.
+        assert Decimal(comparison["planned_total"]) == Decimal("6000.00")
+        assert Decimal(comparison["tracked_actual_to_date"]) == Decimal("100.00")
+        assert Decimal(comparison["other_expenses_to_date"]) == Decimal("3000.00")
+        assert Decimal(comparison["actual_to_date"]) == Decimal("3100.00")
+        assert Decimal(comparison["balance"]) == Decimal("2900.00")
+        groups = {group["cost_group"]: group for group in comparison["groups"]}
+        assert set(groups) == {"Services", "Consumables", "Tangibles", "Other Expenses"}
+        assert Decimal(groups["Other Expenses"]["planned"]) == Decimal("0.00")
+        assert Decimal(groups["Other Expenses"]["actual_to_date"]) == Decimal("3000.00")
+        assert Decimal(groups["Other Expenses"]["balance"]) == Decimal("-3000.00")
+        assert Decimal(groups["Services"]["balance"]) == Decimal("900.00")
+        deduction = next(row for row in comparison["budget_lines"] if row["cost_group"] == "Other Expenses")
+        assert deduction["budget_kind"] == "other"
+        assert deduction["budget_key"] == "other:LIH"
+        assert deduction["item_code"] == "LIH"
+        assert deduction["item_name"] == "Lost In Hole (LIH)"
+        assert Decimal(deduction["planned"]) == Decimal("0.00")
+        assert Decimal(deduction["actual_to_date"]) == Decimal("3000.00")
+        assert deduction["is_planned"] is False
+        assert any(row["code"] == "other-expenses-deducted" for row in result["warnings"])
+
+        # Editing the charge moves the deduction with it; removing it restores the balance.
+        payload["other_expenses"] = [_other_line(setup, quantity="1", unit_rate="1000", remarks="Reduced to one joint")]
+        edited = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json=payload).json()
+        assert Decimal(edited["entry"]["other_expenses_total"]) == Decimal("1000.00")
+        assert Decimal(edited["comparison"]["balance"]) == Decimal("4900.00")
+        payload["other_expenses"] = []
+        cleared = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json=payload).json()
+        assert Decimal(cleared["entry"]["other_expenses_total"]) == Decimal("0.00")
+        assert Decimal(cleared["entry"]["total_cost"]) == Decimal("100.00")
+        assert Decimal(cleared["comparison"]["balance"]) == Decimal("5900.00")
+        assert cleared["other_expenses"] == []
+        assert cleared["entry"]["warning_count"] == 0
+
+
+def test_other_expense_entry_rules_remarks_scope_and_rate():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        entry_id = setup["entry"]["id"]
+
+        def save(line):
+            return client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json={
+                "remarks": "", "services": [], "consumables": [], "tangibles": [], "other_expenses": [line],
+            })
+
+        # Remarks are mandatory: they are the only narrative that explains the charge.
+        missing = save(_other_line(setup, remarks=""))
+        assert missing.status_code == 422, missing.text
+        assert "remarks" in missing.text.lower()
+        assert save(_other_line(setup, remarks="x")).status_code == 422
+        assert save(_other_line(setup, remarks="   ")).status_code == 422
+
+        # The well sub activity and its Activity are required, as on every line.
+        assert save(_other_line(setup, sub_activity_id=None)).status_code == 422
+        assert save(_other_line(setup, sub_activity_id=setup["sub1"]["id"])).status_code == 422  # wrong activity
+        # The hole section must belong to the locked well plan.
+        assert save(_other_line(setup, hole_section_id="00000000-0000-0000-0000-000000000000")).status_code == 422
+
+        # The charge is priced from its own unit rate: no zero, no unknown type, no override.
+        assert save(_other_line(setup, unit_rate="0")).status_code == 422
+        assert save(_other_line(setup, expense_type="TOTALLY_MADE_UP")).status_code == 422
+        assert save(_other_line(setup, override_rate="10", override_reason="Not applicable here")).status_code == 422
+
+        # Only currencies the locked AFE can convert are accepted; blank means the standard currency.
+        refused = save(_other_line(setup, currency="EUR"))
+        assert refused.status_code == 422, refused.text
+        assert "currency" in refused.text.lower()
+        defaulted = save(_other_line(setup, currency=""))
+        assert defaulted.status_code == 200, defaulted.text
+        assert defaulted.json()["other_expenses"][0]["currency"] == "USD"
+
+        # An UPA/NPT charge must say who is responsible, like every other line.
+        assert save(_other_line(setup, vendor_id=None, party_name="")).status_code == 422
+        assert save(_other_line(setup, vendor_id=None, party_name="Operator")).status_code == 200
+
+        # Every expense type on the picklist can be booked.
+        for code in ("LIH", "HOLE_PROBLEM", "FISHING", "SIDE_TRACK", "EQUIPMENT_DAMAGE",
+                     "THIRD_PARTY_CLAIM", "PENALTY", "MISC"):
+            response = save(_other_line(setup, expense_type=code, remarks=f"{code} charge"))
+            assert response.status_code == 200, response.text
+            assert response.json()["other_expenses"][0]["expense_type"] == code
+
+
+def test_other_expenses_flow_into_well_analysis_register_and_print():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        entry_id = setup["entry"]["id"]
+        rate = setup["baseline"]["service_rates"][0]
+        payload = {
+            "remarks": "Incident day", "services": [_service_line(setup, rate)],
+            "consumables": [], "tangibles": [],
+            "other_expenses": [
+                _other_line(setup),
+                _other_line(setup, expense_type="FISHING", quantity="1", unit_rate="500",
+                           remarks="Fishing assembly recovered the string"),
+            ],
+        }
+        assert client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json=payload).status_code == 200
+
+        well = setup["well"]["id"]
+        summary = client.get(f"/api/v1/daily-cost/wells/{well}/cost-summary", headers=headers)
+        assert summary.status_code == 200, summary.text
+        data = summary.json()
+        # 100 service + 3,000 LIH + 500 fishing against a 6,000 AFE.
+        assert Decimal(data["totals"]["actual"]) == Decimal("3600.00")
+        assert Decimal(data["totals"]["other_expenses"]) == Decimal("3500.00")
+        assert Decimal(data["totals"]["balance"]) == Decimal("2400.00")
+        day = data["daily"][0]
+        assert Decimal(day["services"]) == Decimal("100.00")
+        assert Decimal(day["other_expenses"]) == Decimal("3500.00")
+        assert Decimal(day["total"]) == Decimal("3600.00")
+        assert Decimal(data["afes"][0]["other_expenses"]) == Decimal("3500.00")
+        assert Decimal(data["afes"][0]["balance"]) == Decimal("2400.00")
+        cost_groups = {row["name"]: row for row in
+                       next(group for group in data["factors"] if group["dimension"] == "cost_group")["rows"]}
+        assert Decimal(cost_groups["Other Expenses"]["amount"]) == Decimal("3500.00")
+        assert Decimal(cost_groups["Other Expenses"]["planned"]) == Decimal("0.00")
+        assert Decimal(cost_groups["Services"]["amount"]) == Decimal("100.00")
+        items = next(group for group in data["factors"] if group["dimension"] == "item")["rows"]
+        assert {"Lost In Hole (LIH)", "Fishing & Recovery"} <= {row["name"] for row in items}
+        assert any(row["code"] == "other-expenses-deducted" for row in data["warnings"])
+
+        listed = client.get("/api/v1/daily-cost/entries", headers=headers).json()[0]
+        assert Decimal(listed["other_expenses_total"]) == Decimal("3500.00")
+        assert listed["other_expenses_count"] == 2
+
+        report = client.get(f"/api/v1/daily-cost/wells/{well}/cost-report", headers=headers).json()
+        printed = report[0]["other_expenses"]
+        assert [row["expense_type"] for row in printed] == ["LIH", "FISHING"]
+        assert all(row["remarks"] for row in printed)
+        assert Decimal(report[0]["entry"]["other_expenses_total"]) == Decimal("3500.00")
+
+        overview = client.get("/api/v1/daily-cost/overview", headers=headers).json()
+        usd_groups = {row["cost_group"]: row for row in overview["groups"] if row["currency"] == "USD"}
+        assert Decimal(usd_groups["Other Expenses"]["planned"]) == Decimal("0.00")
+        assert Decimal(usd_groups["Other Expenses"]["actual"]) == Decimal("3500.00")
+        assert Decimal(usd_groups["Other Expenses"]["balance"]) == Decimal("-3500.00")
+
+        reference = client.get("/api/v1/daily-cost/reference", headers=headers).json()
+        assert {"code": "LIH", "label": "Lost In Hole (LIH)"} in reference["other_expense_types"]
+        assert len(reference["other_expense_types"]) == 8
+
+
+def test_other_expense_rows_import_with_aliases_and_are_audited():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        entry_id = setup["entry"]["id"]
+
+        imported = client.post(f"/api/v1/daily-cost/entries/{entry_id}/import", headers=headers, json={"rows": [
+            {"line_type": "Other", "activity_code": "NPT", "sub_activity_code": "SA-N1", "vendor_code": "VEND-01",
+             "expense_type": "lost in hole", "expense_description": "BHA left in hole", "unit_rate": "250000",
+             "quantity": "1", "quantity_unit": "unit", "currency": "USD",
+             "remarks": "Tools lost in hole while tripping"},
+            # A file written in the operator's own words still resolves, and the
+            # standard currency is implied when the column is blank.
+            {"line_type": "Other Expense", "activity_code": "NPT", "sub_activity_code": "SA-N1",
+             "vendor_code": "VEND-01", "expense_type": "Hole Problem", "rate": "40", "quantity": "3",
+             "remarks": "Wiper trip and ream to clear the hole"},
+        ]})
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["success"] is True, imported.json()
+        assert imported.json()["imported_count"] == 2
+        saved = client.get(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers).json()
+        assert Decimal(saved["entry"]["other_expenses_total"]) == Decimal("250120.00")
+        assert {row["expense_type"] for row in saved["other_expenses"]} == {"LIH", "HOLE_PROBLEM"}
+        assert saved["other_expenses"][1]["currency"] == "USD"
+        assert saved["other_expenses"][1]["expense_type_label"] == "Hole Problem"
+        # Nothing was budgeted for it, so the AFE position goes negative.
+        assert Decimal(saved["comparison"]["balance"]) == Decimal("-244120.00")
+        assert saved["entry"]["total_cost"] == saved["entry"]["other_expenses_total"]
+
+        # Missing remarks, an unknown type or a missing rate are row errors, never a 500.
+        rejected = client.post(f"/api/v1/daily-cost/entries/{entry_id}/import", headers=headers, json={"rows": [
+            {"line_type": "Other", "activity_code": "NPT", "sub_activity_code": "SA-N1",
+             "expense_type": "LIH", "unit_rate": "10"},
+            {"line_type": "Other", "activity_code": "NPT", "sub_activity_code": "SA-N1",
+             "expense_type": "DROPPED_OBJECT", "unit_rate": "10", "remarks": "Made up expense type"},
+            {"line_type": "Other", "activity_code": "NPT", "sub_activity_code": "SA-N1",
+             "expense_type": "LIH", "remarks": "No rate at all on this row"},
+        ]})
+        assert rejected.status_code == 200, rejected.text
+        assert rejected.json()["success"] is False
+        assert rejected.json()["error_count"] == 3
+        errors = " ".join(rejected.json()["errors"])
+        assert "remarks" in errors.lower() and "Unknown expense type" in errors and "unit_rate" in errors
+        # Nothing was written by the failed import.
+        assert len(client.get(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers).json()["other_expenses"]) == 2
+
+        with SessionLocal() as db:
+            summaries = [row.summary for row in db.query(AuditLog).filter(
+                AuditLog.entity_type == "daily_cost", AuditLog.action == "other_expense").all()]
+        assert any("Lost In Hole" in text for text in summaries)
+        assert any("deducted from AFE AFE-01" in text for text in summaries)
+
+
+def test_other_expenses_follow_the_sheet_tenant_rbac_and_workflow_rules():
+    from sqlalchemy import func, select
+    from app.models import DailyCostOtherExpenseLine
+    with TestClient(app) as client:
+        north = login(client, "north")
+        south = login(client, "south")
+        setup = _setup_daily_sheet(client, north)
+        entry_id = setup["entry"]["id"]
+        assert client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=north, json={
+            "remarks": "", "services": [], "consumables": [], "tangibles": [],
+            "other_expenses": [_other_line(setup)],
+        }).status_code == 200
+        assert client.get(f"/api/v1/daily-cost/entries/{entry_id}", headers=south).status_code == 404
+        assert client.get("/api/v1/daily-cost/entries", headers=south).json() == []
+        other = _setup_daily_sheet(client, south)  # same codes, another workspace
+        assert client.get(f"/api/v1/daily-cost/entries/{other['entry']['id']}", headers=north).status_code == 404
+        assert Decimal(other["entry"]["other_expenses_total"]) == Decimal("0")
+
+        # A read-only viewer cannot post a deduction against the AFE.
+        with SessionLocal() as db:
+            north_id = select(Organization.id).where(Organization.slug == "north").scalar_subquery()
+            user = db.scalar(select(User).where(User.email == "owner@example.com", User.organization_id == north_id))
+            role = user.roles[0]
+            role.is_owner = False
+            role.permissions = [permission for permission in role.permissions
+                                if permission.key in ("daily-cost:read", "daily-cost:export")]
+            db.commit()
+        blocked = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=north, json={
+            "remarks": "", "services": [], "consumables": [], "tangibles": [],
+            "other_expenses": [_other_line(setup, unit_rate="99")],
+        })
+        assert blocked.status_code == 403
+        with SessionLocal() as db:
+            role = db.scalar(select(Role).where(Role.organization_id == select(Organization.id).where(
+                Organization.slug == "north").scalar_subquery()))
+            role.is_owner = True
+            db.commit()
+
+        # A submitted sheet is frozen including its deductions; reopening unlocks it.
+        assert client.post(f"/api/v1/daily-cost/entries/{entry_id}/submit", headers=north,
+                           json={"remarks": "Reviewed"}).status_code == 200
+        frozen = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=north, json={
+            "remarks": "", "services": [], "consumables": [], "tangibles": [], "other_expenses": [],
+        })
+        assert frozen.status_code == 409
+        reopened = client.post(f"/api/v1/daily-cost/entries/{entry_id}/reopen", headers=north,
+                               json={"remarks": "Charge was mis-keyed"})
+        assert reopened.status_code == 200, reopened.text
+        assert len(reopened.json()["other_expenses"]) == 1
+
+        # A soft delete keeps the lines so the sheet can be restored whole...
+        assert client.delete(f"/api/v1/daily-cost/entries/{entry_id}", headers=north).status_code == 200
+        assert client.get(f"/api/v1/daily-cost/entries/{entry_id}", headers=north).status_code == 404
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count()).select_from(DailyCostOtherExpenseLine)) == 1
+        assert client.get("/api/v1/daily-cost/entries/deleted", headers=north).json()[0]["id"] == entry_id
+        assert client.post(f"/api/v1/daily-cost/entries/{entry_id}/restore", headers=north).status_code == 200
+        assert len(client.get(f"/api/v1/daily-cost/entries/{entry_id}", headers=north).json()["other_expenses"]) == 1
+
+        # ...while purging from Deleted Entries takes the unexpected charges with it.
+        assert client.delete(f"/api/v1/daily-cost/entries/{entry_id}", headers=north).status_code == 200
+        assert client.delete(f"/api/v1/daily-cost/entries/{entry_id}/permanent", headers=north).status_code == 204
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count()).select_from(DailyCostOtherExpenseLine)) == 0
+
+
+def test_other_expense_remarks_are_enforced_by_the_database_too():
+    """The API is not the only writer: the schema itself refuses a blank remark."""
+    from sqlalchemy import func, insert, select
+    from app.models import DailyCostOtherExpenseLine
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        entry_id = setup["entry"]["id"]
+        assert client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json={
+            "remarks": "", "services": [], "consumables": [], "tangibles": [],
+            "other_expenses": [_other_line(setup)],
+        }).status_code == 200
+        with SessionLocal() as db:
+            organization_id = db.scalar(select(Organization.id).where(Organization.slug == "north"))
+            base = {"organization_id": organization_id, "entry_id": entry_id,
+                    "activity_id": setup["activity_npt"]["id"], "expense_type": "LIH",
+                    "expense_type_label": "Lost In Hole (LIH)", "quantity": "1", "sort_order": 1,
+                    "remarks": "Drill collar lost in hole"}
+            for override in ({"remarks": "   "}, {"expense_type": "DROPPED_OBJECT"}, {"quantity": "-1"}):
+                with pytest.raises(IntegrityError):
+                    db.execute(insert(DailyCostOtherExpenseLine).values(**{**base, **override}))
+                db.rollback()
+            assert db.scalar(select(func.count()).select_from(DailyCostOtherExpenseLine)) == 1

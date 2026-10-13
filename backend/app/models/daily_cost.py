@@ -6,6 +6,13 @@ and the well's then-current catalogue rate book. Every line stores both its
 native-currency amount and the converted amount used for AFE comparison, along
 with the source rate, FX factor, activity scope and any override justification.
 
+Services, consumables and tangibles are priced against the AFE estimate. A
+fourth group, other expenses (Lost In Hole, hole problems, fishing, third-party
+claims), records unexpected charges that have no AFE allowance: they carry the
+same operational scope as every other line, are accounted in their own group,
+and are deducted explicitly from the locked AFE total. Their remarks are
+mandatory, because the remark is what explains the charge.
+
 All business attributes are ordinary columns; no JSON payloads are persisted.
 """
 
@@ -44,6 +51,20 @@ DAILY_CHARGE_CATEGORIES = (
     "Others",
 )
 DAILY_CONSUMABLE_CATEGORIES = ("Mud Chemicals", "Cement Additives", "Fuel", "Drill Bits")
+# Unexpected, unbudgeted charges (Lost In Hole, hole problems, claims …). They are
+# recorded with the same operational scope as every other daily line, accounted in
+# their own cost group, and deducted explicitly from the locked AFE total.
+OTHER_EXPENSE_TYPE_LABELS: dict[str, str] = {
+    "LIH": "Lost In Hole (LIH)",
+    "HOLE_PROBLEM": "Hole Problem",
+    "FISHING": "Fishing & Recovery",
+    "SIDE_TRACK": "Side Track & Re-entry",
+    "EQUIPMENT_DAMAGE": "Equipment Damage / Loss",
+    "THIRD_PARTY_CLAIM": "Third Party Claim",
+    "PENALTY": "Penalty / Fine",
+    "MISC": "Miscellaneous Other Cost",
+}
+DAILY_OTHER_EXPENSE_TYPES = tuple(OTHER_EXPENSE_TYPE_LABELS)
 CATALOGUE_ITEM_KINDS = ("mud_chemical", "cement_additive", "fuel", "drill_bit", "tangible")
 BASELINE_RATE_KINDS = ("day_rate", "per_service", "per_section")
 BUDGET_KINDS = ("service", "consumable_category", "drill_bit", "tangible")
@@ -368,6 +389,9 @@ class DailyCostEntry(Base):
     services_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), server_default="0", nullable=False)
     consumables_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), server_default="0", nullable=False)
     tangibles_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), server_default="0", nullable=False)
+    # Accounted apart from the three cost groups, so the AFE reconciliation can show
+    # the deduction explicitly. total_cost already includes it.
+    other_expenses_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), server_default="0", nullable=False)
     total_cost: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), server_default="0", nullable=False)
     upa_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), server_default="0", nullable=False)
     npt_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=Decimal("0"), server_default="0", nullable=False)
@@ -394,6 +418,10 @@ class DailyCostEntry(Base):
     )
     tangible_lines: Mapped[list["DailyCostTangibleLine"]] = relationship(
         back_populates="entry", cascade="all, delete-orphan", order_by="DailyCostTangibleLine.sort_order",
+        lazy="selectin", passive_deletes=True,
+    )
+    other_expense_lines: Mapped[list["DailyCostOtherExpenseLine"]] = relationship(
+        back_populates="entry", cascade="all, delete-orphan", order_by="DailyCostOtherExpenseLine.sort_order",
         lazy="selectin", passive_deletes=True,
     )
 
@@ -538,3 +566,37 @@ class DailyCostTangibleLine(DailyCostLine):
     sub_activity: Mapped["WellSubActivity | None"] = relationship("WellSubActivity", lazy="joined")
     vendor: Mapped["Vendor | None"] = relationship("Vendor", lazy="joined")
     catalogue_rate_snapshot: Mapped[DailyCostCatalogueRateSnapshot | None] = relationship(lazy="joined")
+
+
+class DailyCostOtherExpenseLine(DailyCostLine):
+    """An unexpected charge recorded outside the AFE estimate.
+
+    Lost In Hole, hole problems, fishing and recovery, third-party claims and
+    similar events are booked here instead of inside the Services, Consumables or
+    Tangibles groups, so the sheet can show them as an explicit deduction from the
+    locked AFE total. The line keeps every operational scope column of the shared
+    daily cost line (rig-scoped well, activity, sub activity, hole section, phase,
+    responsible party), the entered unit rate, the FX factor and both amounts.
+    ``remarks`` is mandatory: it is the only narrative that explains the charge.
+    """
+
+    __tablename__ = "daily_cost_other_expense_lines"
+    __table_args__ = (
+        CheckConstraint(_in("classification", COST_CLASSIFICATIONS), name="ck_daily_cost_other_classification"),
+        CheckConstraint(_in("expense_type", DAILY_OTHER_EXPENSE_TYPES), name="ck_daily_cost_other_expense_type"),
+        CheckConstraint("quantity >= 0", name="ck_daily_cost_other_quantity"),
+        CheckConstraint("LENGTH(TRIM(remarks)) > 0", name="ck_daily_cost_other_remarks"),
+        Index("ix_daily_cost_other_line_entry_order", "entry_id", "sort_order"),
+        Index("ix_daily_cost_other_line_org_type", "organization_id", "expense_type"),
+    )
+
+    expense_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    expense_type_label: Mapped[str] = mapped_column(String(120), nullable=False)
+    expense_description: Mapped[str] = mapped_column(String(300), default="", server_default="", nullable=False)
+
+    entry: Mapped[DailyCostEntry] = relationship(back_populates="other_expense_lines", lazy="select")
+    activity: Mapped["Activity"] = relationship("Activity", lazy="joined")
+    section: Mapped["HoleSection | None"] = relationship("HoleSection", lazy="joined")
+    phase: Mapped["Phase | None"] = relationship("Phase", lazy="joined")
+    sub_activity: Mapped["WellSubActivity | None"] = relationship("WellSubActivity", lazy="joined")
+    vendor: Mapped["Vendor | None"] = relationship("Vendor", lazy="joined")

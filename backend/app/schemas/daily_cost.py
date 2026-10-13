@@ -24,10 +24,25 @@ ChargeCategory = Literal[
 ]
 ConsumableCategory = Literal["Mud Chemicals", "Cement Additives", "Fuel", "Drill Bits"]
 ConsumableKind = Literal["mud_chemical", "cement_additive", "fuel", "drill_bit"]
+# Unexpected charges that have no AFE allowance. The code is what is persisted;
+# the label lives in OTHER_EXPENSE_TYPE_LABELS and is snapshotted per line.
+OtherExpenseType = Literal[
+    "LIH", "HOLE_PROBLEM", "FISHING", "SIDE_TRACK", "EQUIPMENT_DAMAGE",
+    "THIRD_PARTY_CLAIM", "PENALTY", "MISC",
+]
+OtherExpenseUnit = Literal["unit", "days", "hours"]
+# The four cost groups of a daily sheet. Other Expenses has no AFE allowance and
+# is deducted from the locked AFE total instead of reconciled against a budget line.
+CostGroup = Literal["Services", "Consumables", "Tangibles", "Other Expenses"]
+TRACKED_COST_GROUPS: tuple[str, ...] = ("Services", "Consumables", "Tangibles")
+ALL_COST_GROUPS: tuple[str, ...] = (*TRACKED_COST_GROUPS, "Other Expenses")
 QuantityUnit = Literal["days", "hours", "service", "section", "unit"]
 DAILY_COST_MAX_LINES = 1000
 MAX_RATE = Decimal("100000000")
 MAX_AMOUNT = Decimal("100000000000")
+# An other-expense line is only as useful as the explanation attached to it, so a
+# remark is mandatory on every one of these lines.
+OTHER_EXPENSE_MIN_REMARKS = 3
 
 
 def _trim(value: Any) -> Any:
@@ -143,11 +158,45 @@ class DailyCostTangibleLineIn(DailyCostLineInput):
     tangible_id: str = Field(min_length=1, max_length=36)
 
 
+class DailyCostOtherExpenseLineIn(DailyCostLineInput):
+    """An unexpected charge (Lost In Hole, hole problem, claim …) on the day sheet.
+
+    There is no AFE or catalogue allowance to price from, so the unit rate is
+    entered on the line. A daily override is meaningless here and is rejected, and
+    the remarks are mandatory because they are what explains the charge.
+    """
+
+    expense_type: OtherExpenseType
+    expense_description: str = Field(default="", max_length=300)
+    quantity_unit: OtherExpenseUnit = "unit"
+    unit_rate: Decimal = Field(gt=0, le=MAX_RATE, max_digits=18, decimal_places=4)
+
+    @field_validator("expense_description", mode="before")
+    @classmethod
+    def trim_description(cls, value: Any) -> Any:
+        return _trim(value)
+
+    @model_validator(mode="after")
+    def require_remark_and_plain_rate(self):
+        if len(self.remarks.strip()) < OTHER_EXPENSE_MIN_REMARKS:
+            raise ValueError(
+                "Other expenses need remarks of at least "
+                f"{OTHER_EXPENSE_MIN_REMARKS} characters explaining the charge "
+                "(what was lost in hole, the incident or the claim reference)."
+            )
+        if self.override_rate is not None or self.override_reason:
+            raise ValueError(
+                "An other expense is priced from its own unit rate; a daily rate override does not apply."
+            )
+        return self
+
+
 class DailyCostSaveIn(_Strict):
     remarks: str = Field(default="", max_length=1000)
     services: list[DailyCostServiceLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
     consumables: list[DailyCostConsumableLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
     tangibles: list[DailyCostTangibleLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
+    other_expenses: list[DailyCostOtherExpenseLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
 
     @field_validator("remarks", mode="before")
     @classmethod
@@ -156,7 +205,11 @@ class DailyCostSaveIn(_Strict):
 
     @model_validator(mode="after")
     def unique_line_ids(self):
-        ids = [line.id for group in (self.services, self.consumables, self.tangibles) for line in group if line.id]
+        ids = [
+            line.id
+            for group in (self.services, self.consumables, self.tangibles, self.other_expenses)
+            for line in group if line.id
+        ]
         if len(ids) != len(set(ids)):
             raise ValueError("A saved line can appear only once in a daily sheet.")
         return self
@@ -313,6 +366,13 @@ class DailyCostVendorOption(BaseModel):
     display_name: str
 
 
+class DailyCostOtherExpenseTypeOption(BaseModel):
+    """One selectable type of unexpected cost, e.g. LIH or a hole problem."""
+
+    code: str
+    label: str
+
+
 class DailyCostReference(BaseModel):
     rigs: list[DailyCostRigOption]
     wells: list[DailyCostWellOption]
@@ -328,6 +388,7 @@ class DailyCostReference(BaseModel):
     quantity_units: list[str]
     classifications: list[str]
     consumable_categories: list[str]
+    other_expense_types: list[DailyCostOtherExpenseTypeOption]
 
 
 class DailyCostRateOut(BaseModel):
@@ -456,8 +517,16 @@ class DailyCostTangibleLineOut(DailyCostLineOut):
     catalogue_rate_snapshot_id: str | None
 
 
+class DailyCostOtherExpenseLineOut(DailyCostLineOut):
+    """An unexpected charge. It has no AFE allowance and reduces the AFE amount."""
+
+    expense_type: OtherExpenseType
+    expense_type_label: str
+    expense_description: str
+
+
 class DailyCostComparisonGroup(BaseModel):
-    cost_group: Literal["Services", "Consumables", "Tangibles"]
+    cost_group: CostGroup
     planned: Decimal
     actual_to_date: Decimal
     balance: Decimal
@@ -465,7 +534,7 @@ class DailyCostComparisonGroup(BaseModel):
 
 class DailyCostBudgetComparison(BaseModel):
     budget_key: str
-    cost_group: Literal["Services", "Consumables", "Tangibles"]
+    cost_group: CostGroup
     budget_kind: str
     item_code: str
     item_name: str
@@ -476,10 +545,21 @@ class DailyCostBudgetComparison(BaseModel):
 
 
 class DailyCostComparison(BaseModel):
+    """The locked AFE plan against every actual recorded through the sheet date.
+
+    ``actual_to_date`` covers all four cost groups, so ``balance`` is the AFE total
+    less the tracked actuals **and** less the other expenses: unexpected charges
+    such as Lost In Hole are deducted from the AFE amount rather than reconciled
+    against a budget line. ``tracked_actual_to_date`` and ``other_expenses_to_date``
+    keep the two halves visible.
+    """
+
     effective_on: date
     currency: str
     planned_total: Decimal
     actual_to_date: Decimal
+    tracked_actual_to_date: Decimal
+    other_expenses_to_date: Decimal
     balance: Decimal
     over_budget: bool
     includes_draft_entries: bool
@@ -512,9 +592,11 @@ class DailyCostEntryOut(BaseModel):
     services_count: int
     consumables_count: int
     tangibles_count: int
+    other_expenses_count: int
     services_total: Decimal
     consumables_total: Decimal
     tangibles_total: Decimal
+    other_expenses_total: Decimal
     total_cost: Decimal
     upa_total: Decimal
     npt_total: Decimal
@@ -540,6 +622,7 @@ class DailyCostDayOut(BaseModel):
     services: list[DailyCostServiceLineOut]
     consumables: list[DailyCostConsumableLineOut]
     tangibles: list[DailyCostTangibleLineOut]
+    other_expenses: list[DailyCostOtherExpenseLineOut]
     comparison: DailyCostComparison
     warnings: list[DailyCostWarnings]
 
@@ -548,9 +631,11 @@ class DailyCostPreviewOut(BaseModel):
     services: list[DailyCostServiceLineOut]
     consumables: list[DailyCostConsumableLineOut]
     tangibles: list[DailyCostTangibleLineOut]
+    other_expenses: list[DailyCostOtherExpenseLineOut]
     services_total: Decimal
     consumables_total: Decimal
     tangibles_total: Decimal
+    other_expenses_total: Decimal
     total_cost: Decimal
     upa_total: Decimal
     npt_total: Decimal
@@ -559,7 +644,7 @@ class DailyCostPreviewOut(BaseModel):
 
 class DailyCostGroupSummary(BaseModel):
     currency: str
-    cost_group: Literal["Services", "Consumables", "Tangibles"]
+    cost_group: CostGroup
     planned: Decimal
     actual: Decimal
     balance: Decimal
@@ -630,6 +715,7 @@ class DailyCostAfePosition(BaseModel):
     currency: str
     planned_total: Decimal
     actual: Decimal
+    other_expenses: Decimal
     balance: Decimal
     over_budget: bool
     sheets: int
@@ -645,6 +731,7 @@ class DailyCostDailyRow(BaseModel):
     services: Decimal
     consumables: Decimal
     tangibles: Decimal
+    other_expenses: Decimal
     total: Decimal
     upa: Decimal
     npt: Decimal
@@ -669,7 +756,11 @@ class DailyCostFactorRow(BaseModel):
 
 
 class DailyCostFactorGroup(BaseModel):
-    """A named cut of the same ledger, e.g. by activity or by responsible party."""
+    """A named cut of the same ledger, e.g. by activity or by responsible party.
+
+    Other-expense lines appear in ``item`` as their expense type (LIH, hole
+    problem, …), because that is the only grouping that describes them.
+    """
 
     dimension: Literal[
         "cost_group", "classification", "section", "phase", "activity", "sub_activity",
@@ -690,6 +781,7 @@ class DailyCostWellTotals(BaseModel):
     services: Decimal
     consumables: Decimal
     tangibles: Decimal
+    other_expenses: Decimal
     upa: Decimal
     npt: Decimal
     planned_days: Decimal

@@ -185,9 +185,21 @@ export default function DailyCostManagement() {
     { headerName: 'WELL', field: 'well_code', minWidth: 150, valueGetter: params => `${params.data?.well_code ?? ''} · ${params.data?.well_name ?? ''}` },
     { headerName: 'AFE', field: 'afe_code', minWidth: 165, valueGetter: params => `${params.data?.afe_code ?? ''} · ${params.data?.afe_name ?? ''}` },
     { headerName: 'DAILY TOTAL', field: 'total_cost', minWidth: 160, valueFormatter: params => dailyMoney(String(params.value ?? '0'), params.data?.standard_currency) },
+    {
+      // Unexpected charges are part of the day's cost and are deducted from the AFE.
+      headerName: 'OTHER EXPENSES', field: 'other_expenses_total', minWidth: 160,
+      cellRenderer: (params: ICellRendererParams<DailyCostEntry>) => {
+        const row = params.data
+        if (!row) return null
+        if (!Number(row.other_expenses_total)) return <Typography fontSize={12} color="text.secondary">—</Typography>
+        return <Typography fontSize={12} fontWeight={700} color="warning.main" title={`${row.other_expenses_count} line(s) deducted from the AFE total`}>
+          − {dailyMoney(row.other_expenses_total, row.standard_currency)}
+        </Typography>
+      },
+    },
     { headerName: 'LINES', field: 'services_count', minWidth: 105, valueGetter: params => {
       const row = params.data
-      return row ? row.services_count + row.consumables_count + row.tangibles_count : 0
+      return row ? row.services_count + row.consumables_count + row.tangibles_count + row.other_expenses_count : 0
     } },
     { headerName: 'UPA / NPT', field: 'upa_total', minWidth: 160, valueGetter: params => params.data
       ? `${dailyMoney(params.data.upa_total, params.data.standard_currency)} / ${dailyMoney(params.data.npt_total, params.data.standard_currency)}` : '—' },

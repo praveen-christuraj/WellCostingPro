@@ -4,14 +4,21 @@ import { Alert, Box, Button, Divider, MenuItem, TextField, Typography } from '@m
 import { FormDialog } from '../Common'
 import {
   DAILY_CHARGE_CATEGORIES, DAILY_CHARGING_BASES, DAILY_CONSUMABLE_CATEGORIES,
-  DAILY_ONE_TIME_CATEGORIES, dailyMoney, deriveClassification, type ChargingBasis, type ChargeCategory,
+  DAILY_ONE_TIME_CATEGORIES, OTHER_EXPENSE_MIN_REMARKS, OTHER_EXPENSE_TYPES, dailyMoney,
+  deriveClassification, type ChargingBasis, type ChargeCategory,
   type ConsumableCategory, type ConsumableKind, type DailyCostBaseline, type DailyCostCatalogueOption,
-  type DailyCostConsumableInput, type DailyCostLineBase, type DailyCostReference, type DailyCostServiceInput,
-  type DailyCostTangibleInput, type DailyQuantityUnit,
+  type DailyCostConsumableInput, type DailyCostLineBase, type DailyCostOtherExpenseInput,
+  type DailyCostReference, type DailyCostServiceInput, type DailyCostTangibleInput, type DailyQuantityUnit,
+  type OtherExpenseType, type OtherExpenseUnit,
 } from '../../lib/dailyCost'
 
-export type DailyCostLineKind = 'service' | 'consumable' | 'tangible'
-export type EditableDailyCostLine = DailyCostServiceInput | DailyCostConsumableInput | DailyCostTangibleInput
+/**
+ * The four line kinds of a daily sheet. `other` is the separately accounted group:
+ * Lost In Hole, hole problems, fishing and similar unbudgeted charges.
+ */
+export type DailyCostLineKind = 'service' | 'consumable' | 'tangible' | 'other'
+export type EditableDailyCostLine =
+  | DailyCostServiceInput | DailyCostConsumableInput | DailyCostTangibleInput | DailyCostOtherExpenseInput
 
 type Props = {
   open: boolean
@@ -36,6 +43,7 @@ const CATEGORY_BY_KIND: Record<ConsumableKind, ConsumableCategory> = {
 }
 const isService = (line: EditableDailyCostLine): line is DailyCostServiceInput => 'service_id' in line
 const isConsumable = (line: EditableDailyCostLine): line is DailyCostConsumableInput => 'item_kind' in line
+const isOther = (line: EditableDailyCostLine): line is DailyCostOtherExpenseInput => 'expense_type' in line
 
 function baseDefaults(reference: DailyCostReference, baseline: DailyCostBaseline): DailyCostLineBase {
   const section = baseline.sections[0]
@@ -53,6 +61,10 @@ function baseDefaults(reference: DailyCostReference, baseline: DailyCostBaseline
     override_reason: '',
     remarks: '',
   }
+}
+
+function expenseTypeDefault(reference: DailyCostReference): OtherExpenseType {
+  return (reference.other_expense_types?.[0]?.code ?? OTHER_EXPENSE_TYPES[0].code) as OtherExpenseType
 }
 
 function initialFor(
@@ -86,6 +98,18 @@ function initialFor(
       currency: rate?.currency ?? baseline.standard_currency,
       hole_section_id: rate?.hole_section_id ?? base.hole_section_id,
       phase_id: rate?.phase_id ?? base.phase_id,
+    }
+  }
+  if (kind === 'other') {
+    return {
+      ...base,
+      expense_type: expenseTypeDefault(reference),
+      expense_description: '',
+      quantity_unit: 'unit',
+      unit_rate: '',
+      // There is no locked rate to override on an unbudgeted charge.
+      override_rate: null,
+      override_reason: '',
     }
   }
   if (kind === 'tangible') {
@@ -163,11 +187,15 @@ export function DailyCostLineDialog({
   const derivedClassification = deriveClassification(reference.activities.find(item => item.id === form?.activity_id))
 
   const catalogKind = form && isConsumable(form) ? form.item_kind : 'tangible'
-  const initialCatalogId = form && isConsumable(form) ? form.item_id : form && !isService(form) ? form.tangible_id : null
-  const catalogueOptions = kind === 'service' || !form
+  const initialCatalogId = form && !isService(form) && !isOther(form)
+    ? (isConsumable(form) ? form.item_id : form.tangible_id)
+    : null
+  // An other expense has no catalogue item and no locked rate, so no picker applies.
+  const catalogueOptions = kind === 'service' || kind === 'other' || !form
     ? [] : optionsForKind(catalogKind, reference, baseline, initialCatalogId)
   const selectedCatalog = catalogueOptions.find(item => item.id === initialCatalogId)
   const selectedSnapshot = itemSnapshot(selectedCatalog, baseline)
+  const expenseTypeOptions = reference.other_expense_types?.length ? reference.other_expense_types : OTHER_EXPENSE_TYPES
   const catalogHasSnapshot = Boolean(selectedSnapshot && baseline.catalogue_rates.some(
     item => item.item_kind === selectedSnapshot.item_kind && item.id === selectedSnapshot.id,
   ))
@@ -255,6 +283,13 @@ export function DailyCostLineDialog({
       if (!form.currency) return 'The rate needs a currency included in the locked AFE currency setup.'
       if (form.quantity_unit === 'hours' && Number(form.quantity) > 24) return 'For a daily line, hours cannot exceed 24; enter days instead.'
       if (form.charging_basis !== 'Day Rate' && !form.hole_section_id) return 'Choose a hole section for this charging basis.'
+    } else if (isOther(form)) {
+      if (!form.expense_type) return 'Choose what kind of unexpected cost this is (LIH, hole problem, claim …).'
+      if (!form.unit_rate || Number(form.unit_rate) <= 0) return 'Enter the unit rate charged for this other expense.'
+      if (!form.currency) return 'Choose the currency the charge is billed in.'
+      if (form.remarks.trim().length < OTHER_EXPENSE_MIN_REMARKS) {
+        return `Remarks are mandatory on an other expense: describe what was lost in hole, the incident or the claim (at least ${OTHER_EXPENSE_MIN_REMARKS} characters).`
+      }
     } else if (isConsumable(form)) {
       if (!form.item_id) return 'Select a consumable item.'
       if (!form.hole_section_id) return 'Choose a hole section for actual consumable use.'
@@ -276,10 +311,15 @@ export function DailyCostLineDialog({
     }
     setSaving(true)
     try {
-      const prepared = { ...form, id: form.id || null,
+      const prepared = {
+        ...form, id: form.id || null,
         hole_section_id: form.hole_section_id || null, phase_id: form.phase_id || null,
         sub_activity_id: form.sub_activity_id || null, vendor_id: form.vendor_id || null,
-        party_name: form.party_name.trim(), override_reason: form.override_rate === null ? '' : form.override_reason.trim(),
+        party_name: form.party_name.trim(),
+        remarks: form.remarks.trim(),
+        override_reason: form.override_rate === null ? '' : form.override_reason.trim(),
+        // An other expense is priced from its own unit rate, never from an override.
+        ...(isOther(form) ? { override_rate: null, override_reason: '' } : {}),
       } as EditableDailyCostLine
       onSave(prepared)
     } finally {
@@ -287,7 +327,9 @@ export function DailyCostLineDialog({
     }
   }
 
-  const title = `${form.id ? 'Edit' : 'Add'} ${kind === 'service' ? 'service' : kind === 'consumable' ? 'consumable usage' : 'tangible'}`
+  const title = `${form.id ? 'Edit' : 'Add'} ${
+    kind === 'service' ? 'service' : kind === 'consumable' ? 'consumable usage' : kind === 'other' ? 'other expense' : 'tangible'
+  }`
   const sectionLabel = (section: typeof sections[number]) => `${section.section_code} · ${section.section_name}`
 
   return <FormDialog open title={title} subtitle="Daily actuals are priced from the AFE and rate snapshots locked when tracking began. Overrides are recorded with their reason." onClose={onClose} onSubmit={submit} busy={saving} submitLabel={form.id ? 'Save line' : 'Add line'} maxWidth="md">
@@ -296,6 +338,23 @@ export function DailyCostLineDialog({
         helperText="Classifies the line (Planned / UPA / NPT) and drives its sub activity list.">
         {reference.activities.map(item => <MenuItem key={item.id} value={item.id}>{item.display_name}</MenuItem>)}
       </TextField>
+
+      {kind === 'other' && isOther(form) && <>
+        <Divider/>
+        <Typography fontSize={12} fontWeight={800} letterSpacing={.5} color="text.secondary">OTHER EXPENSE / UNEXPECTED COST</Typography>
+        <Alert severity="warning" sx={{ py: 0 }}>
+          An unexpected charge has no AFE allowance: it is accounted in its own group and deducted from the
+          AFE total, so the remaining balance falls by the same amount. Remarks are mandatory.
+        </Alert>
+        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+          <TextField select required label="Type of other expense" value={form.expense_type} onChange={event => update({ expense_type: event.target.value as OtherExpenseType })}
+            helperText="Groups the deduction on the sheet, the well analysis and the print sheet.">
+            {expenseTypeOptions.map(option => <MenuItem key={option.code} value={option.code}>{option.label}</MenuItem>)}
+          </TextField>
+          <TextField label="What was lost or charged (optional)" value={form.expense_description} onChange={event => update({ expense_description: event.target.value })}
+            inputProps={{ maxLength: 300 }} helperText="E.g. 6 5/8 in BHA, 3 joints of drill pipe, third-party claim note."/>
+        </Box>
+      </>}
 
       {kind === 'service' && isService(form) && <>
         <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1.2fr .8fr' } }}>
@@ -351,7 +410,7 @@ export function DailyCostLineDialog({
           : <Alert severity="warning" sx={{ py: 0 }}>No rate was present in the well snapshot. Enter a daily override with a reason; the actual will still reconcile against any AFE category allowance.</Alert>}
       </>}
 
-      {kind === 'tangible' && !isService(form) && !isConsumable(form) && <>
+      {kind === 'tangible' && !isService(form) && !isConsumable(form) && !isOther(form) && <>
         <TextField select required label="Tangible" value={form.tangible_id} onChange={event => {
           const item = catalogueOptions.find(option => option.id === event.target.value)
           const snapshot = itemSnapshot(item, baseline)
@@ -419,7 +478,7 @@ export function DailyCostLineDialog({
           {form.baseline_service_rate_id && selectedRate && <TextField label="Captured AFE rate" value={dailyMoney(selectedRate.unit_rate, selectedRate.currency)} InputProps={{ readOnly: true }}/>}
         </Box>
       </>}
-      {!isService(form) && <>
+      {!isService(form) && !isOther(form) && <>
         <Divider/>
         <Typography fontSize={12} fontWeight={800} letterSpacing={.5} color="text.secondary">ACTUAL USAGE &amp; RATE</Typography>
         <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1.2fr .8fr' } }}>
@@ -428,11 +487,28 @@ export function DailyCostLineDialog({
         </Box>
       </>}
 
-      <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+      {isOther(form) && <>
+        <Divider/>
+        <Typography fontSize={12} fontWeight={800} letterSpacing={.5} color="text.secondary">CHARGED QUANTITY &amp; UNIT RATE</Typography>
+        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr 1.2fr' } }}>
+          <TextField label="Quantity" type="number" required value={form.quantity} onChange={event => update({ quantity: event.target.value })} inputProps={{ min: 0.0001, step: 'any' }} helperText="Items lost, days claimed, or 1 for a single charge."/>
+          <TextField select label="Quantity unit" value={form.quantity_unit} onChange={event => update({ quantity_unit: event.target.value as OtherExpenseUnit })}>
+            {(['unit', 'days', 'hours'] as OtherExpenseUnit[]).map(unit => <MenuItem key={unit} value={unit}>{unit}</MenuItem>)}
+          </TextField>
+          <TextField label={`Unit rate (${form.currency || baseline.standard_currency})`} type="number" required value={form.unit_rate} onChange={event => update({ unit_rate: event.target.value })} inputProps={{ min: 0.0001, step: 'any' }}
+            helperText={`Amount charged: ${dailyMoney((Number(form.unit_rate || 0) * Number(form.quantity || 0)).toFixed(2), form.currency || baseline.standard_currency)}`}/>
+        </Box>
+      </>}
+
+      {!isOther(form) && <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
         <TextField label="Daily unit-rate override (optional)" type="number" value={form.override_rate ?? ''} onChange={event => update({ override_rate: event.target.value === '' ? null : event.target.value })} inputProps={{ min: 0, step: 'any' }} helperText="Overrides only this daily line; the locked AFE/catalogue rate remains unchanged."/>
         <TextField label="Override reason" value={form.override_reason} onChange={event => update({ override_reason: event.target.value })} disabled={form.override_rate === null} inputProps={{ maxLength: 500 }} helperText={form.override_rate === null ? 'Required when an override rate is entered.' : `${form.override_reason.trim().length}/500 characters`}/>
-      </Box>
-      <TextField label="Line remarks" value={form.remarks} onChange={event => update({ remarks: event.target.value })} multiline minRows={2} inputProps={{ maxLength: 500 }}/>
+      </Box>}
+      <TextField label={isOther(form) ? 'Remarks (mandatory)' : 'Line remarks'} required={isOther(form)}
+        value={form.remarks} onChange={event => update({ remarks: event.target.value })} multiline minRows={2} inputProps={{ maxLength: 500 }}
+        helperText={isOther(form)
+          ? `${form.remarks.trim().length}/500 characters. State what was lost in hole, the incident, and who bears the cost.`
+          : undefined}/>
       {error && <Alert severity="error">{error}</Alert>}
     </Box>
   </FormDialog>

@@ -5,6 +5,11 @@ the well plan, service charge cards and all active catalogue rates. Daily lines
 are then priced from those immutable inputs (or a user-entered, justified
 rate override), never from a live master-data price. All amounts are stored in
 both their native currency and the AFE's standard currency for reconciliation.
+
+Services, consumables and tangibles are reconciled against the AFE budget lines.
+Other expenses (Lost In Hole, hole problems, claims) have no allowance to be
+reconciled against: they are kept in their own group and deducted from the locked
+AFE total, and each one carries a mandatory remark.
 """
 
 from __future__ import annotations
@@ -28,20 +33,24 @@ from app.models import (
     Activity, Afe, AuditLog, CementAdditive, Currency, DailyCostBaseline,
     DailyCostBaselineBudgetLine, DailyCostBaselineExchangeRate, DailyCostBaselinePhase,
     DailyCostBaselineSection, DailyCostBaselineServiceRate, DailyCostCatalogueRateSnapshot,
-    DailyCostConsumableLine, DailyCostEntry, DailyCostServiceLine, DailyCostTangibleLine,
+    DailyCostConsumableLine, DailyCostEntry, DailyCostOtherExpenseLine, DailyCostServiceLine,
+    DailyCostTangibleLine,
     DailyCostWellRateBaseline, DrillBit, FuelType, HoleSection, MudChemical, Phase, Rig,
     Service, Tangible, Vendor, Well, WellPhase, WellSection, WellSubActivity,
 )
+from app.models.daily_cost import OTHER_EXPENSE_TYPE_LABELS
 from app.models.entities import User
 from app.models.rig_well import now as _model_now, uid
 from app.schemas.afe import AfeEstimateOut
 from app.schemas.daily_cost import (
+    ALL_COST_GROUPS, OTHER_EXPENSE_MIN_REMARKS, TRACKED_COST_GROUPS,
     DailyCostAfeOption, DailyCostAfePosition, DailyCostBaselineBudgetOut, DailyCostBaselineOut,
     DailyCostBudgetComparison, DailyCostCatalogueOption, DailyCostComparison,
     DailyCostComparisonGroup, DailyCostConsumableLineIn, DailyCostConsumableLineOut,
     DailyCostDailyRow, DailyCostDayOut, DailyCostEntryCreate, DailyCostEntryOut, DailyCostExportAudit,
     DailyCostFactorGroup, DailyCostFactorRow, DailyCostGroupSummary, DailyCostIDs,
-    DailyCostImportRequest, DailyCostImportResponse, DailyCostOverview, DailyCostPreviewOut,
+    DailyCostImportRequest, DailyCostImportResponse, DailyCostOtherExpenseLineIn,
+    DailyCostOtherExpenseLineOut, DailyCostOtherExpenseTypeOption, DailyCostOverview, DailyCostPreviewOut,
     DailyCostRateOut, DailyCostReference, DailyCostReopenIn, DailyCostRigOption, DailyCostSaveIn,
     DailyCostSectionOption, DailyCostServiceLineIn, DailyCostServiceLineOut, DailyCostStatusIn,
     DailyCostSubActivityOption, DailyCostTangibleLineIn, DailyCostTangibleLineOut,
@@ -79,7 +88,33 @@ LINE_MODELS: tuple[tuple[type[Any], str], ...] = (
     (DailyCostServiceLine, "Services"),
     (DailyCostConsumableLine, "Consumables"),
     (DailyCostTangibleLine, "Tangibles"),
+    # No AFE budget lines exist for this group; it is deducted from the AFE total.
+    (DailyCostOtherExpenseLine, "Other Expenses"),
 )
+# Entry relationship that owns each line model, used wherever a whole sheet is
+# replaced or read back.
+LINE_RELATIONSHIP: dict[type[Any], str] = {
+    DailyCostServiceLine: "service_lines",
+    DailyCostConsumableLine: "consumable_lines",
+    DailyCostTangibleLine: "tangible_lines",
+    DailyCostOtherExpenseLine: "other_expense_lines",
+}
+OTHER_EXPENSE_RATE_SOURCE = "other_expense"
+OTHER_EXPENSE_UNITS = ("unit", "days", "hours")
+# Line-type labels accepted by the daily-sheet importer for an unbudgeted charge.
+OTHER_EXPENSE_LINE_TYPES = ("other", "others", "other_expense", "other_expenses", "unbudgeted", "other_cost")
+# Spoken aliases an importer is likely to type instead of the stored code.
+OTHER_EXPENSE_TYPE_ALIASES = {
+    "lost in hole": "LIH", "lost_in_hole": "LIH", "lih": "LIH",
+    "hole problem": "HOLE_PROBLEM", "hole problems": "HOLE_PROBLEM", "hole_problem": "HOLE_PROBLEM",
+    "fishing": "FISHING", "fishing & recovery": "FISHING", "fishing and recovery": "FISHING",
+    "recovery": "FISHING", "fishing_recovery": "FISHING",
+    "side track": "SIDE_TRACK", "sidetrack": "SIDE_TRACK", "side_track": "SIDE_TRACK",
+    "equipment damage": "EQUIPMENT_DAMAGE", "damage": "EQUIPMENT_DAMAGE", "equipment": "EQUIPMENT_DAMAGE",
+    "third party claim": "THIRD_PARTY_CLAIM", "third-party claim": "THIRD_PARTY_CLAIM", "claim": "THIRD_PARTY_CLAIM",
+    "penalty": "PENALTY", "fine": "PENALTY", "penalty / fine": "PENALTY",
+    "misc": "MISC", "miscellaneous": "MISC", "other": "MISC",
+}
 
 log = logging.getLogger("app.daily_cost")
 
@@ -255,7 +290,7 @@ def _get_entry(
             selectinload(DailyCostEntry.baseline).selectinload(DailyCostBaseline.exchange_rates),
             selectinload(DailyCostEntry.rate_baseline).selectinload(DailyCostWellRateBaseline.catalogue_rates),
             selectinload(DailyCostEntry.service_lines), selectinload(DailyCostEntry.consumable_lines),
-            selectinload(DailyCostEntry.tangible_lines),
+            selectinload(DailyCostEntry.tangible_lines), selectinload(DailyCostEntry.other_expense_lines),
         )
         .where(DailyCostEntry.id == entry_id, DailyCostEntry.organization_id == organization_id)
     )
@@ -803,6 +838,10 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
         quantity_units=["days", "hours", "service", "section", "unit"],
         classifications=["Planned", "UPA", "NPT"],
         consumable_categories=["Mud Chemicals", "Cement Additives", "Fuel", "Drill Bits"],
+        other_expense_types=[
+            DailyCostOtherExpenseTypeOption(code=code, label=label)
+            for code, label in OTHER_EXPENSE_TYPE_LABELS.items()
+        ],
     )
 
 
@@ -926,11 +965,7 @@ def _validate_scope(
 
 
 def _existing_line_maps(entry: DailyCostEntry) -> dict[type[Any], dict[str, Any]]:
-    return {
-        DailyCostServiceLine: {row.id: row for row in entry.service_lines},
-        DailyCostConsumableLine: {row.id: row for row in entry.consumable_lines},
-        DailyCostTangibleLine: {row.id: row for row in entry.tangible_lines},
-    }
+    return {model: {row.id: row for row in getattr(entry, attr)} for model, attr in LINE_RELATIONSHIP.items()}
 
 
 def _check_line_id(line_id: str | None, existing: dict[str, Any], label: str) -> Any | None:
@@ -1434,6 +1469,67 @@ def _normalise_catalogue_line(
     return base, old, label
 
 
+def _normalise_other_expense(
+    db: Session,
+    entry: DailyCostEntry,
+    line: DailyCostOtherExpenseLineIn,
+    existing_rows: dict[str, Any],
+) -> tuple[dict[str, Any], Any | None, str]:
+    """Price one unexpected charge (Lost In Hole, hole problem, claim) on the sheet.
+
+    These costs have no AFE or catalogue allowance, so the entered unit rate is the
+    price, the line never carries a rate override, and the amount is deducted from
+    the locked AFE total instead of reconciled against a budget line. The remark is
+    mandatory because it is the only narrative that explains the charge.
+    """
+    old = _check_line_id(line.id, existing_rows, "Other expense")
+    type_label = OTHER_EXPENSE_TYPE_LABELS.get(line.expense_type, line.expense_type)
+    remarks = line.remarks.strip()
+    if len(remarks) < OTHER_EXPENSE_MIN_REMARKS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Other expense {type_label}: remarks are mandatory (at least "
+                f"{OTHER_EXPENSE_MIN_REMARKS} characters). State what was lost in hole, the incident, "
+                "or the claim this charge covers."
+            ),
+        )
+    base, _activity, _section, _phase, _vendor, _sub_activity = _base_fields(
+        db,
+        entry,
+        line,
+        label=f"Other expense {type_label}",
+        quantity_unit=line.quantity_unit,
+        existing_row=old,
+        snapshots={},  # no catalogue rate book applies to an unbudgeted charge
+    )
+    currency = (line.currency or entry.standard_currency).upper()
+    factor = _rate_factor(entry.baseline, currency, f"Other expense {type_label}")
+    quantity = Decimal(line.quantity)
+    amount = _money(quantity * _rate(line.unit_rate))
+    base.update(
+        {
+            "captured_rate": _rate(line.unit_rate),
+            "override_rate": None,
+            "override_reason": "",
+            "currency": currency,
+            "exchange_rate": factor,
+            "amount": amount,
+            "standard_amount": _money(amount * factor),
+            "rate_source": OTHER_EXPENSE_RATE_SOURCE,
+            "baseline_budget_line_id": None,
+            "budget_key": f"other:{line.expense_type}",
+            "remarks": remarks,
+            "quantity": quantity,
+            "quantity_unit": line.quantity_unit,
+            "expense_type": line.expense_type,
+            "expense_type_label": type_label,
+            "expense_description": line.expense_description,
+        }
+    )
+    return base, old, _label(line.expense_type, type_label)
+
+
 def _reject_duplicate_service_sub_activity(services: list[dict[str, Any]]) -> None:
     """One service may repeat on a date only under a different well sub activity.
 
@@ -1461,13 +1557,14 @@ def _normalize_payload(
     db: Session,
     entry: DailyCostEntry,
     payload: DailyCostSaveIn,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     existing_maps = _existing_line_maps(entry)
     snapshots = _rate_snapshot_index(entry.rate_baseline)
     budgets = _budget_by_key(entry.baseline)
     services: list[dict[str, Any]] = []
     consumables: list[dict[str, Any]] = []
     tangibles: list[dict[str, Any]] = []
+    other_expenses: list[dict[str, Any]] = []
     for order, line in enumerate(payload.services):
         fields, old, label = _normalise_service(
             db, entry, line, existing_maps[DailyCostServiceLine], snapshots, budgets
@@ -1492,7 +1589,14 @@ def _normalize_payload(
         fields["sort_order"] = order
         fields["id"] = old.id if old else uid()
         tangibles.append(fields)
-    return services, consumables, tangibles
+    for order, line in enumerate(payload.other_expenses):
+        fields, old, label = _normalise_other_expense(
+            db, entry, line, existing_maps[DailyCostOtherExpenseLine]
+        )
+        fields["sort_order"] = order
+        fields["id"] = old.id if old else uid()
+        other_expenses.append(fields)
+    return services, consumables, tangibles, other_expenses
 
 
 def _sum_group(lines: Sequence[Any]) -> Decimal:
@@ -1514,7 +1618,7 @@ def _line_snapshot_for_audit(fields: dict[str, Any]) -> tuple[Decimal | None, st
 
 
 def _persist_group(entry: DailyCostEntry, model: type[Any], fields_group: list[dict[str, Any]]) -> tuple[list[Any], list[tuple[Any, Any]]]:
-    existing = {row.id: row for row in getattr(entry, {DailyCostServiceLine: "service_lines", DailyCostConsumableLine: "consumable_lines", DailyCostTangibleLine: "tangible_lines"}[model])}
+    existing = {row.id: row for row in getattr(entry, LINE_RELATIONSHIP[model])}
     persisted: list[Any] = []
     overrides: list[tuple[Any, Any]] = []
     for fields in fields_group:
@@ -1531,8 +1635,7 @@ def _persist_group(entry: DailyCostEntry, model: type[Any], fields_group: list[d
         persisted.append(row)
         if audit_change:
             overrides.append((row, audit_change))
-    attr = {DailyCostServiceLine: "service_lines", DailyCostConsumableLine: "consumable_lines", DailyCostTangibleLine: "tangible_lines"}[model]
-    setattr(entry, attr, persisted)
+    setattr(entry, LINE_RELATIONSHIP[model], persisted)
     return persisted, overrides
 
 
@@ -1542,6 +1645,7 @@ def _upsert_lines(
     services: list[dict[str, Any]],
     consumables: list[dict[str, Any]],
     tangibles: list[dict[str, Any]],
+    other_expenses: list[dict[str, Any]],
     *,
     user: User,
     request: Request | None,
@@ -1549,17 +1653,23 @@ def _upsert_lines(
     _, service_overrides = _persist_group(entry, DailyCostServiceLine, services)
     _, consumable_overrides = _persist_group(entry, DailyCostConsumableLine, consumables)
     _, tangible_overrides = _persist_group(entry, DailyCostTangibleLine, tangibles)
+    _, other_overrides = _persist_group(entry, DailyCostOtherExpenseLine, other_expenses)
     _flush(db, operation="saving daily cost lines")
-    all_lines = [*entry.service_lines, *entry.consumable_lines, *entry.tangible_lines]
+    all_lines = [*entry.service_lines, *entry.consumable_lines, *entry.tangible_lines, *entry.other_expense_lines]
     entry.services_total = _sum_group(entry.service_lines)
     entry.consumables_total = _sum_group(entry.consumable_lines)
     entry.tangibles_total = _sum_group(entry.tangible_lines)
-    entry.total_cost = _money(entry.services_total + entry.consumables_total + entry.tangibles_total)
+    # Other expenses are totalled on their own so the AFE reconciliation can show
+    # the deduction, then they join the day's actual cost like any other group.
+    entry.other_expenses_total = _sum_group(entry.other_expense_lines)
+    entry.total_cost = _money(
+        entry.services_total + entry.consumables_total + entry.tangibles_total + entry.other_expenses_total
+    )
     entry.upa_total = _sum_classification(all_lines, "UPA")
     entry.npt_total = _sum_classification(all_lines, "NPT")
     entry.updated_by = _actor_name(user)
     entry.updated_at = _now()
-    for line, change in [*service_overrides, *consumable_overrides, *tangible_overrides]:
+    for line, change in [*service_overrides, *consumable_overrides, *tangible_overrides, *other_overrides]:
         old_rate, new_rate, reason, currency, label = change
         if new_rate is None:
             action = "rate_override_removed"
@@ -1590,6 +1700,9 @@ def _line_budget_name(line: Any, labels: dict[str, DailyCostBaselineBudgetLine])
         return _label(line.service_code_snapshot, line.service_name_snapshot)
     if isinstance(line, DailyCostConsumableLine):
         return _label(line.item_code_snapshot, line.item_name_snapshot)
+    if isinstance(line, DailyCostOtherExpenseLine):
+        # No allowance to match: the AFE total is reduced by this amount instead.
+        return f"Other expenses — {line.expense_type_label}"
     return _label(line.tangible_code_snapshot, line.tangible_name_snapshot)
 
 
@@ -1634,45 +1747,48 @@ def _daily_line_common(line: Any, labels: dict[str, DailyCostBaselineBudgetLine]
     }
 
 
-def _line_outputs(entry: DailyCostEntry) -> tuple[list[DailyCostServiceLineOut], list[DailyCostConsumableLineOut], list[DailyCostTangibleLineOut]]:
+def _line_out(line: Any, labels: dict[str, DailyCostBaselineBudgetLine]) -> Any:
+    """Map one line onto its API output shape.
+
+    Saved rows and transient preview rows are instances of the same models, so the
+    sheet and the unsaved preview are described by exactly the same fields.
+    """
+    common = _daily_line_common(line, labels)
+    if isinstance(line, DailyCostServiceLine):
+        return DailyCostServiceLineOut(
+            **common, service_id=line.service_id, service_code=line.service_code_snapshot,
+            service_name=line.service_name_snapshot, charging_basis=line.charging_basis,
+            charge_category=line.charge_category, baseline_service_rate_id=line.baseline_service_rate_id,
+        )
+    if isinstance(line, DailyCostConsumableLine):
+        return DailyCostConsumableLineOut(
+            **common, category=line.category, item_kind=line.item_kind, item_id=line.item_id,
+            item_code=line.item_code_snapshot, item_name=line.item_name_snapshot, uom=line.uom,
+            catalogue_rate_snapshot_id=line.catalogue_rate_snapshot_id,
+        )
+    if isinstance(line, DailyCostOtherExpenseLine):
+        return DailyCostOtherExpenseLineOut(
+            **common, expense_type=line.expense_type, expense_type_label=line.expense_type_label,
+            expense_description=line.expense_description,
+        )
+    return DailyCostTangibleLineOut(
+        **common, tangible_id=line.tangible_id, tangible_code=line.tangible_code_snapshot,
+        tangible_name=line.tangible_name_snapshot, uom=line.uom,
+        catalogue_rate_snapshot_id=line.catalogue_rate_snapshot_id,
+    )
+
+
+def _line_outputs(entry: DailyCostEntry) -> tuple[
+    list[DailyCostServiceLineOut], list[DailyCostConsumableLineOut],
+    list[DailyCostTangibleLineOut], list[DailyCostOtherExpenseLineOut],
+]:
     labels = _budget_label_map(entry.baseline)
-    services = [
-        DailyCostServiceLineOut(
-            **_daily_line_common(row, labels),
-            service_id=row.service_id,
-            service_code=row.service_code_snapshot,
-            service_name=row.service_name_snapshot,
-            charging_basis=row.charging_basis,
-            charge_category=row.charge_category,
-            baseline_service_rate_id=row.baseline_service_rate_id,
-        )
-        for row in entry.service_lines
-    ]
-    consumables = [
-        DailyCostConsumableLineOut(
-            **_daily_line_common(row, labels),
-            category=row.category,
-            item_kind=row.item_kind,
-            item_id=row.item_id,
-            item_code=row.item_code_snapshot,
-            item_name=row.item_name_snapshot,
-            uom=row.uom,
-            catalogue_rate_snapshot_id=row.catalogue_rate_snapshot_id,
-        )
-        for row in entry.consumable_lines
-    ]
-    tangibles = [
-        DailyCostTangibleLineOut(
-            **_daily_line_common(row, labels),
-            tangible_id=row.tangible_id,
-            tangible_code=row.tangible_code_snapshot,
-            tangible_name=row.tangible_name_snapshot,
-            uom=row.uom,
-            catalogue_rate_snapshot_id=row.catalogue_rate_snapshot_id,
-        )
-        for row in entry.tangible_lines
-    ]
-    return services, consumables, tangibles
+    return (
+        [_line_out(row, labels) for row in entry.service_lines],
+        [_line_out(row, labels) for row in entry.consumable_lines],
+        [_line_out(row, labels) for row in entry.tangible_lines],
+        [_line_out(row, labels) for row in entry.other_expense_lines],
+    )
 
 
 def _entry_out(entry: DailyCostEntry) -> DailyCostEntryOut:
@@ -1699,9 +1815,11 @@ def _entry_out(entry: DailyCostEntry) -> DailyCostEntryOut:
         services_count=len(entry.service_lines),
         consumables_count=len(entry.consumable_lines),
         tangibles_count=len(entry.tangible_lines),
+        other_expenses_count=len(entry.other_expense_lines),
         services_total=Decimal(entry.services_total),
         consumables_total=Decimal(entry.consumables_total),
         tangibles_total=Decimal(entry.tangibles_total),
+        other_expenses_total=Decimal(entry.other_expenses_total),
         total_cost=Decimal(entry.total_cost),
         upa_total=Decimal(entry.upa_total),
         npt_total=Decimal(entry.npt_total),
@@ -1718,8 +1836,14 @@ def _entry_out(entry: DailyCostEntry) -> DailyCostEntryOut:
 
 
 def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = None) -> DailyCostComparison:
+    """The locked AFE plan against every actual recorded through the sheet date.
+
+    Other-expense lines have no budget line to reconcile to, so they are summed as
+    their own group and charged against the AFE total: the returned ``balance`` is
+    the planned amount less the tracked actuals less those unexpected charges.
+    """
     as_of = effective_on or entry.cost_date
-    group_names = ("Services", "Consumables", "Tangibles")
+    group_names = ALL_COST_GROUPS
     planned_by_group: dict[str, Decimal] = {key: Decimal("0") for key in group_names}
     planned_by_key: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     budget_meta: dict[tuple[str, str], DailyCostBaselineBudgetLine] = {}
@@ -1747,11 +1871,7 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
     unplanned_meta: dict[tuple[str, str], tuple[str, str]] = {}
     actual_all: list[tuple[str, Any]] = []
     if entries:
-        for model, group in (
-            (DailyCostServiceLine, "Services"),
-            (DailyCostConsumableLine, "Consumables"),
-            (DailyCostTangibleLine, "Tangibles"),
-        ):
+        for model, group in LINE_MODELS:
             rows = db.scalars(
                 select(model)
                 .join(DailyCostEntry, model.entry_id == DailyCostEntry.id)
@@ -1774,6 +1894,10 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
                     elif isinstance(row, DailyCostConsumableLine):
                         code, name = row.item_code_snapshot, row.item_name_snapshot
                         kind = "consumable"
+                    elif isinstance(row, DailyCostOtherExpenseLine):
+                        # Grouped per expense type, so the deduction names the event.
+                        code, name = row.expense_type, row.expense_type_label
+                        kind = "other_expense"
                     else:
                         code, name = row.tangible_code_snapshot, row.tangible_name_snapshot
                         kind = "tangible"
@@ -1814,8 +1938,10 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
         )
         for group in group_names
     ]
+    tracked_actual_to_date = _money(sum(actual_by_group[group] for group in TRACKED_COST_GROUPS))
+    other_expenses_to_date = actual_by_group["Other Expenses"]
     planned_total = _money(sum(planned_by_group.values(), Decimal("0")))
-    actual_to_date = _money(sum(actual_by_group.values(), Decimal("0")))
+    actual_to_date = _money(tracked_actual_to_date + other_expenses_to_date)
     upa = _money(sum((Decimal(row.standard_amount) for _, row in actual_all if row.classification == "UPA"), Decimal("0")))
     npt = _money(sum((Decimal(row.standard_amount) for _, row in actual_all if row.classification == "NPT"), Decimal("0")))
     return DailyCostComparison(
@@ -1823,6 +1949,8 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
         currency=entry.standard_currency,
         planned_total=planned_total,
         actual_to_date=actual_to_date,
+        tracked_actual_to_date=tracked_actual_to_date,
+        other_expenses_to_date=_money(other_expenses_to_date),
         balance=_money(planned_total - actual_to_date),
         over_budget=actual_to_date > planned_total,
         includes_draft_entries=True,
@@ -1833,8 +1961,42 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
     )
 
 
+def _other_expense_label(lines: Sequence[Any]) -> str:
+    """A short, de-duplicated description of the recorded expense types."""
+    seen: list[str] = []
+    for row in lines:
+        label = getattr(row, "expense_type_label", "")
+        if label and label not in seen:
+            seen.append(label)
+    if not seen:
+        return "unbudgeted charges"
+    text = ", ".join(seen[:3])
+    return text + (f" and {len(seen) - 3} more" if len(seen) > 3 else "")
+
+
 def _warnings(entry: DailyCostEntry, comparison: DailyCostComparison) -> list[DailyCostWarnings]:
     warnings: list[DailyCostWarnings] = []
+    if entry.other_expense_lines:
+        warnings.append(
+            DailyCostWarnings(
+                code="other-expenses-deducted", severity="warning",
+                message=(
+                    f"Other expenses recorded on this sheet ({_other_expense_label(entry.other_expense_lines)}): "
+                    f"{entry.standard_currency} {entry.other_expenses_total:,.2f}. These have no AFE allowance and are "
+                    f"deducted from the AFE total, leaving {entry.standard_currency} {comparison.balance:,.2f}."
+                ),
+            )
+        )
+    elif comparison.other_expenses_to_date:
+        warnings.append(
+            DailyCostWarnings(
+                code="other-expenses-deducted", severity="info",
+                message=(
+                    f"Other expenses of {entry.standard_currency} {comparison.other_expenses_to_date:,.2f} recorded "
+                    "on earlier sheets of this AFE are deducted from the AFE total."
+                ),
+            )
+        )
     if comparison.over_budget:
         warnings.append(
             DailyCostWarnings(
@@ -1851,7 +2013,7 @@ def _warnings(entry: DailyCostEntry, comparison: DailyCostComparison) -> list[Da
             DailyCostWarnings(code="npt-recorded", severity="warning", message=f"NPT charges recorded: {entry.standard_currency} {entry.npt_total:,.2f}.")
         )
     overrides = sum(
-        1 for row in [*entry.service_lines, *entry.consumable_lines, *entry.tangible_lines]
+        1 for row in [*entry.service_lines, *entry.consumable_lines, *entry.tangible_lines, *entry.other_expense_lines]
         if row.override_rate is not None
     )
     if overrides:
@@ -1863,13 +2025,14 @@ def _warnings(entry: DailyCostEntry, comparison: DailyCostComparison) -> list[Da
 
 def get_day(db: Session, organization_id: str, entry_id: str) -> DailyCostDayOut:
     entry = _get_entry(db, entry_id, organization_id, deleted=False)
-    services, consumables, tangibles = _line_outputs(entry)
+    services, consumables, tangibles, other_expenses = _line_outputs(entry)
     comparison = _comparison(db, entry)
     return DailyCostDayOut(
         entry=_entry_out(entry),
         services=services,
         consumables=consumables,
         tangibles=tangibles,
+        other_expenses=other_expenses,
         comparison=comparison,
         warnings=_warnings(entry, comparison),
     )
@@ -1890,10 +2053,16 @@ def save_day(
             entry = _get_entry(db, entry_id, organization_id, deleted=False, lock=True)
             if entry.status != "draft":
                 raise HTTPException(status_code=409, detail="Submitted daily cost sheets are read-only. Reopen the sheet with the authorized workflow first.")
-            service_rows, consumable_rows, tangible_rows = _normalize_payload(db, entry, payload)
+            service_rows, consumable_rows, tangible_rows, other_rows = _normalize_payload(db, entry, payload)
             entry.remarks = payload.remarks
-            _upsert_lines(db, entry, service_rows, consumable_rows, tangible_rows, user=user, request=request)
-            entry.warning_count = int(bool(entry.upa_total)) + int(bool(entry.npt_total))
+            other_before = Decimal(entry.other_expenses_total)
+            _upsert_lines(
+                db, entry, service_rows, consumable_rows, tangible_rows, other_rows,
+                user=user, request=request,
+            )
+            entry.warning_count = (
+                int(bool(entry.upa_total)) + int(bool(entry.npt_total)) + int(bool(entry.other_expenses_total))
+            )
             _audit(
                 db,
                 user=user,
@@ -1903,11 +2072,30 @@ def save_day(
                 label=entry.daily_cost_code,
                 summary=(
                     f"{'Imported' if action == 'import' else 'Saved'} daily costs for {entry.well_code_snapshot} on {entry.cost_date.isoformat()}: "
-                    f"{len(service_rows)} service, {len(consumable_rows)} consumable and {len(tangible_rows)} tangible line(s); "
+                    f"{len(service_rows)} service, {len(consumable_rows)} consumable, {len(tangible_rows)} tangible "
+                    f"and {len(other_rows)} other-expense line(s); "
                     f"{entry.standard_currency} {entry.total_cost:,.2f}"
                 ),
                 request=request,
             )
+            if entry.other_expenses_total != other_before:
+                # An unexpected charge changes what the AFE can still be spent on,
+                # so it is worth its own audit entry next to the save itself.
+                _audit(
+                    db,
+                    user=user,
+                    action="other_expense",
+                    entity_type="daily_cost",
+                    entity_id=entry.id,
+                    label=entry.daily_cost_code,
+                    summary=(
+                        f"Other expenses for {entry.daily_cost_code} changed from "
+                        f"{entry.standard_currency} {other_before:,.2f} to {entry.standard_currency} "
+                        f"{entry.other_expenses_total:,.2f} ({_other_expense_label(entry.other_expense_lines)}); "
+                        f"deducted from AFE {entry.afe_code_snapshot}"
+                    ),
+                    request=request,
+                )
             _commit(db)
     except HTTPException:
         db.rollback()
@@ -1941,7 +2129,7 @@ def preview_day(
     entry = _get_entry(db, entry_id, organization_id, deleted=False)
     if entry.status != "draft":
         raise HTTPException(status_code=409, detail="Submitted daily cost sheets cannot be previewed for editing")
-    services_in, consumables_in, tangibles_in = _normalize_payload(db, entry, payload)
+    services_in, consumables_in, tangibles_in, other_in = _normalize_payload(db, entry, payload)
     existing_maps = _existing_line_maps(entry)
     labels = _budget_label_map(entry.baseline)
 
@@ -1958,44 +2146,36 @@ def preview_day(
     service_rows = output(DailyCostServiceLine, services_in)
     consumable_rows = output(DailyCostConsumableLine, consumables_in)
     tangible_rows = output(DailyCostTangibleLine, tangibles_in)
+    other_rows = output(DailyCostOtherExpenseLine, other_in)
     temp = type("PreviewEntry", (), {})()
     temp.baseline = entry.baseline
     temp.service_lines = service_rows
     temp.consumable_lines = consumable_rows
     temp.tangible_lines = tangible_rows
+    temp.other_expense_lines = other_rows
     temp.standard_currency = entry.standard_currency
     # Mirror the stored output mapping without attaching preview rows to the session.
-    services_out = [
-        DailyCostServiceLineOut(
-            **_daily_line_common(row, labels), service_id=row.service_id, service_code=row.service_code_snapshot,
-            service_name=row.service_name_snapshot, charging_basis=row.charging_basis, charge_category=row.charge_category,
-            baseline_service_rate_id=row.baseline_service_rate_id,
-        )
-        for row in service_rows
-    ]
-    consumables_out = [
-        DailyCostConsumableLineOut(
-            **_daily_line_common(row, labels), category=row.category, item_kind=row.item_kind, item_id=row.item_id,
-            item_code=row.item_code_snapshot, item_name=row.item_name_snapshot, uom=row.uom,
-            catalogue_rate_snapshot_id=row.catalogue_rate_snapshot_id,
-        )
-        for row in consumable_rows
-    ]
-    tangibles_out = [
-        DailyCostTangibleLineOut(
-            **_daily_line_common(row, labels), tangible_id=row.tangible_id, tangible_code=row.tangible_code_snapshot,
-            tangible_name=row.tangible_name_snapshot, uom=row.uom, catalogue_rate_snapshot_id=row.catalogue_rate_snapshot_id,
-        )
-        for row in tangible_rows
-    ]
-    all_rows = [*service_rows, *consumable_rows, *tangible_rows]
+    services_out = [_line_out(row, labels) for row in service_rows]
+    consumables_out = [_line_out(row, labels) for row in consumable_rows]
+    tangibles_out = [_line_out(row, labels) for row in tangible_rows]
+    other_out = [_line_out(row, labels) for row in other_rows]
+    all_rows = [*service_rows, *consumable_rows, *tangible_rows, *other_rows]
     service_total = _sum_group(service_rows)
     consumable_total = _sum_group(consumable_rows)
     tangible_total = _sum_group(tangible_rows)
+    other_total = _sum_group(other_rows)
     upa_total = _sum_classification(all_rows, "UPA")
     npt_total = _sum_classification(all_rows, "NPT")
     warnings: list[DailyCostWarnings] = []
-    total = _money(service_total + consumable_total + tangible_total)
+    total = _money(service_total + consumable_total + tangible_total + other_total)
+    if other_total:
+        warnings.append(DailyCostWarnings(
+            code="other-expenses-preview", severity="warning",
+            message=(
+                f"Other expenses in this preview: {entry.standard_currency} {other_total:,.2f} "
+                f"({_other_expense_label(other_rows)}). They have no AFE allowance and reduce the AFE amount."
+            ),
+        ))
     if total > entry.baseline.total_amount:
         warnings.append(DailyCostWarnings(code="daily-over-budget", severity="warning", message="This day's actual costs alone exceed the full AFE budget."))
     if upa_total:
@@ -2009,9 +2189,11 @@ def preview_day(
         services=services_out,
         consumables=consumables_out,
         tangibles=tangibles_out,
+        other_expenses=other_out,
         services_total=service_total,
         consumables_total=consumable_total,
         tangibles_total=tangible_total,
+        other_expenses_total=other_total,
         total_cost=total,
         upa_total=upa_total,
         npt_total=npt_total,
@@ -2042,7 +2224,7 @@ def list_entries(
             joinedload(DailyCostEntry.rig), joinedload(DailyCostEntry.well), joinedload(DailyCostEntry.afe),
             joinedload(DailyCostEntry.rate_baseline), joinedload(DailyCostEntry.baseline),
             selectinload(DailyCostEntry.service_lines), selectinload(DailyCostEntry.consumable_lines),
-            selectinload(DailyCostEntry.tangible_lines),
+            selectinload(DailyCostEntry.tangible_lines), selectinload(DailyCostEntry.other_expense_lines),
         )
         .where(DailyCostEntry.organization_id == organization_id, DailyCostEntry.is_deleted.is_(deleted))
         .order_by(DailyCostEntry.cost_date.desc(), DailyCostEntry.created_at.desc(), DailyCostEntry.id)
@@ -2144,7 +2326,7 @@ def _selected_entries(db: Session, organization_id: str, ids: Sequence[str], *, 
         select(DailyCostEntry)
         .options(joinedload(DailyCostEntry.rate_baseline), joinedload(DailyCostEntry.baseline),
                  selectinload(DailyCostEntry.service_lines), selectinload(DailyCostEntry.consumable_lines),
-                 selectinload(DailyCostEntry.tangible_lines))
+                 selectinload(DailyCostEntry.tangible_lines), selectinload(DailyCostEntry.other_expense_lines))
         .where(DailyCostEntry.organization_id == organization_id, DailyCostEntry.id.in_(unique), DailyCostEntry.is_deleted.is_(deleted))
     ).unique().all())
     if len(rows) != len(unique):
@@ -2259,6 +2441,8 @@ def overview(db: Session, organization_id: str, user: User) -> DailyCostOverview
         group_planned[(currency, "Services")] += Decimal(baseline.services_total)
         group_planned[(currency, "Consumables")] += Decimal(baseline.consumables_total)
         group_planned[(currency, "Tangibles")] += Decimal(baseline.tangibles_total)
+        # Other expenses are never budgeted in an AFE: planned stays at zero so the
+        # group balance is the amount taken off the AFE total.
     actual_by_baseline: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     for row in active:
         currency = row.standard_currency
@@ -2268,6 +2452,7 @@ def overview(db: Session, organization_id: str, user: User) -> DailyCostOverview
         group_actual[(currency, "Services")] += Decimal(row.services_total)
         group_actual[(currency, "Consumables")] += Decimal(row.consumables_total)
         group_actual[(currency, "Tangibles")] += Decimal(row.tangibles_total)
+        group_actual[(currency, "Other Expenses")] += Decimal(row.other_expenses_total)
     currencies = sorted(set(planned) | set(actual))
     planned_out = {code: _money(planned[code]) for code in currencies}
     actual_out = {code: _money(actual[code]) for code in currencies}
@@ -2278,7 +2463,7 @@ def overview(db: Session, organization_id: str, user: User) -> DailyCostOverview
             actual=_money(group_actual[(currency, group)]),
             balance=_money(group_planned[(currency, group)] - group_actual[(currency, group)]),
         )
-        for currency in currencies for group in ("Services", "Consumables", "Tangibles")
+        for currency in currencies for group in ALL_COST_GROUPS
     ]
     over_budget = sum(1 for baseline_id, amount in actual_by_baseline.items() if amount > planned_by_baseline.get(baseline_id, Decimal("0")))
     today = date.today()
@@ -2350,6 +2535,7 @@ RATE_SOURCE_LABELS = {
     "catalogue_baseline": "Locked catalogue rate",
     "daily_override": "Daily override (justified)",
     "manual_unplanned": "Manual rate (unplanned)",
+    OTHER_EXPENSE_RATE_SOURCE: "Other expense (entered rate)",
     "": "Unrated",
 }
 NO_SECTION = "Well level (no hole section)"
@@ -2367,8 +2553,10 @@ def _line_union(
 ) -> Any:
     """One row per daily cost line, whatever its group, with every captured factor.
 
-    The three line tables share the same factor columns, so a UNION ALL keeps one
+    All four line tables share the same factor columns, so a UNION ALL keeps one
     column-wise shape for every cut of the ledger (day, section, activity, party).
+    Other-expense lines appear under the "Other Expenses" group, which has no AFE
+    allowance, so their planned amount stays empty in every reconciliation cut.
     """
     parts = []
     for model, group in LINE_MODELS:
@@ -2418,6 +2606,9 @@ def _item_columns(model: type[Any], name: bool = False) -> Any:
         return model.service_name_snapshot if name else model.service_code_snapshot
     if model is DailyCostConsumableLine:
         return model.item_name_snapshot if name else model.item_code_snapshot
+    if model is DailyCostOtherExpenseLine:
+        # The expense type is what an analyst groups an unexpected charge by.
+        return model.expense_type_label if name else model.expense_type
     return model.tangible_name_snapshot if name else model.tangible_code_snapshot
 
 
@@ -2586,7 +2777,10 @@ def well_cost_summary(
     services = totals_by_group.get("Services", Decimal("0"))
     consumables = totals_by_group.get("Consumables", Decimal("0"))
     tangibles = totals_by_group.get("Tangibles", Decimal("0"))
-    actual_total = _money(services + consumables + tangibles)
+    other_expenses = totals_by_group.get("Other Expenses", Decimal("0"))
+    # Other expenses have no planned counterpart, so they only ever widen the gap
+    # between the AFE total and what has actually been spent.
+    actual_total = _money(services + consumables + tangibles + other_expenses)
     upa = _money(sum((
         Decimal(row[0] or 0) for row in db.execute(
             select(func.sum(lines.c.standard_amount)).select_from(lines).where(lines.c.classification == "UPA")
@@ -2598,7 +2792,9 @@ def well_cost_summary(
         ).all()
     ), Decimal("0")))
 
-    planned_by_group: dict[str, Decimal] = {}
+    # Other expenses start at zero rather than being absent, so the cost-group cut
+    # shows an explicit "nothing was budgeted, this was deducted" balance.
+    planned_by_group: dict[str, Decimal] = {"Other Expenses": Decimal("0")}
     planned_days = Decimal("0")
     for baseline in baselines:
         planned_by_group["Services"] = planned_by_group.get("Services", Decimal("0")) + Decimal(baseline.services_total)
@@ -2615,6 +2811,7 @@ def well_cost_summary(
     ).all():
         day = per_day.setdefault(row[0], {
             "Services": Decimal("0"), "Consumables": Decimal("0"), "Tangibles": Decimal("0"),
+            "Other Expenses": Decimal("0"),
             "UPA": Decimal("0"), "NPT": Decimal("0"), "sheets": set(), "statuses": set(),
         })
         day[row[1]] = Decimal(row[2] or 0)
@@ -2627,6 +2824,7 @@ def well_cost_summary(
     for entry in windowed:
         day = per_day.setdefault(entry.cost_date, {
             "Services": Decimal("0"), "Consumables": Decimal("0"), "Tangibles": Decimal("0"),
+            "Other Expenses": Decimal("0"),
             "UPA": Decimal("0"), "NPT": Decimal("0"), "sheets": set(), "statuses": set(),
         })
         day["sheets"].add(entry.id)
@@ -2635,13 +2833,16 @@ def well_cost_summary(
     daily: list[DailyCostDailyRow] = []
     for day_date in sorted(per_day):
         values = per_day[day_date]
-        total = _money(values["Services"] + values["Consumables"] + values["Tangibles"])
+        total = _money(
+            values["Services"] + values["Consumables"] + values["Tangibles"] + values["Other Expenses"]
+        )
         cumulative = _money(cumulative + total)
         statuses = values["statuses"]
         daily.append(DailyCostDailyRow(
             cost_date=day_date,
             services=_money(values["Services"]), consumables=_money(values["Consumables"]),
-            tangibles=_money(values["Tangibles"]), total=total,
+            tangibles=_money(values["Tangibles"]), other_expenses=_money(values["Other Expenses"]),
+            total=total,
             upa=_money(values["UPA"]), npt=_money(values["NPT"]), cumulative=cumulative,
             budget_balance=_money(planned_total - cumulative),
             sheets=len(values["sheets"]),
@@ -2657,11 +2858,15 @@ def well_cost_summary(
             if baseline.afe_id == option.id:
                 planned += Decimal(baseline.total_amount)
         actual = _money(sum((Decimal(row.total_cost) for row in entry_rows), Decimal("0")))
+        # total_cost already contains the other expenses, so the balance below is the
+        # AFE total net of those deductions; the split is reported alongside it.
+        other_for_afe = _money(sum((Decimal(row.other_expenses_total) for row in entry_rows), Decimal("0")))
         days_recorded = sorted({row.cost_date for row in entry_rows})
         positions.append(DailyCostAfePosition(
             afe_id=option.id, afe_code=option.afe_code, afe_name=option.afe_name,
             afe_status=option.status, currency=option.standard_currency,
-            planned_total=_money(planned), actual=actual, balance=_money(planned - actual),
+            planned_total=_money(planned), actual=actual, other_expenses=other_for_afe,
+            balance=_money(planned - actual),
             over_budget=actual > planned, sheets=len(entry_rows), days_recorded=len(days_recorded),
             first_day=days_recorded[0] if days_recorded else None,
             last_day=days_recorded[-1] if days_recorded else None,
@@ -2796,6 +3001,11 @@ def well_cost_summary(
             code="upa-npt", severity="warning",
             message=f"Unplanned and non-productive charges so far: {currency} {upa + npt:,.2f} "
                     f"(UPA {upa:,.2f} · NPT {npt:,.2f})."))
+    if other_expenses:
+        warnings.append(DailyCostWarnings(
+            code="other-expenses-deducted", severity="warning",
+            message=f"Other expenses (LIH, hole problems and similar) so far: {currency} {other_expenses:,.2f}. "
+                    "They have no AFE allowance and are deducted from the AFE total above."))
     unrated = next((group for group in factors if group.dimension == "rate_source"
                     and any(row.key == "" for row in group.rows)), None)
     if unrated:
@@ -2825,6 +3035,7 @@ def well_cost_summary(
         currency=currency, planned=planned_total, actual=actual_total, balance=_money(remaining),
         used_percent=(actual_total / planned_total * Decimal("100")).quantize(Decimal("0.01")) if planned_total > 0 else Decimal("0.00"),
         services=_money(services), consumables=_money(consumables), tangibles=_money(tangibles),
+        other_expenses=_money(other_expenses),
         upa=upa, npt=npt, planned_days=_rate(planned_days), recorded_days=recorded_days,
         elapsed_days=elapsed_days, average_per_day=average, days_to_budget=days_to_budget,
         first_day=min(days) if days else None, last_day=max(days) if days else None,
@@ -2856,6 +3067,30 @@ def daily_cost_wells(db: Session, organization_id: str) -> list[DailyCostWellOpt
     }
     return [well for well in reference_data(db, organization_id).wells if well.id in tracked]
 
+
+
+def _other_expense_type(value: Any) -> str:
+    """Resolve an imported expense type to a stored code, accepting plain wording.
+
+    Unknown labels are rejected with the accepted list, because a misfiled LIH
+    charge would silently change what is deducted from the AFE total.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError(
+            "Other expenses need an expense_type (" + ", ".join(OTHER_EXPENSE_TYPE_LABELS) + ")"
+        )
+    needle = raw.casefold()
+    for code, label in OTHER_EXPENSE_TYPE_LABELS.items():
+        if needle in (code.casefold(), label.casefold()):
+            return code
+    alias = OTHER_EXPENSE_TYPE_ALIASES.get(needle)
+    if alias:
+        return alias
+    raise ValueError(
+        f"Unknown expense type '{raw}'. Use one of: "
+        + ", ".join(f"{code} ({label})" for code, label in OTHER_EXPENSE_TYPE_LABELS.items())
+    )
 
 
 def _import_row(raw: dict[str, Any]) -> dict[str, Any]:
@@ -2892,7 +3127,12 @@ def _import_lookup(rows: Sequence[Any], value: Any, code_attr: str, label: str) 
     return matches[0]
 
 
-def _saved_inputs(entry: DailyCostEntry) -> tuple[list[DailyCostServiceLineIn], list[DailyCostConsumableLineIn], list[DailyCostTangibleLineIn]]:
+def _saved_inputs(
+    entry: DailyCostEntry,
+) -> tuple[
+    list[DailyCostServiceLineIn], list[DailyCostConsumableLineIn],
+    list[DailyCostTangibleLineIn], list[DailyCostOtherExpenseLineIn],
+]:
     def common(row: Any) -> dict[str, Any]:
         return {
             "id": row.id, "activity_id": row.activity_id, "hole_section_id": row.hole_section_id,
@@ -2912,7 +3152,12 @@ def _saved_inputs(entry: DailyCostEntry) -> tuple[list[DailyCostServiceLineIn], 
     tangibles = [DailyCostTangibleLineIn(
         **common(row), tangible_id=row.tangible_id,
     ) for row in entry.tangible_lines]
-    return services, consumables, tangibles
+    # The entered unit rate of an other-expense line is stored as its captured rate.
+    others = [DailyCostOtherExpenseLineIn(
+        **common(row), expense_type=row.expense_type, expense_description=row.expense_description,
+        quantity_unit=row.quantity_unit, unit_rate=Decimal(row.captured_rate),
+    ) for row in entry.other_expense_lines]
+    return services, consumables, tangibles, others
 
 
 def import_daily_cost(
@@ -2960,6 +3205,7 @@ def import_daily_cost(
     service_inputs: list[DailyCostServiceLineIn] = []
     consumable_inputs: list[DailyCostConsumableLineIn] = []
     tangible_inputs: list[DailyCostTangibleLineIn] = []
+    other_inputs: list[DailyCostOtherExpenseLineIn] = []
     errors: list[str] = []
     category_kind = {
         "mud chemicals": "mud_chemical", "mud_chemical": "mud_chemical",
@@ -3023,7 +3269,25 @@ def import_daily_cost(
                 "remarks": str(_import_value(row, "remarks", "line_remarks", default="")),
             }
 
-            if line_type in ("service", "services"):
+            if line_type in OTHER_EXPENSE_LINE_TYPES:
+                remarks = str(_import_value(row, "remarks", "line_remarks", default=""))
+                expense_type = _other_expense_type(_import_value(row, "expense_type", "other_expense_type", "expense_category"))
+                unit_value = _import_value(row, "unit_rate", "rate", "amount", "override_rate", default="")
+                if unit_value == "":
+                    raise ValueError("Other expenses need a unit_rate (the charge per unit)")
+                unit = str(_import_value(row, "quantity_unit", "unit", default="unit")).strip().lower()
+                if unit in ("each", "nos", "numbers", "no.", ""):
+                    unit = "unit"
+                if unit not in OTHER_EXPENSE_UNITS:
+                    raise ValueError("For an other expense, quantity_unit must be unit, days or hours")
+                other_inputs.append(DailyCostOtherExpenseLineIn(
+                    **{**common, "currency": currency or entry.standard_currency, "remarks": remarks},
+                    expense_type=expense_type,
+                    expense_description=str(_import_value(row, "expense_description", "description", default="")),
+                    quantity_unit=unit,  # type: ignore[arg-type]
+                    unit_rate=Decimal(str(unit_value)),
+                ))
+            elif line_type in ("service", "services"):
                 service = _import_lookup(service_rows, _import_value(row, "service_code", "service_id", "service"), "service_code", "Service")
                 if service is None:
                     raise ValueError("Service code is required")
@@ -3088,7 +3352,7 @@ def import_daily_cost(
                         "fuel": "Fuel", "drill_bit": "Drill Bits",
                     }[item_kind]
                 else:
-                    raise ValueError("Line Type must be Service, Consumable or Tangible")
+                    raise ValueError("Line Type must be Service, Consumable, Tangible or Other")
                 item_code = _import_value(row, "item_code", "catalogue_code", "tangible_code", "item_id", "tangible_id")
                 if line_type in ("tangible", "tangibles"):
                     item = _import_lookup(kind_rows["tangible"], item_code, "tangible_code", "Tangible")
@@ -3116,16 +3380,17 @@ def import_daily_cost(
 
     if errors:
         return DailyCostImportResponse(imported_count=0, error_count=len(errors), errors=errors[:MAX_IMPORT_ERRORS], success=False)
-    current_services, current_consumables, current_tangibles = _saved_inputs(entry)
+    current_services, current_consumables, current_tangibles, current_others = _saved_inputs(entry)
     payload = DailyCostSaveIn(
         remarks=entry.remarks,
         services=[*current_services, *service_inputs],
         consumables=[*current_consumables, *consumable_inputs],
         tangibles=[*current_tangibles, *tangible_inputs],
+        other_expenses=[*current_others, *other_inputs],
     )
     save_day(db, organization_id, entry.id, payload, user, request, action="import")
     return DailyCostImportResponse(
-        imported_count=len(service_inputs) + len(consumable_inputs) + len(tangible_inputs),
+        imported_count=len(service_inputs) + len(consumable_inputs) + len(tangible_inputs) + len(other_inputs),
         error_count=0, errors=[], success=True,
     )
 

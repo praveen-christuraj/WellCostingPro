@@ -86,7 +86,10 @@ export async function parseImportFile(file: File): Promise<{ headers: string[]; 
   return { headers, rows }
 }
 
-export function downloadTemplate(filename: string, headers: string[], sample: ImportRow = {}) {
-  const line = headers.map(h => csvCell(sample[h] ?? '')).join(',')
-  download(filename, 'text/csv;charset=utf-8', '\uFEFF' + headers.join(',') + '\r\n' + line + '\r\n')
+export function downloadTemplate(filename: string, headers: string[], sample: ImportRow | ImportRow[] = {}) {
+  // More than one sample row is used where a file can hold several record kinds.
+  const rows = (Array.isArray(sample) ? sample : [sample])
+    .map(row => headers.map(h => csvCell(row[h] ?? '')).join(','))
+    .join('\r\n')
+  download(filename, 'text/csv;charset=utf-8', '\uFEFF' + headers.join(',') + '\r\n' + rows + '\r\n')
 }
