@@ -4,6 +4,7 @@ import { AddRounded, CloseRounded, DownloadRounded, FilterListRounded, SearchRou
 import { AgGridReact } from 'ag-grid-react'
 import { AllCommunityModule, ModuleRegistry, themeQuartz, type ColDef } from 'ag-grid-community'
 import { useColorMode } from '../context/ThemeContext'
+import { control, gridThemeParams } from '../designSystem'
 import { exportColumns, exportCsv, exportPdf, exportXlsx } from '../lib/export'
 ModuleRegistry.registerModules([AllCommunityModule])
 
@@ -77,9 +78,8 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
     })
   }, [rows, search, rules, dateField, dateFrom, dateTo, exportCols])
 
-  const gridTheme = useMemo(() => themeQuartz.withParams(mode === 'dark'
-    ? { accentColor: '#8FB8E4', backgroundColor: '#15273B', borderColor: '#27405C', foregroundColor: '#E6EDF5', headerBackgroundColor: '#1B2F48', headerFontWeight: 700, fontFamily: 'DM Sans, sans-serif', fontSize: 12, rowHoverColor: '#1B2F48', spacing: 10, chromeBackgroundColor: '#1B2F48' }
-    : { accentColor: '#123A63', backgroundColor: '#ffffff', borderColor: '#E3E9F0', foregroundColor: '#16283F', headerBackgroundColor: '#F4F6F9', headerFontWeight: 700, fontFamily: 'DM Sans, sans-serif', fontSize: 12, rowHoverColor: '#EDF2F8', spacing: 10 }), [mode])
+  // Grid skin comes from the shared design tokens, so it always matches the MUI theme.
+  const gridTheme = useMemo(() => themeQuartz.withParams(gridThemeParams(mode)), [mode])
 
   const doExport = async (kind: 'csv' | 'xlsx' | 'pdf') => {
     setExportAnchor(null)
@@ -103,8 +103,8 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
   return <Paper variant="outlined" sx={{ borderColor: 'divider', overflow: 'hidden', borderRadius: 2 }}>
     <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ p: 2.2, gap: 2, flexWrap: 'wrap' }}>
       <Box display="flex" alignItems="center" gap={1.2} flexWrap="wrap">
-        <TextField placeholder={searchPlaceholder} value={search} onChange={e => setSearch(e.target.value)} size="small" sx={{ width: { xs: '100%', sm: 260 } }} InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded sx={{ color: 'text.secondary', fontSize: 19 }}/></InputAdornment> }}/>
-        <Button size="small" startIcon={<FilterListRounded sx={{ fontSize: 18 }}/>} onClick={() => setFiltersOpen(o => !o)} color={activeFilters ? 'primary' : 'inherit'}>Filters{activeFilters ? ` (${activeFilters})` : ''}</Button>
+        <TextField placeholder={searchPlaceholder} aria-label={searchPlaceholder} value={search} onChange={e => setSearch(e.target.value)} size="small" sx={{ width: { xs: '100%', sm: 260 } }} InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded sx={{ color: 'text.secondary', fontSize: 19 }}/></InputAdornment> }}/>
+        <Button size="small" startIcon={<FilterListRounded sx={{ fontSize: 18 }}/>} onClick={() => setFiltersOpen(o => !o)} color={activeFilters ? 'primary' : 'inherit'} aria-expanded={filtersOpen}>Filters{activeFilters ? ` (${activeFilters})` : ''}</Button>
         {onImport && <Button size="small" color="inherit" startIcon={<UploadRounded sx={{ fontSize: 18 }}/>} onClick={onImport}>Import</Button>}
         {canExport && <Button size="small" color="inherit" startIcon={<DownloadRounded sx={{ fontSize: 18 }}/>} onClick={e => setExportAnchor(e.currentTarget)}>Export</Button>}
         {canExport && <Menu anchorEl={exportAnchor} open={!!exportAnchor} onClose={() => setExportAnchor(null)}>
@@ -113,7 +113,7 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
           <MenuItem onClick={() => doExport('pdf')}>Export as PDF (.pdf)</MenuItem>
         </Menu>}
       </Box>
-      <Typography fontSize={12} color="text.secondary">{visible.length} of {rows.length} {rows.length === 1 ? 'record' : 'records'}</Typography>
+      <Typography fontSize={12} color="text.secondary" className="tnum" aria-live="polite">{visible.length} of {rows.length} {rows.length === 1 ? 'record' : 'records'}</Typography>
     </Box>
     {exportError && <Alert severity="error" onClose={() => setExportError('')} sx={{ mx: 2.2, mb: 1.5 }}>{exportError}</Alert>}
     <Collapse in={filtersOpen} unmountOnExit>
@@ -159,14 +159,14 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
         </Box>
       </Box>
     </Collapse>
-    <Box sx={{ height: Math.min(720, Math.max(270, 57 + Math.min(visible.length, pageSize) * 55)), width: '100%' }}>
+    <Box sx={{ height: Math.min(720, Math.max(270, 57 + Math.min(visible.length, pageSize) * control.gridRow)), width: '100%' }}>
       <AgGridReact<T>
         theme={gridTheme}
         rowData={visible}
         columnDefs={columns}
         defaultColDef={{ sortable: true, resizable: true, flex: 1, minWidth: 120 }}
-        rowHeight={55}
-        headerHeight={48}
+        rowHeight={control.gridRow}
+        headerHeight={control.gridHeader}
         pagination
         paginationPageSize={pageSize}
         paginationPageSizeSelector={[20, 50, 100]}
@@ -174,7 +174,7 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
         rowSelection={selectable ? { mode: 'multiRow', checkboxes: true, headerCheckbox: true, selectAll: 'filtered' } : undefined}
         onSelectionChanged={event => onSelectionChange?.(event.api.getSelectedRows())}
         getRowId={p => String((p.data as Record<string, unknown>)[rowKey])}
-        overlayNoRowsTemplate="No records found"
+        overlayNoRowsTemplate='<span class="grid-empty">No records match the current search or filters.</span>'
         suppressCellFocus
       />
     </Box>

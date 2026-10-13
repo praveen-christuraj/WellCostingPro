@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AppBar, Avatar, Box, Button, Divider, IconButton, Menu, MenuItem, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
 import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined } from '@mui/icons-material'
@@ -65,6 +65,7 @@ export default function Layout() {
   const [newPassword, setNewPassword] = useState('')
   const [passwordError, setPasswordError] = useState('')
   const [savingPassword, setSavingPassword] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
 
   const changePassword = async () => { setSavingPassword(true); setPasswordError(''); try { await api('/auth/change-password', { method: 'POST', body: body({ current_password: currentPassword, new_password: newPassword }) }); setPasswordDialog(false); setCurrentPassword(''); setNewPassword(''); await logout() } catch (e) { setPasswordError((e as Error).message) } finally { setSavingPassword(false) } }
 
@@ -72,16 +73,47 @@ export default function Layout() {
   const modulesForUser = modules.map(m => ({ ...m, items: m.items.filter(visible) })).filter(m => m.items.length > 0)
   const currentModule = modulesForUser.find(m => m.items.some(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`)))
 
+  // The sticky bar only claims elevation once content is actually under it.
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 6)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  // Browser tabs and history say which screen you are on.
+  useEffect(() => {
+    const page = location.pathname === '/'
+      ? 'Dashboard'
+      : modulesForUser.flatMap(m => m.items).find(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`))?.label
+    document.title = page ? `${page} · WellCosting Pro` : 'WellCosting Pro'
+  }, [location.pathname]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return <Box display="flex" flexDirection="column" minHeight="100vh">
-    <AppBar position="sticky" elevation={0} sx={{ bgcolor: 'background.paper', color: 'text.primary', borderBottom: '1px solid', borderColor: 'divider' }}>
+    <a className="skip-link" href="#main-content">Skip to main content</a>
+    <AppBar position="sticky" elevation={0} sx={{
+      bgcolor: 'background.paper',
+      color: 'text.primary',
+      borderBottom: '1px solid',
+      borderColor: 'divider',
+      boxShadow: scrolled ? 2 : 'none',
+      transition: 'box-shadow 160ms cubic-bezier(0.2, 0, 0, 1)',
+    }}>
       <Toolbar sx={{ gap: { xs: 1, sm: 1.5 }, minHeight: { xs: 58, sm: 62 }, px: { xs: 1.5, sm: 2.5 }, flexWrap: 'wrap' }}>
-        <IconButton sx={{ display: { md: 'none' }, color: 'text.primary' }} onClick={e => setMobileAnchor(e.currentTarget)} aria-label="Open navigation"><MenuRounded/></IconButton>
+        <IconButton sx={{ display: { md: 'none' }, color: 'text.primary' }} onClick={e => setMobileAnchor(e.currentTarget)} aria-label="Open navigation" aria-haspopup="menu" aria-expanded={!!mobileAnchor}><MenuRounded/></IconButton>
         <Brand/>
-        {!compact && <Box display="flex" alignItems="center" flexWrap="wrap" rowGap={.25} columnGap={.25} sx={{ ml: { xs: 0, md: 2 }, minWidth: 0, flex: '1 1 auto' }}>
+        {!compact && <Box component="nav" aria-label="Modules" display="flex" alignItems="center" flexWrap="wrap" rowGap={.25} columnGap={.25} sx={{ ml: { xs: 0, md: 2 }, minWidth: 0, flex: '1 1 auto' }}>
           <NavLink to="/" end className={({ isActive }) => `topnav-item${isActive ? ' active' : ''}`}><DashboardOutlined sx={{ fontSize: 17 }}/>&nbsp;Dashboard</NavLink>
           {modulesForUser.map(module => {
             const active = currentModule?.label === module.label
-            return <Button key={module.label} className={`topnav-item${active ? ' active' : ''}`} onClick={e => setModuleAnchor({ el: e.currentTarget, module })} endIcon={<KeyboardArrowDownRounded sx={{ fontSize: 18 }}/>}>{module.label}</Button>
+            return <Button
+              key={module.label}
+              className={`topnav-item${active ? ' active' : ''}`}
+              onClick={e => setModuleAnchor({ el: e.currentTarget, module })}
+              aria-haspopup="menu"
+              aria-expanded={moduleAnchor?.module.label === module.label}
+              endIcon={<KeyboardArrowDownRounded sx={{ fontSize: 18 }}/>}
+            >{module.label}</Button>
           })}
         </Box>}
         <Box display="flex" alignItems="center" gap={1.2} ml="auto" sx={{ flex: '0 0 auto' }}>
@@ -92,7 +124,7 @@ export default function Layout() {
             <Typography fontWeight={700} fontSize={12.5} lineHeight={1.3}>{user?.full_name}</Typography>
             <Typography color="text.secondary" fontSize={11.5}>{user?.organization_name}</Typography>
           </Box>
-          <Tooltip title="Account menu"><IconButton onClick={e => setAccountAnchor(e.currentTarget)} sx={{ p: .4, borderRadius: 2 }}><Avatar sx={{ width: 34, height: 34, bgcolor: 'primary.light', color: 'primary.dark', fontSize: 12, fontWeight: 800 }}>{user?.full_name.split(' ').map(x => x[0]).slice(0, 2).join('').toUpperCase()}</Avatar><KeyboardArrowDownRounded sx={{ color: 'text.secondary', ml: .4, fontSize: 18 }}/></IconButton></Tooltip>
+          <Tooltip title="Account menu"><IconButton onClick={e => setAccountAnchor(e.currentTarget)} sx={{ p: .4, borderRadius: 2 }} aria-label="Account menu" aria-haspopup="menu" aria-expanded={!!accountAnchor}><Avatar sx={{ width: 34, height: 34, bgcolor: 'primary.light', color: 'primary.dark', fontSize: 12, fontWeight: 800 }}>{user?.full_name.split(' ').map(x => x[0]).slice(0, 2).join('').toUpperCase()}</Avatar><KeyboardArrowDownRounded sx={{ color: 'text.secondary', ml: .4, fontSize: 18 }}/></IconButton></Tooltip>
         </Box>
       </Toolbar>
     </AppBar>
@@ -113,14 +145,13 @@ export default function Layout() {
       <MenuItem onClick={() => { setAccountAnchor(null); logout() }}><LogoutRounded sx={{ mr: 1, fontSize: 18 }}/> Sign out</MenuItem>
     </Menu>
 
-    <Box component="main" sx={{ flexGrow: 1, minWidth: 0, width: '100%', overflowX: 'clip' }}>
+    <Box component="main" id="main-content" tabIndex={-1} sx={{ flexGrow: 1, minWidth: 0, width: '100%', overflowX: 'clip', '&:focus': { outline: 'none' } }}>
       <Box sx={{ px: { xs: 2, sm: 3, xl: 4 }, py: { xs: 2.5, sm: 3 }, maxWidth: 1600, mx: 'auto' }}><Outlet/></Box>
     </Box>
 
     <FormDialog open={passwordDialog} title="Change your password" subtitle="You will be signed out of all sessions after updating." onClose={() => setPasswordDialog(false)} onSubmit={changePassword} busy={savingPassword} submitLabel="Update password">
       <Box display="grid" gap={2} pt={.5}>
-        <TextField label="Current password" type="password" fullWidth value={currentPassword} onChange={e => setCurrentPassword(e.target.value)}/>
-        <TextField label="New password" type="password" fullWidth helperText="At least 12 characters" value={newPassword} onChange={e => setNewPassword(e.target.value)}/>
+        <TextField label="Current password" type="password" fullWidth value={currentPassword} onChange={e => setCurrentPassword(e.target.value)}/><TextField label="New password" type="password" fullWidth helperText="At least 12 characters" value={newPassword} onChange={e => setNewPassword(e.target.value)}/>
         <ErrorMessage message={passwordError}/>
       </Box>
     </FormDialog>

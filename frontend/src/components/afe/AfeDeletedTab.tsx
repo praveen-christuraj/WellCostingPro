@@ -129,6 +129,7 @@ export function AfeDeletedTab() {
       onSubmit={() => void confirm()}
       busy={busy}
       submitLabel={pending?.kind === 'purge' ? 'Delete permanently' : 'Restore'}
+      danger={pending?.kind === 'purge'}
     >
       {pending?.kind === 'purge' && <Alert severity="warning" sx={{ mb: 1.5 }}>Only permanently delete AFEs you no longer need for audit.</Alert>}
       {actionError ? <ErrorDetails error={actionError}/> : null}

@@ -58,13 +58,14 @@ Seeding is idempotent (it never touches an existing owner), never creates tables
 
 ## Quality and structure
 
-`cd backend && ../.venv/bin/python -m pytest -q` · `cd frontend && npm run build` · `make graph`.
+`cd backend && ../.venv/bin/python -m pytest -q` · `cd frontend && npm run build` · `make ui-check` (design-layer assertions) · `make graph`.
 Set `TEST_DATABASE_URL` (for example a PostgreSQL URL) to run the backend suite against a real server: `cd backend && TEST_DATABASE_URL="postgresql+psycopg://user:pass@host:5432/db" ../.venv/bin/python -m pytest -q`. SQLite ignores `FOR UPDATE` and is lenient about bare `GROUP BY` columns, so PostgreSQL-only failures (row locks over an outer join, ungrouped projections) are caught by that run.
 
 - `backend/app/api`, `models`, `schemas`, `core`, `services`, `seed.py`, `bootstrap.py` — API, persistence, validation, security, provisioning and the first-run administrator bootstrap.
 - `backend/alembic/versions` — explicit database migrations.
 - `frontend/src/pages`, `components`, `context`, `lib` — routed UI and typed API layer.
 - `.agent/` and `AGENTS.md` — committed Graphify tool, architecture graph, durable AI memory and agent workflows; not in `.gitignore`.
+- `frontend/src/designSystem.ts` — the design tokens (navy ramp, surfaces, semantics, type scale, spacing, radii, shadows, motion, AG Grid skin) composed into `theme.ts` and mirrored as `--wcp-*` variables in `styles.css`. Rules and the accessibility checklist are in `.agent/memory/design-system.md`; `make ui-check` asserts them in light and dark. The whole layer is reversible: **`make ui-rollback`** restores the pre-design-layer interface.
 - `docs/ci-template.yml` — backend test/migration and frontend build CI template; copy to `.github/workflows/ci.yml` when a GitHub connection with workflow permissions is available.
 
 ### Reference projects

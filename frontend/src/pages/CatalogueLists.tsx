@@ -331,6 +331,7 @@ export default function CatalogueLists() {
       onSubmit={() => void runConfirm()}
       busy={confirming}
       submitLabel={confirm?.mode === 'purge' ? 'Delete permanently' : 'Remove'}
+      danger={confirm?.mode === 'purge'}
     >
       <Box display="grid" gap={1.5} pt={.5}>
         <Typography fontSize={13}>

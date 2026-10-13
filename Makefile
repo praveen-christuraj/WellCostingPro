@@ -1,4 +1,4 @@
-.PHONY: test build graph up seed-admin check-admin
+.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback
 
 test:
 	cd backend && ../.venv/bin/python -m pytest -q
@@ -12,3 +12,14 @@ seed-admin:
 	cd backend && ../.venv/bin/python -m app.seed
 check-admin:
 	cd backend && ../.venv/bin/python -m app.seed --check
+# Render the real theme and shared components in a DOM and assert the design rules
+# (light + dark). jsdom is installed with --no-save: application dependencies stay unchanged.
+ui-check:
+	cd frontend && npm install --no-save jsdom && \
+		NODE_PATH="$$PWD/node_modules" ./node_modules/.bin/esbuild ../.agent/tools/ui-check.jsx \
+		--bundle --platform=node --format=esm --jsx=automatic \
+		--outfile=node_modules/.cache/ui-check.mjs --loader:.jsx=jsx --log-level=error \
+		--external:jsdom && node node_modules/.cache/ui-check.mjs
+# Restore the pre-design-layer interface. Use it if the enhanced UI is rejected.
+ui-rollback:
+	bash scripts/ui-rollback.sh
