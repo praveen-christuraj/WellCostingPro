@@ -262,6 +262,58 @@ def test_configuration_uses_workspace_master_data_and_enforces_lifecycle_and_dep
         ).status_code == 200
 
 
+def test_deletion_dependencies_block_rig_children_and_preserve_master_data_references():
+    with TestClient(app) as client:
+        headers = login(client)
+        rig = create_rig(client, headers)
+        well = create_well(client, headers, rig["id"])
+        activity = create_activity(client, headers, "DEPENDENT-ACTIVITY")
+        sub_activity = create_sub_activity(client, headers, well["id"], activity["id"], "DEPENDENT-SUB")
+        hole = client.post(
+            "/api/v1/master-data/hole-sections", headers=headers,
+            json={"code": "DEPENDENT-HOLE", "name": "Dependent hole"},
+        ).json()
+        phase = client.post(
+            "/api/v1/master-data/phases", headers=headers,
+            json={"code": "DEPENDENT-PHASE", "name": "Dependent phase"},
+        ).json()
+        configuration = client.put(
+            f"/api/v1/rig-well/wells/{well['id']}/configuration",
+            headers=headers,
+            json={"depth_unit": "m", "sections": [{
+                "hole_section_id": hole["id"], "from_depth": "0", "to_depth": "100",
+                "phases": [{"phase_id": phase["id"], "days": "2"}],
+            }]},
+        )
+        assert configuration.status_code == 200, configuration.text
+
+        blocked_rig = client.delete(f"/api/v1/rig-well/rigs/{rig['id']}", headers=headers)
+        assert blocked_rig.status_code == 409
+        assert "active well" in blocked_rig.json()["detail"]
+
+        # Soft removal retains the old IDs for audit history; permanent purge is
+        # refused with a clear reference count and a lifecycle path.
+        for module, record in (("activities", activity), ("hole-sections", hole), ("phases", phase)):
+            moved = client.delete(f"/api/v1/master-data/{module}/{record['id']}", headers=headers)
+            assert moved.status_code == 200, moved.text
+            blocked = client.delete(
+                f"/api/v1/master-data/{module}/{record['id']}/permanent", headers=headers
+            )
+            assert blocked.status_code == 409, blocked.text
+            assert "still referenced by" in blocked.json()["detail"]
+            assert "Deleted Entries" in blocked.json()["detail"]
+        assert "well sub activity" in client.delete(
+            f"/api/v1/master-data/activities/{activity['id']}/permanent", headers=headers
+        ).json()["detail"]
+        assert sub_activity["id"]
+        assert "well configuration section" in client.delete(
+            f"/api/v1/master-data/hole-sections/{hole['id']}/permanent", headers=headers
+        ).json()["detail"]
+        assert "well configuration phase" in client.delete(
+            f"/api/v1/master-data/phases/{phase['id']}/permanent", headers=headers
+        ).json()["detail"]
+
+
 def test_sub_activities_are_well_scoped_activity_categorized_and_hierarchical():
     with TestClient(app) as client:
         headers = login(client)

@@ -34,6 +34,7 @@ const AfeEstimate = lazy(() => import('./pages/AfeEstimate'))
 const DailyCostManagement = lazy(() => import('./pages/DailyCostManagement'))
 const DailyCostSheet = lazy(() => import('./pages/DailyCostSheet'))
 const DailyCostAnalysis = lazy(() => import('./pages/DailyCostAnalysis'))
+const CostingSets = lazy(() => import('./pages/CostingSets'))
 
 // Every listed permission is required (AND).
 function Guard({ permission, children }: { permission: string | string[]; children: ReactNode }) {
@@ -84,6 +85,7 @@ export default function App() {
           <Route path="rig-well/wells" element={<Guard permission="rig-well:read"><Wells/></Guard>}/>
           <Route path="rig-well/sub-activities" element={<Guard permission="rig-well:read"><WellSubActivities/></Guard>}/>
           <Route path="rig-well/deleted" element={<Guard permission="rig-well:read"><RigWellDeleted/></Guard>}/>
+          <Route path="costing-sets" element={<Guard permission="costing-sets:read"><CostingSets/></Guard>}/>
           <Route path="afe" element={<Guard permission="afe:read"><AfeOverview/></Guard>}/>
           <Route path="afe/register" element={<Guard permission="afe:read"><AfeManagement/></Guard>}/>
           <Route path="afe/estimate/:afeId" element={<Guard permission="afe:read"><AfeEstimate/></Guard>}/>

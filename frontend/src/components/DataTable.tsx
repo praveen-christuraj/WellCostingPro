@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Box, Button, Collapse, Divider, IconButton, InputAdornment, Menu, MenuItem, Paper, TextField, Typography } from '@mui/material'
 import { AddRounded, CloseRounded, DownloadRounded, FilterListRounded, SearchRounded, UploadRounded } from '@mui/icons-material'
 import { AgGridReact } from 'ag-grid-react'
-import { AllCommunityModule, ModuleRegistry, themeQuartz, type ColDef } from 'ag-grid-community'
+import { AllCommunityModule, ModuleRegistry, themeQuartz, type ColDef, type GridApi } from 'ag-grid-community'
 import { useColorMode } from '../context/ThemeContext'
 import { control, gridThemeParams } from '../designSystem'
 import { exportColumns, exportCsv, exportPdf, exportXlsx } from '../lib/export'
@@ -22,7 +22,7 @@ function fieldDefs<T extends object>(columns: ColDef<T>[]): FieldDef[] {
     })
 }
 
-export function DataTable<T extends object>({ rows, columns, rowKey = 'id', searchPlaceholder = 'Search records...', exportName = 'export', onImport, canExport = true, selectable = false, onSelectionChange, onExport }: {
+export function DataTable<T extends object>({ rows, columns, rowKey = 'id', searchPlaceholder = 'Search records...', exportName = 'export', onImport, canExport = true, selectable = false, onSelectionChange, onExport, selectionResetKey }: {
   rows: T[]
   columns: ColDef<T>[]
   // Field that uniquely identifies a row. AG Grid collapses rows that share an id, so this must be unique.
@@ -34,8 +34,11 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
   selectable?: boolean
   onSelectionChange?: (selectedRows: T[]) => void
   onExport?: (kind: 'csv' | 'xlsx' | 'pdf', recordCount: number) => Promise<void> | void
+  /** Change this value to clear any current row selection in the grid. */
+  selectionResetKey?: number | string
 }) {
   const { mode } = useColorMode()
+  const gridApi = useRef<GridApi<T> | null>(null)
   const [search, setSearch] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [rules, setRules] = useState<Rule[]>([])
@@ -45,6 +48,10 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
   const [exportAnchor, setExportAnchor] = useState<null | HTMLElement>(null)
   const [exportError, setExportError] = useState('')
   const [pageSize, setPageSize] = useState(20)
+
+  useEffect(() => {
+    if (selectable && selectionResetKey !== undefined) gridApi.current?.deselectAll()
+  }, [selectable, selectionResetKey])
 
   const fields = useMemo(() => fieldDefs(columns), [columns])
   const dateFields = useMemo(() => fields.filter(f => f.kind === 'date'), [fields])
@@ -162,6 +169,7 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
     <Box sx={{ height: Math.min(720, Math.max(270, 57 + Math.min(visible.length, pageSize) * control.gridRow)), width: '100%' }}>
       <AgGridReact<T>
         theme={gridTheme}
+        onGridReady={event => { gridApi.current = event.api }}
         rowData={visible}
         columnDefs={columns}
         defaultColDef={{ sortable: true, resizable: true, flex: 1, minWidth: 120 }}

@@ -23,6 +23,7 @@ from app.models import (
 )
 from app.models.catalogue import CementAdditive, DrillBit, FuelType, MudChemical, Tangible
 from app.services import audit
+from app.services.dependencies import assert_no_dependencies
 from app.schemas.master_data import (
     MasterDataActivity,
     MasterDataBulkActionResponse,
@@ -576,6 +577,11 @@ def bulk_permanent_delete_across_modules(
 ) -> MasterDataBulkActionResponse:
     selected = _records_for_selection(db, selections=data.records, organization_id=user.organization_id, deleted=True)
     for config, record in selected:
+        assert_no_dependencies(
+            db, record, user.organization_id,
+            entity_label=f"{config['label']} record {getattr(record, config['code_field'])}",
+        )
+    for config, record in selected:
         _audit_record(
             db,
             config=config,
@@ -770,6 +776,10 @@ def permanently_delete_record(module: str, record_id: str, request: Request, db:
     record = _record_for_user(db, config=config, record_id=record_id, organization_id=user.organization_id)
     if not record.is_deleted:
         raise HTTPException(status_code=409, detail="Only a deleted master data record can be permanently deleted")
+    assert_no_dependencies(
+        db, record, user.organization_id,
+        entity_label=f"{config['label']} record {getattr(record, config['code_field'])}",
+    )
     _audit_record(
         db,
         config=config,
@@ -832,6 +842,11 @@ def bulk_restore(module: str, data: MasterDataIDs, request: Request, db: Db, use
 def bulk_permanent_delete(module: str, data: MasterDataIDs, request: Request, db: Db, user: Current) -> MasterDataBulkActionResponse:
     config = _config(module)
     records = _records_for_ids(db, config=config, ids=data.ids, organization_id=user.organization_id, deleted=True)
+    for record in records:
+        assert_no_dependencies(
+            db, record, user.organization_id,
+            entity_label=f"{config['label']} record {getattr(record, config['code_field'])}",
+        )
     for record in records:
         _audit_record(
             db,

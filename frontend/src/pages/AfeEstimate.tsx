@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
-import { AddRounded, ArrowBackRounded, DeleteOutlineRounded, EditOutlined, PrintOutlined, SaveOutlined, TableRowsOutlined, UndoRounded } from '@mui/icons-material'
+import { AddRounded, ArrowBackRounded, DeleteOutlineRounded, EditOutlined, PlaylistAddRounded, PrintOutlined, SaveOutlined, TableRowsOutlined, UndoRounded } from '@mui/icons-material'
 import { Alert, Box, Button, CircularProgress, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material'
 import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag, useUnsavedChangesGuard } from '../components/Common'
 import { AfePrintSheet } from '../components/afe/AfePrintSheet'
 import { BreakdownDialog } from '../components/afe/BreakdownDialog'
+import { AfeScopeAssignmentDialog, type AfeScopeTarget } from '../components/afe/AfeScopeAssignmentDialog'
 import { BulkEstimateDialog, type BulkResult } from '../components/afe/BulkEstimateDialog'
+import { CostingSetPickerDialog } from '../components/CostingSetPickerDialog'
 import { ConsumableLineDialog } from '../components/afe/ConsumableLineDialog'
 import { ErrorDetails, StatusDialog, StatusTag } from '../components/afe/AfeShared'
 import { ServiceLineDialog } from '../components/afe/ServiceLineDialog'
@@ -15,11 +17,12 @@ import { TangibleLineDialog } from '../components/afe/TangibleLineDialog'
 import { useAuth } from '../context/AuthContext'
 import { ApiError, api, body } from '../lib/api'
 import {
-  STATUS_ACTIONS, amountText, consumableProblems, daysText, estimateToInput, nextActions, serviceProblems, stableJson, tangibleProblems, toNumber,
-  type Afe, type AfeComponent, type AfeEstimate, type AfeReference, type AfeStatusAction, type ConsumableLineInput, type ConsumableLineOut,
+  STATUS_ACTIONS, amountText, consumableProblems, daysText, emptyConsumableLine, emptyServiceLine, emptyTangibleLine, estimateToInput, nextActions, scopeRows, serviceProblems, stableJson, tangibleProblems, toNumber,
+  type Afe, type AfeComponent, type AfeEstimate, type AfeReference, type AfeStatusAction, type ConsumableCategory, type ConsumableLineInput, type ConsumableLineOut,
   type EstimateInput, type ExchangeRateInput, type ServiceLineInput, type ServiceLineOut, type TangibleLineInput, type TangibleLineOut, type WellScope,
 } from '../lib/afe'
 import { defaultCurrencyCode } from '../lib/masterData'
+import type { CostingSet, CostingSetGroup } from '../lib/costingSets'
 
 type LineKind = 'service' | 'consumable' | 'tangible'
 type Editor = { kind: LineKind; key: string | null } | null
@@ -100,6 +103,7 @@ export default function AfeEstimate() {
   const { afeId = '' } = useParams()
   const navigate = useNavigate()
   const { can } = useAuth()
+  const canReadCostingSets = can('costing-sets:read')
 
   const [afe, setAfe] = useState<Afe | null>(null)
   const [saved, setSaved] = useState<AfeEstimate | null>(null)
@@ -115,6 +119,10 @@ export default function AfeEstimate() {
   const [notice, setNotice] = useState('')
   const [editor, setEditor] = useState<Editor>(null)
   const [bulkOpen, setBulkOpen] = useState<null | 'service' | 'consumable'>(null)
+  const [bulkScopeTarget, setBulkScopeTarget] = useState<AfeScopeTarget | null>(null)
+  const [costingSets, setCostingSets] = useState<CostingSet[]>([])
+  const [costingSetError, setCostingSetError] = useState('')
+  const [setPickerGroup, setSetPickerGroup] = useState<CostingSetGroup | null>(null)
   const [breakdown, setBreakdown] = useState<{ title: string; currency: string; components: AfeComponent[]; warnings: string[] } | null>(null)
   const [statusTarget, setStatusTarget] = useState<AfeStatusAction | null>(null)
   const [discardOpen, setDiscardOpen] = useState(false)
@@ -145,6 +153,25 @@ export default function AfeEstimate() {
   }, [afeId])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    if (!canReadCostingSets) {
+      setCostingSets([])
+      setCostingSetError('')
+      return
+    }
+    let active = true
+    setCostingSetError('')
+    api<CostingSet[]>('/costing-sets')
+      .then(records => { if (active) setCostingSets(records) })
+      .catch(caught => {
+        if (active) {
+          setCostingSets([])
+          setCostingSetError(caught instanceof Error ? caught.message : 'Costing sets could not be loaded')
+        }
+      })
+    return () => { active = false }
+  }, [canReadCostingSets])
 
   const editable = Boolean(afe && afe.status === 'draft' && can('afe:estimate'))
   const canPrint = can('afe:export')
@@ -359,6 +386,145 @@ export default function AfeEstimate() {
     setNotice(`${result.consumables.length + result.services.length} line${result.consumables.length + result.services.length === 1 ? '' : 's'} added from the bulk estimate. Review them, then save.`)
   }
 
+  const applyCostingSet = (costingSet: CostingSet) => {
+    if (!reference || !saved) return
+    const available = costingSet.items.filter(item => item.is_available)
+    let skipped = costingSet.items.length - available.length
+    let addedCount = 0
+    let nextServices = inputs.services.slice()
+    let nextConsumables = inputs.consumables.slice()
+    let nextTangibles = inputs.tangibles.slice()
+    const currency = inputs.standard_currency || defaultCurrencyCode(reference.currencies)
+    const scopedRows = scopeRows(saved.well)
+    const existingServices = new Set(nextServices.map(line => line.service_id))
+    const existingTangibles = new Set(nextTangibles.map(line => line.tangible_id))
+    const existingConsumables = new Set(nextConsumables.map(line =>
+      line.category === 'Drill Bits'
+        ? `bit:${line.drill_bit_id}:${line.hole_section_id}:${line.phase_id ?? ''}`
+        : `budget:${line.category}:${line.hole_section_id}:${line.phase_id ?? ''}`,
+    ))
+
+    if (costingSet.item_group === 'services') {
+      for (const item of available) {
+        const service = reference.services.find(option => option.id === item.item_id)
+        if (!service || existingServices.has(item.item_id)) { skipped += 1; continue }
+        nextServices.push({
+          ...emptyServiceLine(),
+          service_id: item.item_id,
+          currency,
+          remarks: `Added from costing set ${costingSet.name}`,
+        })
+        existingServices.add(item.item_id)
+        addedCount += 1
+      }
+    } else if (costingSet.item_group === 'tangibles') {
+      for (const item of available) {
+        const tangible = reference.tangibles.find(option => option.id === item.item_id)
+        if (!tangible || existingTangibles.has(item.item_id)) { skipped += 1; continue }
+        nextTangibles.push({
+          ...emptyTangibleLine(),
+          tangible_id: item.item_id,
+          remarks: `Added from costing set ${costingSet.name}`,
+        })
+        existingTangibles.add(item.item_id)
+        addedCount += 1
+      }
+    } else {
+      const categories = new Set<ConsumableCategory>()
+      const categoryByKind: Record<string, ConsumableCategory> = {
+        mud_chemical: 'Mud Chemicals',
+        cement_additive: 'Cement Additives',
+        fuel: 'Fuel',
+      }
+      for (const item of available) {
+        if (item.item_kind === 'drill_bit') {
+          const bit = reference.drill_bits.find(option => option.id === item.item_id)
+          const firstScope = scopedRows[0]
+          if (!bit || !firstScope) { skipped += 1; continue }
+          const duplicateKey = `bit:${bit.id}:${firstScope.sectionId}:${firstScope.phaseId ?? ''}`
+          if (existingConsumables.has(duplicateKey)) { skipped += 1; continue }
+          nextConsumables.push({
+            ...emptyConsumableLine('Drill Bits'),
+            hole_section_id: firstScope.sectionId,
+            phase_id: firstScope.phaseId,
+            drill_bit_id: bit.id,
+            quantity: '1',
+            currency: bit.currency || currency,
+            remarks: `Added from costing set ${costingSet.name}`,
+          })
+          existingConsumables.add(duplicateKey)
+          addedCount += 1
+          continue
+        }
+        const category = categoryByKind[item.item_kind]
+        if (!category) { skipped += 1; continue }
+        categories.add(category)
+      }
+      for (const category of categories) {
+        if (!scopedRows.length) { skipped += 1; continue }
+        for (const scopeRow of scopedRows) {
+          const duplicateKey = `budget:${category}:${scopeRow.sectionId}:${scopeRow.phaseId ?? ''}`
+          if (existingConsumables.has(duplicateKey)) { skipped += 1; continue }
+          nextConsumables.push({
+            ...emptyConsumableLine(category),
+            hole_section_id: scopeRow.sectionId,
+            phase_id: scopeRow.phaseId,
+            estimated_amount: '',
+            currency,
+            remarks: `Prepared from costing set ${costingSet.name}`,
+          })
+          existingConsumables.add(duplicateKey)
+          addedCount += 1
+        }
+      }
+    }
+
+    if (addedCount) setInputs({ ...inputs, services: nextServices, consumables: nextConsumables, tangibles: nextTangibles })
+    setSetPickerGroup(null)
+    setNotice(
+      `${addedCount} editable line${addedCount === 1 ? '' : 's'} added from “${costingSet.name}”. ` +
+      (skipped ? `${skipped} unavailable, already-present or out-of-scope item(s) were skipped. ` : '') +
+      'Review the estimate preview and fill any missing rates or amounts before saving.',
+    )
+  }
+
+  const applyBulkScope = (sectionId: string | null, phaseId: string | null) => {
+    if (!bulkScopeTarget || !saved) return
+    const target = bulkScopeTarget
+    let updatedCount = 0
+    let skippedCount = 0
+    if (target === 'service') {
+      const chosen = new Set(selected.service)
+      const services = inputs.services.map(line => {
+        if (!chosen.has(line.client_key)) return line
+        if (line.charging_basis === 'Per Section Rate') { skippedCount += 1; return line }
+        updatedCount += 1
+        return { ...line, hole_section_id: sectionId, phase_id: sectionId ? phaseId : null }
+      })
+      setInputs({ ...inputs, services })
+    } else {
+      const chosen = new Set(selected.consumable)
+      const consumables = inputs.consumables.map(line => {
+        if (!chosen.has(line.client_key)) return line
+        updatedCount += 1
+        return { ...line, hole_section_id: sectionId ?? '', phase_id: sectionId ? phaseId : null }
+      })
+      setInputs({ ...inputs, consumables })
+    }
+    const scopeText = [sectionLabel(saved.well, sectionId), phaseLabel(saved.well, sectionId, phaseId)].filter(Boolean).join(' · ')
+    setBulkScopeTarget(null)
+    setNotice(
+      `${updatedCount} selected ${target === 'service' ? 'service' : 'consumable'} line(s) now use ${scopeText || 'the well-wide scope'}. ` +
+      (skippedCount ? `${skippedCount} per-section-rate service line(s) were left unchanged. ` : '') +
+      'Rates and amounts were preserved; review the preview and save the estimate to keep these edits.',
+    )
+  }
+
+  const selectedServiceLines = inputs.services.filter(line => selected.service.includes(line.client_key))
+  const assignableServiceCount = selectedServiceLines.filter(line => line.charging_basis !== 'Per Section Rate').length
+  const unsupportedServiceCount = selectedServiceLines.length - assignableServiceCount
+  const requiresServiceSection = selectedServiceLines.some(line => line.charging_basis === 'Per Service Rate')
+
   const save = async (): Promise<boolean> => {
     if (!afe) return false
     if (incompleteCount) {
@@ -533,6 +699,9 @@ export default function AfeEstimate() {
     </Box>
 
     {notice && <Alert severity="success" onClose={() => setNotice('')} sx={{ mb: 1.5 }}>{notice}</Alert>}
+    {costingSetError && <Alert severity="warning" onClose={() => setCostingSetError('')} sx={{ mb: 1.5 }}>
+      Reusable costing sets could not be loaded: {costingSetError}. You can still edit and save this estimate as usual.
+    </Alert>}
     {saved.well.config_status !== 'configured' && <Alert severity="warning" sx={{ mb: 1.5 }}>
       The well plan is in Draft. Mark the well as Configured in Rig & Well Management before saving or submitting this estimate.
     </Alert>}
@@ -698,6 +867,10 @@ export default function AfeEstimate() {
       count={serviceRows.length}
       actions={<>
         {editable && selected.service.length > 0 && <Button color="error" variant="outlined" size="small" onClick={() => setBulkDelete('service')}>Delete {selected.service.length} selected</Button>}
+        {editable && selected.service.length > 0 && <Tooltip title={unsupportedServiceCount === selectedServiceLines.length && unsupportedServiceCount > 0 ? 'Per-section-rate lines keep separate rates for every well-plan section and cannot receive one shared scope.' : 'Apply one section and phase to the selected service lines'}>
+          <span><Button variant="outlined" size="small" startIcon={<EditOutlined/>} disabled={!assignableServiceCount} onClick={() => setBulkScopeTarget('service')}>Assign scope</Button></span>
+        </Tooltip>}
+        {editable && canReadCostingSets && <Button variant="outlined" size="small" startIcon={<PlaylistAddRounded/>} onClick={() => setSetPickerGroup('services')}>Add from set</Button>}
         {editable && <Button variant="outlined" size="small" startIcon={<TableRowsOutlined/>} onClick={() => setBulkOpen('service')}>Bulk by section</Button>}
         {editable && <Button variant="contained" size="small" startIcon={<AddRounded/>} onClick={() => setEditor({ kind: 'service', key: null })}>Add service</Button>}
       </>}
@@ -723,6 +896,8 @@ export default function AfeEstimate() {
       count={consumableRows.length}
       actions={<>
         {editable && selected.consumable.length > 0 && <Button color="error" variant="outlined" size="small" onClick={() => setBulkDelete('consumable')}>Delete {selected.consumable.length} selected</Button>}
+        {editable && selected.consumable.length > 0 && <Button variant="outlined" size="small" startIcon={<EditOutlined/>} onClick={() => setBulkScopeTarget('consumable')}>Assign section / phase</Button>}
+        {editable && canReadCostingSets && <Button variant="outlined" size="small" startIcon={<PlaylistAddRounded/>} onClick={() => setSetPickerGroup('consumables')}>Add from set</Button>}
         {editable && <Button variant="outlined" size="small" startIcon={<TableRowsOutlined/>} onClick={() => setBulkOpen('consumable')}>Bulk by section</Button>}
         {editable && <Button variant="contained" size="small" startIcon={<AddRounded/>} onClick={() => setEditor({ kind: 'consumable', key: null })}>Add consumable</Button>}
       </>}
@@ -748,6 +923,7 @@ export default function AfeEstimate() {
       count={tangibleRows.length}
       actions={<>
         {editable && selected.tangible.length > 0 && <Button color="error" variant="outlined" size="small" onClick={() => setBulkDelete('tangible')}>Delete {selected.tangible.length} selected</Button>}
+        {editable && canReadCostingSets && <Button variant="outlined" size="small" startIcon={<PlaylistAddRounded/>} onClick={() => setSetPickerGroup('tangibles')}>Add from set</Button>}
         {editable && <Button variant="contained" size="small" startIcon={<AddRounded/>} onClick={() => setEditor({ kind: 'tangible', key: null })}>Add tangible</Button>}
       </>}
     >
@@ -791,6 +967,24 @@ export default function AfeEstimate() {
       onSave={line => { upsertTangible(line); setEditor(null) }}
     />}
     <BulkEstimateDialog open={bulkOpen !== null} initialMode={bulkOpen ?? 'consumable'} scope={saved.well} reference={reference} onClose={() => setBulkOpen(null)} onApply={applyBulk}/>
+    <CostingSetPickerDialog
+      open={setPickerGroup !== null}
+      group={setPickerGroup ?? 'services'}
+      destination="afe"
+      sets={costingSets}
+      onClose={() => setSetPickerGroup(null)}
+      onApply={applyCostingSet}
+    />
+    <AfeScopeAssignmentDialog
+      open={bulkScopeTarget !== null}
+      target={bulkScopeTarget ?? 'service'}
+      selectedCount={bulkScopeTarget === 'service' ? assignableServiceCount : selected.consumable.length}
+      unsupportedCount={bulkScopeTarget === 'service' ? unsupportedServiceCount : 0}
+      requireSection={bulkScopeTarget === 'service' ? requiresServiceSection : true}
+      scope={saved.well}
+      onClose={() => setBulkScopeTarget(null)}
+      onApply={applyBulkScope}
+    />
 
     <BreakdownDialog
       open={Boolean(breakdown)}

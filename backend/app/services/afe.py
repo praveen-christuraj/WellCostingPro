@@ -31,7 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.domain import afe_costing as engine
-from app.models import AuditLog, Rig, Well, WellSection
+from app.models import AuditLog, DailyCostBaseline, DailyCostEntry, Rig, Well, WellSection
 from app.models.afe import (
     AFE_STATUSES,
     Afe,
@@ -1212,11 +1212,52 @@ def _active_afe(db: Session, organization_id: str, afe_id: str) -> Afe:
     return afe
 
 
+def _daily_cost_dependency_counts(
+    db: Session,
+    organization_id: str,
+    afe_ids: list[str],
+    *,
+    active_entries_only: bool,
+) -> tuple[dict[str, int], dict[str, int]]:
+    if not afe_ids:
+        return {}, {}
+    entry_statement = select(DailyCostEntry.afe_id, func.count(DailyCostEntry.id)).where(
+        DailyCostEntry.organization_id == organization_id,
+        DailyCostEntry.afe_id.in_(afe_ids),
+    )
+    if active_entries_only:
+        entry_statement = entry_statement.where(DailyCostEntry.is_deleted.is_(False))
+    entries = {
+        str(afe_id): int(count)
+        for afe_id, count in db.execute(entry_statement.group_by(DailyCostEntry.afe_id)).all()
+    }
+    baseline_statement = select(DailyCostBaseline.afe_id, func.count(DailyCostBaseline.id)).where(
+        DailyCostBaseline.organization_id == organization_id,
+        DailyCostBaseline.afe_id.in_(afe_ids),
+    )
+    baselines = {
+        str(afe_id): int(count)
+        for afe_id, count in db.execute(baseline_statement.group_by(DailyCostBaseline.afe_id)).all()
+    }
+    return entries, baselines
+
+
 def _soft_delete(db: Session, organization_id: str, afe: Afe, user: User, request: Request | None) -> None:
     if afe.status != "draft":
         raise HTTPException(
             status_code=409,
             detail=f"{afe.afe_code} is {AFE_STATUS_LABELS[afe.status].lower()}. Reopen it as Draft before moving it to Deleted Entries.",
+        )
+    active_entries, _ = _daily_cost_dependency_counts(
+        db, organization_id, [afe.id], active_entries_only=True
+    )
+    if active_entries.get(afe.id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{afe.afe_code} is used by {active_entries[afe.id]} active daily-cost sheet(s). "
+                "Move those sheets to Deleted Entries before deleting this AFE."
+            ),
         )
     afe.is_deleted = True
     afe.deleted_at = _now()
@@ -1245,6 +1286,18 @@ def bulk_delete(db: Session, organization_id: str, data: AfeIDs, user: User, req
         raise HTTPException(
             status_code=409,
             detail=f"Only draft AFEs can be moved to Deleted Entries. Reopen first: {', '.join(sorted(blocked)[:10])}",
+        )
+    entries_by_afe, _ = _daily_cost_dependency_counts(
+        db, organization_id, [afe.id for afe in afes], active_entries_only=True
+    )
+    blocked_sheets = [afe.afe_code for afe in afes if entries_by_afe.get(afe.id)]
+    if blocked_sheets:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "These AFEs are used by active daily-cost sheets. Move those sheets to Deleted Entries first: "
+                f"{', '.join(sorted(blocked_sheets)[:10])}"
+            ),
         )
     for afe in afes:
         _soft_delete(db, organization_id, afe, user, request)
@@ -1305,6 +1358,28 @@ def permanently_delete(db: Session, organization_id: str, afe_ids: Iterable[str]
     active = [afe.afe_code for afe in afes if not afe.is_deleted]
     if active:
         raise HTTPException(status_code=409, detail=f"Move these AFEs to Deleted Entries first: {', '.join(sorted(active)[:10])}")
+    entries_by_afe, baselines_by_afe = _daily_cost_dependency_counts(
+        db, organization_id, [afe.id for afe in afes], active_entries_only=False
+    )
+    blocked = [
+        afe for afe in afes
+        if entries_by_afe.get(afe.id) or baselines_by_afe.get(afe.id)
+    ]
+    if blocked:
+        afe = blocked[0]
+        dependencies = []
+        if entries_by_afe.get(afe.id):
+            dependencies.append(f"{entries_by_afe[afe.id]} daily-cost sheet(s)")
+        if baselines_by_afe.get(afe.id):
+            dependencies.append("an immutable daily-cost baseline")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"AFE {afe.afe_code} is retained by {', '.join(dependencies)}. Permanently delete linked daily-cost "
+                "sheets first. Immutable AFE baselines are retained for audit, so an AFE with baseline history "
+                "must remain in Deleted Entries."
+            ),
+        )
     for afe in afes:
         _record_audit(
             db, user=user, action="permanent_delete", entity_type="afe", record_id=None, entity_label=afe.afe_code,

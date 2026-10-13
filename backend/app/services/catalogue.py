@@ -41,6 +41,7 @@ from app.models.catalogue import (
 )
 from app.schemas.catalogue import PricedItemOverview, RateRevisionOut, BreakdownItem
 from app.services import audit
+from app.services.dependencies import assert_no_dependencies
 
 Q4 = Decimal("0.0001")
 DEFAULT_UPLIFT = Decimal("100")
@@ -968,6 +969,7 @@ def purge_item(db: Session, spec: PricedSpec, organization_id: str, user: Any, i
     if not item.is_deleted:
         raise CatalogueError("Only a deleted record can be permanently deleted", 409)
     code = getattr(item, spec.code_attr)
+    assert_no_dependencies(db, item, organization_id, entity_label=f"{spec.item_type.lower()} {code}")
     suffix = " (bulk action)" if bulk else ""
     _audit_item(db, spec, organization_id, user, item, "permanent_delete",
                 f"Permanently deleted {spec.item_type.lower()} {code} and its rate history{suffix}", request)

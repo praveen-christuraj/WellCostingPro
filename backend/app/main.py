@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from app.api import afe, auth, audit, daily_cost, database_browser, master_data, rbac, rig_well, service_master, vendor_master
+from app.api import afe, auth, audit, costing_sets, daily_cost, database_browser, master_data, rbac, rig_well, service_master, vendor_master
 from app.api.catalogue_items import ITEM_ROUTERS, catalogue_error_handler
 from app.api.catalogue_options import router as catalogue_options_router
 from app.services.catalogue import CatalogueError
@@ -33,6 +33,7 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(database_browser.router, prefix="/api/v1")
 app.include_router(rbac.router, prefix="/api/v1")
+app.include_router(costing_sets.router, prefix="/api/v1")
 # Specialized vendor, service, and PO/SO routes are registered before the generic
 # /master-data/{module} routes so dynamic paths do not shadow them.
 app.include_router(vendor_master.router, prefix="/api/v1")
