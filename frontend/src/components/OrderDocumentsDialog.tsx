@@ -366,6 +366,7 @@ export function OrderDocumentsDialog({ open, order, onClose, onChanged }: {
       onSubmit={() => removing && (removing.is_deleted ? void purge(removing) : void softRemove(removing))}
       busy={busyRemove}
       submitLabel={removing?.is_deleted ? 'Permanently delete' : 'Remove file'}
+      danger={Boolean(removing?.is_deleted)}
     >
       <Box display="grid" gap={1.5} pt={.5}>
         <Typography fontSize={13}>“{removing?.file_name}” ({formatBytes(removing?.size_bytes ?? 0)}) on {order.order_number} revision {order.revision_number}.</Typography>

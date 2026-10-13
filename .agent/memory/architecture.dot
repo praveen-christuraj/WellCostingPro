@@ -90,6 +90,7 @@ digraph WellCostingPro {
   "frontend/src/components/daily-cost/DailyCostLineDialog.tsx";
   "frontend/src/context/AuthContext.tsx";
   "frontend/src/context/ThemeContext.tsx";
+  "frontend/src/designSystem.ts";
   "frontend/src/lib/afe.ts";
   "frontend/src/lib/api.ts";
   "frontend/src/lib/catalogue.ts";
@@ -294,6 +295,7 @@ digraph WellCostingPro {
   "frontend/src/App.tsx" -> "frontend/src/pages/Wells.tsx";
   "frontend/src/components/Brand.tsx" -> "frontend/src/context/ThemeContext.tsx";
   "frontend/src/components/DataTable.tsx" -> "frontend/src/context/ThemeContext.tsx";
+  "frontend/src/components/DataTable.tsx" -> "frontend/src/designSystem.ts";
   "frontend/src/components/DataTable.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/components/ImportDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/ImportDialog.tsx" -> "frontend/src/lib/export.ts";
@@ -573,4 +575,5 @@ digraph WellCostingPro {
   "frontend/src/pages/Wells.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/Wells.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/Wells.tsx" -> "frontend/src/lib/rigWell.ts";
+  "frontend/src/theme.ts" -> "frontend/src/designSystem.ts";
 }

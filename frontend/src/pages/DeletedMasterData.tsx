@@ -437,6 +437,7 @@ export default function DeletedMasterData() {
       onSubmit={() => void confirmPermanentDelete()}
       busy={permanentlyDeleting}
       submitLabel="Permanently delete"
+      danger
     >
       <Box display="grid" gap={1.5} pt={.5}>
         <Typography fontSize={13}>
