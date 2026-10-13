@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint, Index, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -45,14 +45,30 @@ class UnitOfMeasurement(MasterDataRecord):
 
 
 class Currency(MasterDataRecord):
-    """Currency code, name, and display symbol."""
+    """Currency code, name, and display symbol.
+
+    At most one active currency per workspace is the workspace default. A
+    partial unique index enforces that at the database level; the API clears
+    the flag on the previous default (and on soft deletion), so every page can
+    preload the default currency in its currency dropdowns.
+    """
 
     __tablename__ = "currencies"
-    __table_args__ = (UniqueConstraint("organization_id", "currency_code", name="uq_currencies_org_code"),)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "currency_code", name="uq_currencies_org_code"),
+        Index(
+            "uq_currencies_org_default",
+            "organization_id",
+            unique=True,
+            sqlite_where=text("is_default"),
+            postgresql_where=text("is_default"),
+        ),
+    )
 
     currency_code: Mapped[str] = mapped_column(String(10), nullable=False)
     currency_name: Mapped[str] = mapped_column(String(100), nullable=False)
     currency_symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
 
 class Phase(MasterDataRecord):

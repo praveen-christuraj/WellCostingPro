@@ -54,7 +54,9 @@ export function ImportDialog({ open, onClose, title, subtitle, headers, optional
     } finally { setBusy(false) }
   }
 
-  return <FormDialog open={open} onClose={close} onSubmit={run} busy={busy} busyLabel={rows.length ? `Importing ${rows.length} rows...` : 'Importing...'} title={title} subtitle={subtitle} submitLabel={`Import ${rows.length || ''} ${rows.length === 1 ? 'row' : 'rows'}`.trim()}>
+  // Unsaved-changes guard: a chosen file that has not been imported yet is protected —
+  // Cancel first asks whether to import it or discard it.
+  return <FormDialog open={open} onClose={close} onSubmit={run} busy={busy} dirty={Boolean(fileName)} busyLabel={rows.length ? `Importing ${rows.length} rows...` : 'Importing...'} title={title} subtitle={subtitle} submitLabel={`Import ${rows.length || ''} ${rows.length === 1 ? 'row' : 'rows'}`.trim()}>
     <Box display="grid" gap={2} pt={.5}>
       <Box display="flex" gap={1} flexWrap="wrap">
         <Button component="label" variant="outlined" startIcon={parsing ? <CircularProgress size={15}/> : <UploadFileRounded sx={{ fontSize: 18 }}/>} disabled={busy || parsing}>

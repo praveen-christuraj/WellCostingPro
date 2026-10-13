@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -61,6 +61,7 @@ MODULES: dict[str, dict[str, Any]] = {
         "code_max": 10,
         "name_max": 100,
         "symbol_max": 20,
+        "default_field": "is_default",
     },
     "phases": {
         "model": Phase,
@@ -168,6 +169,14 @@ def _normalize_payload(config: dict[str, Any], payload: dict[str, Any], *, parti
         if config["symbol_field"] is not None and len(symbol) > config["symbol_max"]:
             raise ValueError(f"Symbol must be {config['symbol_max']} characters or fewer")
         result["symbol"] = symbol or None
+    if "is_default" in result:
+        if result["is_default"] is None:
+            # Absent and null are the same: no default was requested.
+            del result["is_default"]
+        elif not config.get("default_field"):
+            raise ValueError("Only Currency records support a default flag")
+        else:
+            result["is_default"] = bool(result["is_default"])
     return result
 
 
@@ -184,17 +193,80 @@ def _model_values(config: dict[str, Any], payload: dict[str, Any]) -> dict[str, 
 
 def _output(config: dict[str, Any], record: Any) -> MasterDataRecordOut:
     symbol_field = config["symbol_field"]
+    default_field = config.get("default_field")
     return MasterDataRecordOut(
         id=record.id,
         code=getattr(record, config["code_field"]),
         name=getattr(record, config["name_field"]),
         symbol=getattr(record, symbol_field) if symbol_field else None,
         description=record.description or "",
+        is_default=bool(getattr(record, default_field)) if default_field else None,
         is_deleted=record.is_deleted,
         deleted_at=record.deleted_at,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Default-currency helpers (Currency module only). One active currency per
+# workspace is the default; the partial unique index on the table enforces it,
+# so a switch first clears the other rows and flushes before flagging the new
+# default.
+# ---------------------------------------------------------------------------
+
+
+def _default_supported(config: dict[str, Any]) -> bool:
+    return bool(config.get("default_field"))
+
+
+def _set_default_record(db: Session, *, model: Any, organization_id: str, record: Any, field: str) -> None:
+    db.execute(
+        update(model)
+        .where(model.organization_id == organization_id, model.id != record.id, getattr(model, field).is_(True))
+        .values(**{field: False})
+    )
+    db.flush()
+    setattr(record, field, True)
+
+
+def _apply_default_flag(
+    db: Session,
+    *,
+    config: dict[str, Any],
+    record: Any,
+    organization_id: str,
+    requested: bool | None,
+) -> bool:
+    """Apply the requested default flag; return True when the record became the default.
+
+    When no flag is requested, the first active currency of a workspace without
+    any default becomes the default automatically, so every workspace with at
+    least one active currency has one to preload in currency dropdowns.
+    """
+    if not _default_supported(config):
+        return False
+    field = config["default_field"]
+    if requested is True:
+        _set_default_record(db, model=config["model"], organization_id=organization_id, record=record, field=field)
+        return True
+    if requested is None:
+        existing_default = db.scalar(
+            select(config["model"]).where(
+                config["model"].organization_id == organization_id,
+                getattr(config["model"], field).is_(True),
+                config["model"].id != record.id,
+            )
+        )
+        if existing_default is None:
+            setattr(record, field, True)
+            return True
+    return False
+
+
+def _clear_default_flag(record: Any, config: dict[str, Any]) -> None:
+    if _default_supported(config) and getattr(record, config["default_field"], False):
+        setattr(record, config["default_field"], False)
 
 
 def _audit_record(
@@ -540,13 +612,24 @@ def create_record(module: str, data: MasterDataCreate, request: Request, db: Db,
     record = model(organization_id=user.organization_id, **_model_values(config, payload))
     db.add(record)
     _flush(db)
+    became_default = _apply_default_flag(
+        db,
+        config=config,
+        record=record,
+        organization_id=user.organization_id,
+        requested=payload.get("is_default"),
+    )
     _audit_record(
         db,
         config=config,
         record=record,
         user=user,
         action="create",
-        summary=f"Created {config['label']} record {payload['code']}",
+        summary=(
+            f"Created {config['label']} record {payload['code']} and set it as the workspace default"
+            if became_default
+            else f"Created {config['label']} record {payload['code']}"
+        ),
         request=request,
     )
     _commit(db)
@@ -606,6 +689,18 @@ def update_record(
             record.description = value
             changed_fields.append("description")
 
+    default_note = ""
+    if _default_supported(config) and payload.get("is_default") is not None:
+        field = config["default_field"]
+        if bool(payload["is_default"]):
+            if not getattr(record, field):
+                _set_default_record(db, model=config["model"], organization_id=user.organization_id, record=record, field=field)
+                changed_fields.append("default flag")
+                default_note = " It is now the workspace default currency."
+        elif getattr(record, field):
+            setattr(record, field, False)
+            changed_fields.append("default flag")
+
     if changed_fields:
         _audit_record(
             db,
@@ -613,7 +708,7 @@ def update_record(
             record=record,
             user=user,
             action="update",
-            summary=f"Updated {config['label']} record {getattr(record, code_field)}: {', '.join(changed_fields)}",
+            summary=f"Updated {config['label']} record {getattr(record, code_field)}: {', '.join(changed_fields)}.{default_note}",
             request=request,
         )
         _commit(db)
@@ -627,6 +722,7 @@ def soft_delete_record(module: str, record_id: str, request: Request, db: Db, us
     record = _record_for_user(db, config=config, record_id=record_id, organization_id=user.organization_id, include_deleted=False)
     record.is_deleted = True
     record.deleted_at = datetime.now(timezone.utc)
+    _clear_default_flag(record, config)
     _audit_record(
         db,
         config=config,
@@ -649,13 +745,18 @@ def restore_record(module: str, record_id: str, request: Request, db: Db, user: 
         raise HTTPException(status_code=409, detail="Only a deleted master data record can be restored")
     record.is_deleted = False
     record.deleted_at = None
+    restored_default = _apply_default_flag(db, config=config, record=record, organization_id=user.organization_id, requested=None)
     _audit_record(
         db,
         config=config,
         record=record,
         user=user,
         action=MasterDataAction.RESTORE,
-        summary=f"Restored {config['label']} record {getattr(record, config['code_field'])}",
+        summary=(
+            f"Restored {config['label']} record {getattr(record, config['code_field'])} and set it as the workspace default"
+            if restored_default
+            else f"Restored {config['label']} record {getattr(record, config['code_field'])}"
+        ),
         request=request,
     )
     _commit(db)
@@ -691,6 +792,7 @@ def bulk_soft_delete(module: str, data: MasterDataIDs, request: Request, db: Db,
     for record in records:
         record.is_deleted = True
         record.deleted_at = deleted_at
+        _clear_default_flag(record, config)
         _audit_record(
             db,
             config=config,
@@ -711,13 +813,15 @@ def bulk_restore(module: str, data: MasterDataIDs, request: Request, db: Db, use
     for record in records:
         record.is_deleted = False
         record.deleted_at = None
+        became_default = _apply_default_flag(db, config=config, record=record, organization_id=user.organization_id, requested=None)
+        suffix = " and set it as the workspace default" if became_default else ""
         _audit_record(
             db,
             config=config,
             record=record,
             user=user,
             action=MasterDataAction.RESTORE,
-            summary=f"Restored {config['label']} record {getattr(record, config['code_field'])} (bulk action)",
+            summary=f"Restored {config['label']} record {getattr(record, config['code_field'])}{suffix} (bulk action)",
             request=request,
         )
     _commit(db)
@@ -784,16 +888,26 @@ def import_records(
             record = model(organization_id=user.organization_id, **_model_values(config, payload))
             db.add(record)
             _flush(db)
+            became_default = _apply_default_flag(db, config=config, record=record, organization_id=user.organization_id, requested=None)
             action = "create"
-            summary = f"Created {config['label']} record {code} from import"
+            summary = (
+                f"Created {config['label']} record {code} from import and set it as the workspace default"
+                if became_default
+                else f"Created {config['label']} record {code} from import"
+            )
         else:
             for field, value in _model_values(config, payload).items():
                 setattr(record, field, value)
             if record.is_deleted:
                 record.is_deleted = False
                 record.deleted_at = None
+                became_default = _apply_default_flag(db, config=config, record=record, organization_id=user.organization_id, requested=None)
                 action = MasterDataAction.RESTORE
-                summary = f"Restored and updated {config['label']} record {code} from import"
+                summary = (
+                    f"Restored and updated {config['label']} record {code} from import and set it as the workspace default"
+                    if became_default
+                    else f"Restored and updated {config['label']} record {code} from import"
+                )
             else:
                 action = "update"
                 summary = f"Updated {config['label']} record {code} from import"

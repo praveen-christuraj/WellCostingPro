@@ -313,6 +313,7 @@ export default function CatalogueLists() {
       onClose={() => { if (!renaming) setRenameRecord(null) }}
       onSubmit={() => void saveRename()}
       busy={renaming || !renameValue.trim()}
+      dirty={Boolean(renameRecord) && renameValue !== (renameRecord?.value ?? '')}
       submitLabel="Rename"
     >
       <Box display="grid" gap={1.5} pt={.5}>

@@ -1,5 +1,5 @@
 import { Alert, Box, Checkbox, Divider, FormControlLabel, MenuItem, TextField, Typography } from '@mui/material'
-import { ErrorMessage, FormDialog } from './Common'
+import { ErrorMessage, FormDialog, useFormDirty } from './Common'
 import {
   ORDER_STATUSES,
   ORDER_TYPES,
@@ -34,6 +34,7 @@ export function OrderFormDialog({ open, mode, order, vendors, form, setForm, bus
   const selectedVendor = vendors.find(vendor => vendor.id === form.vendor_id)
   const nextRevision = order ? order.revision_count : 0
   const submit = () => onSubmit(mode === 'amend' ? orderFormToAmendment(form) : orderFormToPayload(form))
+  const dirty = useFormDirty(form, open)
 
   return <FormDialog
     open={open}
@@ -44,6 +45,7 @@ export function OrderFormDialog({ open, mode, order, vendors, form, setForm, bus
     onClose={onClose}
     onSubmit={submit}
     busy={busy}
+    dirty={dirty}
     submitLabel={mode === 'create' ? 'Create order' : mode === 'edit' ? 'Save changes' : `Create revision ${nextRevision}`}
   >
     <Box display="grid" gap={2} pt={.5}>

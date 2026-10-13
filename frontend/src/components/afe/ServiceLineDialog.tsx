@@ -5,6 +5,7 @@ import {
   CHARGE_CATEGORIES, CHARGING_BASES, ONE_TIME_CATEGORIES, daysText, emptyServiceLine, phaseOptions, scopeRows, sectionOptions, serviceProblems,
   toDays, type AfeReference, type ChargeCategory, type ChargingBasis, type QuantityUnit, type ServiceLineInput, type WellScope,
 } from '../../lib/afe'
+import { defaultCurrencyCode } from '../../lib/masterData'
 import { ServicePicker } from './LinePickers'
 
 const BASIS_HINT: Record<ChargingBasis, string> = {
@@ -27,6 +28,7 @@ type Props = {
 // Adds or edits one service line. A line is priced from the well plan it is scoped to.
 export function ServiceLineDialog({ open, initial, scope, reference, onClose, onSave }: Props) {
   const [line, setLine] = useState<ServiceLineInput>(() => emptyServiceLine())
+  const [baseline, setBaseline] = useState<ServiceLineInput | null>(null)
   const [submitted, setSubmitted] = useState(false)
   const [chargeCategory, setChargeCategory] = useState<ChargeCategory>('Standby')
   const [chargeQuantity, setChargeQuantity] = useState('')
@@ -34,12 +36,18 @@ export function ServiceLineDialog({ open, initial, scope, reference, onClose, on
 
   useEffect(() => {
     if (!open) return
-    setLine(initial ? structuredClone(initial) : emptyServiceLine())
+    const next = initial ? structuredClone(initial) : emptyServiceLine()
+    // New lines start in the workspace default currency, so it rarely has to be picked.
+    if (!next.currency) next.currency = defaultCurrencyCode(reference.currencies)
+    setLine(next)
+    setBaseline(next)
     setSubmitted(false)
     setChargeQuantity('')
     setChargeCategory('Standby')
     setChargeUnit('days')
-  }, [open, initial])
+  }, [open, initial, reference.currencies])
+  // Unsaved-changes guard: everything typed or picked in this dialog is protected.
+  const dirty = baseline !== null && JSON.stringify(line) !== JSON.stringify(baseline)
 
   const sections = useMemo(() => sectionOptions(scope), [scope])
   const phases = useMemo(() => phaseOptions(scope, line.hole_section_id), [scope, line.hole_section_id])
@@ -110,6 +118,7 @@ export function ServiceLineDialog({ open, initial, scope, reference, onClose, on
     subtitle="Choose a service from Master Data, how it is charged, and the rates. Sections and phases come from the well plan."
     onClose={onClose}
     onSubmit={save}
+    dirty={dirty}
     submitLabel={initial ? 'Save line' : 'Add service'}
     maxWidth="md"
   >

@@ -166,15 +166,21 @@ export function DailyCostLineDialog({
   open, kind, initialLine, serviceLines, lineIndex, baseline, reference, wellId, onClose, onSave,
 }: Props) {
   const [form, setForm] = useState<EditableDailyCostLine | null>(null)
+  const [baselineForm, setBaselineForm] = useState<EditableDailyCostLine | null>(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!open || !kind) return
-    setForm(initialLine ?? initialFor(kind, reference, baseline, wellId))
+    const next = initialLine ?? initialFor(kind, reference, baseline, wellId)
+    setForm(next)
+    setBaselineForm(next)
     setError('')
     setSaving(false)
   }, [open, kind, initialLine, reference, baseline, wellId])
+
+  // Unsaved-changes guard: anything typed or picked in the line editor is protected.
+  const dirty = baselineForm !== null && form !== null && JSON.stringify(form) !== JSON.stringify(baselineForm)
 
   const selectedRate = useMemo(() => {
     if (!form || !isService(form) || !form.baseline_service_rate_id) return undefined
@@ -332,7 +338,7 @@ export function DailyCostLineDialog({
   }`
   const sectionLabel = (section: typeof sections[number]) => `${section.section_code} · ${section.section_name}`
 
-  return <FormDialog open title={title} subtitle="Daily actuals are priced from the AFE and rate snapshots locked when tracking began. Overrides are recorded with their reason." onClose={onClose} onSubmit={submit} busy={saving} submitLabel={form.id ? 'Save line' : 'Add line'} maxWidth="md">
+  return <FormDialog open title={title} subtitle="Daily actuals are priced from the AFE and rate snapshots locked when tracking began. Overrides are recorded with their reason." onClose={onClose} onSubmit={submit} busy={saving} dirty={dirty} submitLabel={form.id ? 'Save line' : 'Add line'} maxWidth="md">
     <Box display="grid" gap={1.8}>
       <TextField select required label="Master Data Activity" value={form.activity_id} onChange={event => updateActivity(event.target.value)}
         helperText="Classifies the line (Planned / UPA / NPT) and drives its sub activity list.">

@@ -637,7 +637,7 @@ class AfeReference(BaseModel):
     services: list[AfeReferenceService]
     tangibles: list[AfeReferenceTangible]
     drill_bits: list[AfeReferenceDrillBit]
-    currencies: list[dict[str, str]]
+    currencies: list[dict[str, Any]]
     afe_types: list[str]
     charging_bases: list[str]
     charge_categories: list[str]

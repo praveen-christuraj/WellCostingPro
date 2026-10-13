@@ -4,7 +4,7 @@ import { AddRounded, ArrowDropDownRounded, DeleteOutlineRounded, EditOutlined, L
 import { Alert, Box, Button, CircularProgress, IconButton, Menu, MenuItem, Paper, TextField, Tooltip, Typography } from '@mui/material'
 import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
-import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
+import { ErrorMessage, FormDialog, PageHeading, useFormDirty, Tag } from '../components/Common'
 import { ImportDialog } from '../components/ImportDialog'
 import { WellConfigurationDialog } from '../components/WellConfigurationDialog'
 import { useAuth } from '../context/AuthContext'
@@ -79,6 +79,7 @@ export default function Wells() {
   const [formOpen, setFormOpen] = useState(false)
   const [formRecord, setFormRecord] = useState<Well | null>(null)
   const [form, setForm] = useState<WellPayload>(emptyWellForm)
+  const formDirty = useFormDirty(form, formOpen)
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
@@ -302,6 +303,7 @@ export default function Wells() {
       onClose={() => { if (!saving) { setFormOpen(false); setFormRecord(null) } }}
       onSubmit={() => void save()}
       busy={saving}
+      dirty={formDirty}
       submitDisabled={!rigs.length || !form.rig_id || !form.well_code.trim() || !form.well_name.trim() || !form.well_location.trim() || !form.block.trim() || !form.objective.trim()}
       submitLabel={formRecord ? 'Save changes' : 'Create well'}
     >

@@ -4,7 +4,7 @@ import { AddRounded, DeleteOutlineRounded, EditOutlined, OpenInNewRounded } from
 import { Alert, Box, Button, CircularProgress, Paper, TextField, Typography } from '@mui/material'
 import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
-import { ErrorMessage, FormDialog, PageHeading } from '../components/Common'
+import { ErrorMessage, FormDialog, PageHeading, useFormDirty } from '../components/Common'
 import { ImportDialog } from '../components/ImportDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
@@ -28,6 +28,7 @@ export default function Rigs() {
   const [formOpen, setFormOpen] = useState(false)
   const [formRecord, setFormRecord] = useState<Rig | null>(null)
   const [form, setForm] = useState<RigPayload>(emptyRigForm)
+  const formDirty = useFormDirty(form, formOpen)
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
@@ -190,6 +191,7 @@ export default function Rigs() {
       onClose={() => { if (!saving) { setFormOpen(false); setFormRecord(null) } }}
       onSubmit={() => void save()}
       busy={saving}
+      dirty={formDirty}
       submitDisabled={!form.rig_code.trim() || !form.rig_name.trim()}
       submitLabel={formRecord ? 'Save changes' : 'Create rig'}
     >

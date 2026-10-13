@@ -15,13 +15,18 @@ type Props = {
 // Tangibles are priced at the captured master rate unless an override is entered.
 export function TangibleLineDialog({ open, initial, reference, onClose, onSave }: Props) {
   const [line, setLine] = useState<TangibleLineInput>(() => emptyTangibleLine())
+  const [baseline, setBaseline] = useState<TangibleLineInput | null>(null)
   const [submitted, setSubmitted] = useState(false)
 
   useEffect(() => {
     if (!open) return
-    setLine(initial ? structuredClone(initial) : emptyTangibleLine())
+    const next = initial ? structuredClone(initial) : emptyTangibleLine()
+    setLine(next)
+    setBaseline(next)
     setSubmitted(false)
   }, [open, initial])
+  // Unsaved-changes guard: everything typed or picked in this dialog is protected.
+  const dirty = baseline !== null && JSON.stringify(line) !== JSON.stringify(baseline)
 
   const item = reference.tangibles.find(entry => entry.id === line.tangible_id) ?? null
   const problems = tangibleProblems(line)
@@ -40,6 +45,7 @@ export function TangibleLineDialog({ open, initial, reference, onClose, onSave }
     subtitle="Search Master Data by code, name, manufacturer, description or category. The master rate is captured automatically."
     onClose={onClose}
     onSubmit={save}
+    dirty={dirty}
     submitLabel={initial ? 'Save line' : 'Add tangible'}
     maxWidth="md"
   >

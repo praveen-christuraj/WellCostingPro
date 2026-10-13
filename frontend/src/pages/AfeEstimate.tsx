@@ -4,7 +4,7 @@ import { AddRounded, ArrowBackRounded, DeleteOutlineRounded, EditOutlined, Print
 import { Alert, Box, Button, CircularProgress, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material'
 import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
-import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
+import { ErrorMessage, FormDialog, PageHeading, Tag, useUnsavedChangesGuard } from '../components/Common'
 import { AfePrintSheet } from '../components/afe/AfePrintSheet'
 import { BreakdownDialog } from '../components/afe/BreakdownDialog'
 import { BulkEstimateDialog, type BulkResult } from '../components/afe/BulkEstimateDialog'
@@ -19,9 +19,19 @@ import {
   type Afe, type AfeComponent, type AfeEstimate, type AfeReference, type AfeStatusAction, type ConsumableLineInput, type ConsumableLineOut,
   type EstimateInput, type ExchangeRateInput, type ServiceLineInput, type ServiceLineOut, type TangibleLineInput, type TangibleLineOut, type WellScope,
 } from '../lib/afe'
+import { defaultCurrencyCode } from '../lib/masterData'
 
 type LineKind = 'service' | 'consumable' | 'tangible'
 type Editor = { kind: LineKind; key: string | null } | null
+
+// Converts an estimate into editor input. An estimate without a standard currency
+// (never saved with one) starts in the workspace default currency, so the dropdown
+// is preloaded and the change counts as unsaved only once the user edits further.
+function inputsFor(estimate: AfeEstimate, reference: AfeReference | null): EstimateInput {
+  const input = estimateToInput(estimate)
+  if (!input.standard_currency) input.standard_currency = defaultCurrencyCode(reference?.currencies ?? [])
+  return input
+}
 
 // Flattened rows for the grids. Fields are top-level so search, filters and export work on them.
 type ServiceRow = {
@@ -107,7 +117,6 @@ export default function AfeEstimate() {
   const [bulkOpen, setBulkOpen] = useState<null | 'service' | 'consumable'>(null)
   const [breakdown, setBreakdown] = useState<{ title: string; currency: string; components: AfeComponent[]; warnings: string[] } | null>(null)
   const [statusTarget, setStatusTarget] = useState<AfeStatusAction | null>(null)
-  const [leaveOpen, setLeaveOpen] = useState(false)
   const [discardOpen, setDiscardOpen] = useState(false)
   const [printing, setPrinting] = useState(false)
   const [selected, setSelected] = useState<Record<LineKind, string[]>>({ service: [], consumable: [], tangible: [] })
@@ -124,7 +133,7 @@ export default function AfeEstimate() {
       setSaved(estimate)
       setAfe(estimate.afe)
       setReference(refData)
-      setInputs(estimateToInput(estimate))
+      setInputs(inputsFor(estimate, refData))
       setPreview(null)
       setPreviewError(null)
       setSaveError(null)
@@ -149,7 +158,7 @@ export default function AfeEstimate() {
     exchange_rates: inputs.exchange_rates.filter(rate => rate.currency_code && toNumber(rate.rate) > 0),
   }), [inputs])
   const previewSignature = useMemo(() => stableJson(validInputs), [validInputs])
-  const savedSignature = useMemo(() => (saved ? stableJson(estimateToInput(saved)) : ''), [saved])
+  const savedSignature = useMemo(() => (saved ? stableJson(inputsFor(saved, reference)) : ''), [saved, reference])
   const dirty = Boolean(saved) && stableJson(inputs) !== savedSignature
   const incompleteCount = [
     ...inputs.services.filter(line => serviceProblems(line).length > 0),
@@ -184,13 +193,14 @@ export default function AfeEstimate() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewSignature, editable, afe?.id, loading])
 
-  // Warn before the browser closes or reloads the page with unsaved changes.
-  useEffect(() => {
-    if (!dirty) return
-    const handler = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
-  }, [dirty])
+  // Warn before the browser closes or reloads the page with unsaved changes, and
+  // intercept in-app navigation: offer to save, discard, or keep editing.
+  const leaveGuard = useUnsavedChangesGuard({
+    when: dirty && editable,
+    onSave: () => save(),
+    title: 'Leave without saving?',
+    message: 'This estimate has changes that are not saved yet. Save them before leaving, or discard them deliberately.',
+  })
 
   const shown: AfeEstimate | null = editable && preview ? preview : saved
   const showingPreview = Boolean(editable && preview && shown === preview)
@@ -349,15 +359,15 @@ export default function AfeEstimate() {
     setNotice(`${result.consumables.length + result.services.length} line${result.consumables.length + result.services.length === 1 ? '' : 's'} added from the bulk estimate. Review them, then save.`)
   }
 
-  const save = async () => {
-    if (!afe) return
+  const save = async (): Promise<boolean> => {
+    if (!afe) return false
     if (incompleteCount) {
       setSaveError(new ApiError(`Fix ${incompleteCount} incomplete line${incompleteCount === 1 ? '' : 's'} before saving.`, 422, []))
-      return
+      return false
     }
     if (currencyBlocked) {
       setSaveError(new ApiError(currencyBlockedText, 422, []))
-      return
+      return false
     }
     setSaving(true)
     setSaveError(null)
@@ -368,8 +378,10 @@ export default function AfeEstimate() {
       setInputs(estimateToInput(result))
       setPreview(null)
       setNotice(`Estimate saved for ${result.afe.afe_code}. Total ${result.summary.total === null ? 'pending conversion' : amountText(result.summary.total, result.summary.currency.standard_currency)}.`)
+      return true
     } catch (caught) {
       setSaveError(caught)
+      return false
     } finally {
       setSaving(false)
     }
@@ -377,7 +389,7 @@ export default function AfeEstimate() {
 
   const discardChanges = () => {
     if (!saved) return
-    setInputs(estimateToInput(saved))
+    setInputs(inputsFor(saved, reference))
     setPreview(null)
     setSaveError(null)
     setPreviewError(null)
@@ -406,8 +418,8 @@ export default function AfeEstimate() {
   }
 
   const goBack = () => {
-    if (dirty) setLeaveOpen(true)
-    else navigate('/afe/register?tab=estimation')
+    // When dirty, the unsaved-changes guard intercepts this navigation and asks first.
+    navigate('/afe/register?tab=estimation')
   }
 
   const estimateReady = Boolean(saved?.persisted) && toNumber(saved?.summary.total) > 0
@@ -811,17 +823,6 @@ export default function AfeEstimate() {
     </FormDialog>
 
     <FormDialog
-      open={leaveOpen}
-      title="Leave without saving?"
-      subtitle="This estimate has changes that are not saved yet."
-      onClose={() => setLeaveOpen(false)}
-      onSubmit={() => navigate('/afe/register?tab=estimation')}
-      submitLabel="Discard and leave"
-    >
-      <Typography fontSize={13}>Save the estimate to keep these changes, or discard them and leave.</Typography>
-    </FormDialog>
-
-    <FormDialog
       open={discardOpen}
       title="Discard unsaved changes?"
       subtitle="The estimate returns to the last saved version."
@@ -831,6 +832,9 @@ export default function AfeEstimate() {
     >
       <Typography fontSize={13}>Lines you added or edited since the last save will be lost.</Typography>
     </FormDialog>
+
+    {/* Intercepts navigation, the back button and tab close while the estimate has unsaved edits. */}
+    {leaveGuard}
 
     {/* Print sheet is hidden on screen and printed in full (all sections, all lines). */}
     {saved.persisted && <AfePrintSheet estimate={saved}/>}

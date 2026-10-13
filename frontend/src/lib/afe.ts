@@ -309,7 +309,7 @@ export type AfeReference = {
     id: string; bit_code: string; bit_name: string; bit_type: string; manufacturer_name: string; model_no: string; size: string
     iadc_code: string; serial_number: string; description: string; captured_rate: string; currency: string; display_name: string
   }[]
-  currencies: { code: string; name: string; symbol: string }[]
+  currencies: { code: string; name: string; symbol: string; is_default: boolean }[]
   afe_types: string[]
   charging_bases: string[]
   charge_categories: string[]

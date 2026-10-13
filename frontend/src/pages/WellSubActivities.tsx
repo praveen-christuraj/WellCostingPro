@@ -4,7 +4,7 @@ import { AddRounded, DeleteOutlineRounded, EditOutlined, FactCheckOutlined } fro
 import { Alert, Box, Button, CircularProgress, MenuItem, Paper, TextField, Typography } from '@mui/material'
 import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
-import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
+import { ErrorMessage, FormDialog, PageHeading, useFormDirty, Tag } from '../components/Common'
 import { ImportDialog } from '../components/ImportDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
@@ -38,6 +38,7 @@ export default function WellSubActivities() {
   const [formOpen, setFormOpen] = useState(false)
   const [formRecord, setFormRecord] = useState<SubActivity | null>(null)
   const [form, setForm] = useState<SubActivityPayload>(emptySubActivityForm())
+  const formDirty = useFormDirty(form, formOpen)
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
@@ -311,6 +312,7 @@ export default function WellSubActivities() {
       onClose={() => { if (!saving) { setFormOpen(false); setFormRecord(null) } }}
       onSubmit={() => void save()}
       busy={saving}
+      dirty={formDirty}
       submitDisabled={!selectedWellId || !activities.length || !form.sub_activity_code.trim() || !form.sub_activity_name.trim() || !form.activity_id || !form.responsible_party.trim() || !form.description.trim()}
       submitLabel={formRecord ? 'Save changes' : 'Create sub activity'}
     >

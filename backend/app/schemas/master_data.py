@@ -11,6 +11,8 @@ class MasterDataCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     symbol: str | None = Field(default=None, max_length=50)
     description: str = Field(default="", max_length=500)
+    # Only honoured by the Currency module; rejected for every other module.
+    is_default: bool | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -30,6 +32,8 @@ class MasterDataUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=150)
     symbol: str | None = Field(default=None, max_length=50)
     description: str | None = Field(default=None, max_length=500)
+    # Only honoured by the Currency module; rejected for every other module.
+    is_default: bool | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -50,6 +54,8 @@ class MasterDataRecordOut(BaseModel):
     name: str
     symbol: str | None = None
     description: str
+    # True only for the workspace's default currency; None for modules without a default concept.
+    is_default: bool | None = None
     is_deleted: bool
     deleted_at: datetime | None = None
     created_at: datetime
