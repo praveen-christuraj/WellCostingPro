@@ -83,4 +83,8 @@ Rollback applied to the working tree (nothing committed). Next:
   cd backend && ../.venv/bin/python -m pytest -q
 Then review `git diff` and commit when you are happy, for example:
   git add -A && git commit -m "revert(ui): roll back the design-token layer"
+
+If the rollback is permanent, also drop the now-dead references to the design layer:
+the "UI design layer" section in .agent/memory/project.md, the design-system sentences in
+AGENTS.md and README.md, and the ui-check/ui-rollback targets in the Makefile.
 NEXT
