@@ -11,6 +11,9 @@ const Roles = lazy(() => import('./pages/Roles'))
 const Permissions = lazy(() => import('./pages/Permissions'))
 const Assignments = lazy(() => import('./pages/Assignments'))
 const AuditLog = lazy(() => import('./pages/AuditLog'))
+const OtherManagementOverview = lazy(() => import('./pages/OtherManagementOverview'))
+const DatabaseBrowser = lazy(() => import('./pages/DatabaseBrowser'))
+const DatabaseTableView = lazy(() => import('./pages/DatabaseTableView'))
 const MasterDataOverview = lazy(() => import('./pages/MasterDataOverview'))
 const MasterDataRecords = lazy(() => import('./pages/MasterDataRecords'))
 const DeletedMasterData = lazy(() => import('./pages/DeletedMasterData'))
@@ -32,10 +35,17 @@ const DailyCostManagement = lazy(() => import('./pages/DailyCostManagement'))
 const DailyCostSheet = lazy(() => import('./pages/DailyCostSheet'))
 const DailyCostAnalysis = lazy(() => import('./pages/DailyCostAnalysis'))
 
+// Every listed permission is required (AND).
 function Guard({ permission, children }: { permission: string | string[]; children: ReactNode }) {
   const { can } = useAuth()
   const allowed = Array.isArray(permission) ? permission.every(can) : can(permission)
   return allowed ? children : <Navigate to="/" replace/>
+}
+
+// Any listed permission is enough (OR), used by the module overview.
+function GuardAny({ permissions, children }: { permissions: string[]; children: ReactNode }) {
+  const { can } = useAuth()
+  return permissions.some(can) ? children : <Navigate to="/" replace/>
 }
 
 export default function App() {
@@ -55,7 +65,11 @@ export default function App() {
           <Route path="roles" element={<Guard permission="roles:read"><Roles/></Guard>}/>
           <Route path="permissions" element={<Guard permission="permissions:read"><Permissions/></Guard>}/>
           <Route path="assignments" element={<Guard permission={["assignments:write", "users:read", "roles:read", "permissions:read"]}><Assignments/></Guard>}/>
-          <Route path="audit" element={<Guard permission="audit:read"><AuditLog/></Guard>}/>
+          <Route path="audit" element={<Navigate to="/other-management/audit" replace/>}/>
+          <Route path="other-management" element={<GuardAny permissions={['audit:read', 'database-browser:read']}><OtherManagementOverview/></GuardAny>}/>
+          <Route path="other-management/audit" element={<Guard permission="audit:read"><AuditLog/></Guard>}/>
+          <Route path="other-management/database" element={<Guard permission="database-browser:read"><DatabaseBrowser/></Guard>}/>
+          <Route path="other-management/database/:tableName" element={<Guard permission="database-browser:read"><DatabaseTableView/></Guard>}/>
           <Route path="master-data" element={<Guard permission="master-data:read"><MasterDataOverview/></Guard>}/>
           <Route path="master-data/records" element={<Guard permission="master-data:read"><MasterDataRecords/></Guard>}/>
           <Route path="master-data/services" element={<Guard permission="master-data:read"><Services/></Guard>}/>

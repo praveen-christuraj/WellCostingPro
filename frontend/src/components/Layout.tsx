@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AppBar, Avatar, Box, Button, Divider, IconButton, Menu, MenuItem, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
-import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined } from '@mui/icons-material'
+import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined, SettingsOutlined, StorageOutlined } from '@mui/icons-material'
 import Brand from './Brand'
 import { FormDialog, ErrorMessage } from './Common'
 import { api, body } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { useColorMode } from '../context/ThemeContext'
 
-type NavItem = { label: string; path: string; icon: typeof DashboardOutlined; permission?: string; requires?: string[] }
+type NavItem = { label: string; path: string; icon: typeof DashboardOutlined; permission?: string; anyOf?: string[]; requires?: string[] }
 type NavModule = { label: string; icon: typeof DashboardOutlined; items: NavItem[] }
 
 // Top-side navigation with dropdown module menus (no side navigation).
@@ -45,8 +45,10 @@ const modules: NavModule[] = [
     { label: 'Daily cost register', path: '/daily-cost', icon: RequestQuoteOutlined, permission: 'daily-cost:read' },
     { label: 'Well cost analysis', path: '/daily-cost/analysis', icon: InsightsOutlined, permission: 'daily-cost:read' },
   ] },
-  { label: 'Auditing', icon: HistoryOutlined, items: [
-    { label: 'Audit Log', path: '/audit', icon: HistoryOutlined, permission: 'audit:read' },
+  { label: 'Other Managements', icon: SettingsOutlined, items: [
+    { label: 'Overview', path: '/other-management', icon: DashboardOutlined, anyOf: ['audit:read', 'database-browser:read'] },
+    { label: 'Audit Log', path: '/other-management/audit', icon: HistoryOutlined, permission: 'audit:read' },
+    { label: 'Database Browser', path: '/other-management/database', icon: StorageOutlined, permission: 'database-browser:read' },
   ] },
 ]
 
@@ -69,7 +71,7 @@ export default function Layout() {
 
   const changePassword = async () => { setSavingPassword(true); setPasswordError(''); try { await api('/auth/change-password', { method: 'POST', body: body({ current_password: currentPassword, new_password: newPassword }) }); setPasswordDialog(false); setCurrentPassword(''); setNewPassword(''); await logout() } catch (e) { setPasswordError((e as Error).message) } finally { setSavingPassword(false) } }
 
-  const visible = (item: NavItem) => (!item.permission || can(item.permission)) && (!item.requires || item.requires.every(can))
+  const visible = (item: NavItem) => (!item.permission || can(item.permission)) && (!item.anyOf || item.anyOf.some(can)) && (!item.requires || item.requires.every(can))
   const modulesForUser = modules.map(m => ({ ...m, items: m.items.filter(visible) })).filter(m => m.items.length > 0)
   const currentModule = modulesForUser.find(m => m.items.some(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`)))
 
@@ -83,9 +85,12 @@ export default function Layout() {
 
   // Browser tabs and history say which screen you are on.
   useEffect(() => {
+    // The most specific route wins, so /other-management/audit is not labelled with the module overview.
     const page = location.pathname === '/'
       ? 'Dashboard'
-      : modulesForUser.flatMap(m => m.items).find(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`))?.label
+      : modulesForUser.flatMap(m => m.items)
+        .filter(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`))
+        .sort((a, b) => b.path.length - a.path.length)[0]?.label
     document.title = page ? `${page} · WellCosting Pro` : 'WellCosting Pro'
   }, [location.pathname]) // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -23,6 +23,9 @@ CAPABILITIES = {resource: actions for resource, actions in {
     "permissions": ("read", "create", "update", "delete"),
     "assignments": ("write",),
     "audit": ("read",),
+    # Other Management → Database Browser. Read shows tables and rows of this workspace;
+    # export covers CSV downloads and grid/structure exports. Owners receive both by default.
+    "database-browser": ("read", "export"),
     "master-data": (
         "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
         # Vendors and PO/SO Orders keep scanned copies; document custody is separately grantable.
