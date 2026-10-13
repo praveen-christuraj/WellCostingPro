@@ -1,5 +1,5 @@
 import { Autocomplete, Box, TextField, Typography, type AutocompleteRenderInputParams } from '@mui/material'
-import type { AfeReference } from '../../lib/afe'
+import { amountText, type AfeReference } from '../../lib/afe'
 
 type Service = AfeReference['services'][number]
 type Tangible = AfeReference['tangibles'][number]
@@ -83,15 +83,26 @@ export function DrillBitPicker({ value, options, onChange, error, helperText }: 
     value={selected}
     onChange={(_event, next) => onChange(next?.id ?? '')}
     getOptionLabel={option => `${option.bit_code} · ${option.bit_name}`}
-    filterOptions={keywordFilter(option => [option.bit_code, option.bit_name, option.bit_type, option.manufacturer_name, option.model_no, option.size, option.iadc_code, option.serial_number, option.description])}
+    filterOptions={keywordFilter(option => [option.bit_code, option.bit_name, option.bit_type, option.manufacturer_name, option.model_no, option.size, option.iadc_code, option.serial_number, option.description, option.currency, option.captured_rate])}
     isOptionEqualToValue={(option, current) => option.id === current.id}
     renderOption={(props, option) => <li {...props} key={option.id}>
-      <Box minWidth={0}>
-        <Typography fontSize={13} fontWeight={700}>{option.bit_code} · {option.bit_name}</Typography>
-        <Typography fontSize={11.5} color="text.secondary" noWrap>{option.manufacturer_name || 'No make'} · {option.bit_type} · {option.size} · {option.description || 'No description'}</Typography>
+      <Box minWidth={0} flex={1} display="flex" alignItems="center" gap={1.5} justifyContent="space-between">
+        <Box minWidth={0}>
+          <Typography fontSize={13} fontWeight={700} noWrap>{option.bit_code} · {option.bit_name}</Typography>
+          <Typography fontSize={11.5} color="text.secondary" noWrap>{option.manufacturer_name || 'No make'} · {option.bit_type} · {option.size} · {option.description || 'No description'}</Typography>
+        </Box>
+        {/* Final cost from the drill bit's master record (revised rate with uplift when present,
+            otherwise the unit rate) — visible right in the dropdown, so no opening is needed to compare prices. */}
+        <Box flex="none" textAlign="right">
+          <Typography fontSize={12.5} fontWeight={800}>{amountText(option.captured_rate, option.currency)}</Typography>
+          <Typography fontSize={10} color="text.secondary">final cost</Typography>
+        </Box>
       </Box>
     </li>}
-    renderInput={(params: AutocompleteRenderInputParams) => <TextField {...params} label="Drill bit" required error={error} helperText={helperText ?? 'Search by code, make, type, size, IADC or serial.'}/>}
+    renderInput={(params: AutocompleteRenderInputParams) => <TextField {...params} label="Drill bit" required error={error}
+      helperText={helperText ?? (selected
+        ? `Search by code, make, type, size, IADC or serial. Final cost ${amountText(selected.captured_rate, selected.currency)}.`
+        : 'Search by code, make, type, size, IADC or serial. Each option shows its final cost.')}/>}
     noOptionsText="No drill bits match. Add drill bits in Master Data → Consumables."
     fullWidth
   />

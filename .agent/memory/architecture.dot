@@ -373,13 +373,16 @@ digraph WellCostingPro {
   "frontend/src/components/afe/BulkEstimateDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/afe/BulkEstimateDialog.tsx" -> "frontend/src/components/afe/LinePickers.tsx";
   "frontend/src/components/afe/BulkEstimateDialog.tsx" -> "frontend/src/lib/afe.ts";
+  "frontend/src/components/afe/BulkEstimateDialog.tsx" -> "frontend/src/lib/masterData.ts";
   "frontend/src/components/afe/ConsumableLineDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/afe/ConsumableLineDialog.tsx" -> "frontend/src/components/afe/LinePickers.tsx";
   "frontend/src/components/afe/ConsumableLineDialog.tsx" -> "frontend/src/lib/afe.ts";
+  "frontend/src/components/afe/ConsumableLineDialog.tsx" -> "frontend/src/lib/masterData.ts";
   "frontend/src/components/afe/LinePickers.tsx" -> "frontend/src/lib/afe.ts";
   "frontend/src/components/afe/ServiceLineDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/afe/ServiceLineDialog.tsx" -> "frontend/src/components/afe/LinePickers.tsx";
   "frontend/src/components/afe/ServiceLineDialog.tsx" -> "frontend/src/lib/afe.ts";
+  "frontend/src/components/afe/ServiceLineDialog.tsx" -> "frontend/src/lib/masterData.ts";
   "frontend/src/components/afe/TangibleLineDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/afe/TangibleLineDialog.tsx" -> "frontend/src/components/afe/LinePickers.tsx";
   "frontend/src/components/afe/TangibleLineDialog.tsx" -> "frontend/src/lib/afe.ts";
@@ -439,6 +442,7 @@ digraph WellCostingPro {
   "frontend/src/pages/AfeEstimate.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/AfeEstimate.tsx" -> "frontend/src/lib/afe.ts";
   "frontend/src/pages/AfeEstimate.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/AfeEstimate.tsx" -> "frontend/src/lib/masterData.ts";
   "frontend/src/pages/AfeManagement.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/AfeManagement.tsx" -> "frontend/src/components/afe/AfeDeletedTab.tsx";
   "frontend/src/pages/AfeManagement.tsx" -> "frontend/src/components/afe/AfeEstimationTab.tsx";

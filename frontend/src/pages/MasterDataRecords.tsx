@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useSearchParams } from 'react-router-dom'
-import { AddRounded, DeleteOutlineRounded, EditOutlined } from '@mui/icons-material'
-import { Alert, Box, Button, CircularProgress, Paper, TextField, Typography } from '@mui/material'
+import { AddRounded, DeleteOutlineRounded, EditOutlined, StarOutlineRounded } from '@mui/icons-material'
+import { Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, Paper, TextField, Typography } from '@mui/material'
 import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
-import { ErrorMessage, FormDialog, PageHeading } from '../components/Common'
+import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
 import { ImportDialog } from '../components/ImportDialog'
 import { MasterDataTabs } from '../components/MasterDataTabs'
 import { useAuth } from '../context/AuthContext'
@@ -14,6 +14,9 @@ import { MASTER_DATA_MODULES, type MasterDataModule, type MasterDataModuleKey, t
 
 const moduleFor = (key: string | null): MasterDataModule =>
   MASTER_DATA_MODULES.find(module => module.key === key) ?? MASTER_DATA_MODULES[0]
+
+const isCurrencyModule = (module: MasterDataModule) => module.key === 'currencies'
+const emptyForm = () => ({ code: '', name: '', symbol: '', description: '', isDefault: false })
 
 export default function MasterDataRecords() {
   const { can } = useAuth()
@@ -27,9 +30,13 @@ export default function MasterDataRecords() {
   const [notice, setNotice] = useState('')
   const [formMode, setFormMode] = useState<'create' | 'edit' | null>(null)
   const [formRecord, setFormRecord] = useState<MasterDataRecord | null>(null)
-  const [form, setForm] = useState({ code: '', name: '', symbol: '', description: '' })
+  const [form, setForm] = useState(emptyForm)
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
+  // Unsaved-changes guard: compare against what the dialog opened with.
+  const [formSnapshot, setFormSnapshot] = useState(emptyForm)
+  const formDirty = JSON.stringify(form) !== JSON.stringify(formSnapshot)
+  const [settingDefault, setSettingDefault] = useState<string | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteRecord, setDeleteRecord] = useState<MasterDataRecord | null>(null)
@@ -54,14 +61,20 @@ export default function MasterDataRecords() {
 
   const openCreate = () => {
     setFormRecord(null)
-    setForm({ code: '', name: '', symbol: '', description: '' })
+    setForm(emptyForm())
+    setFormSnapshot(emptyForm())
     setFormError('')
     setFormMode('create')
   }
 
   const openEdit = (record: MasterDataRecord) => {
+    const initial = {
+      code: record.code, name: record.name, symbol: record.symbol ?? '',
+      description: record.description ?? '', isDefault: isCurrencyModule(currentModule) && Boolean(record.is_default),
+    }
     setFormRecord(record)
-    setForm({ code: record.code, name: record.name, symbol: record.symbol ?? '', description: record.description ?? '' })
+    setForm(initial)
+    setFormSnapshot(initial)
     setFormError('')
     setFormMode('edit')
   }
@@ -69,19 +82,26 @@ export default function MasterDataRecords() {
   const save = async () => {
     setSaving(true)
     setFormError('')
-    const payload = {
+    const currencyModule = isCurrencyModule(currentModule)
+    const defaultChanged = currencyModule && form.isDefault !== formSnapshot.isDefault
+    const payload: Record<string, unknown> = {
       code: form.code.trim(),
       name: form.name.trim(),
       ...(currentModule.hasSymbol ? { symbol: form.symbol.trim() || form.code.trim() } : {}),
       description: form.description.trim(),
+      ...(defaultChanged ? { is_default: form.isDefault } : {}),
     }
     try {
       if (formMode === 'create') {
         await api(`/master-data/${moduleKey}`, { method: 'POST', body: body(payload) })
-        setNotice(`${currentModule.label} record created.`)
+        setNotice(currencyModule && form.isDefault
+          ? `${form.code.trim().toUpperCase()} created and set as the default currency.`
+          : `${currentModule.label} record created.`)
       } else if (formMode === 'edit' && formRecord) {
         await api(`/master-data/${moduleKey}/${formRecord.id}`, { method: 'PATCH', body: body(payload) })
-        setNotice(`${currentModule.label} record updated.`)
+        setNotice(currencyModule && defaultChanged
+          ? `${formRecord.code} ${form.isDefault ? 'is now the default currency.' : 'is no longer the default currency.'}`
+          : `${currentModule.label} record updated.`)
       }
       setFormMode(null)
       await load()
@@ -89,6 +109,20 @@ export default function MasterDataRecords() {
       setFormError(caught instanceof Error ? caught.message : 'Could not save this record')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const setDefaultCurrency = async (record: MasterDataRecord) => {
+    setSettingDefault(record.id)
+    setError('')
+    try {
+      await api(`/master-data/${moduleKey}/${record.id}`, { method: 'PATCH', body: body({ is_default: true }) })
+      setNotice(`${record.code} is now the default currency. Currency dropdowns across the app preload it.`)
+      await load()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not set the default currency')
+    } finally {
+      setSettingDefault(null)
     }
   }
 
@@ -144,16 +178,23 @@ export default function MasterDataRecords() {
     { headerName: 'CODE', field: 'code', minWidth: 130, flex: .8 },
     { headerName: 'NAME', field: 'name', minWidth: 190, flex: 1.2 },
     ...(currentModule.hasSymbol ? [{ headerName: 'SYMBOL', field: 'symbol', minWidth: 100, flex: .6 } as ColDef<MasterDataRecord>] : []),
+    ...(isCurrencyModule(currentModule) ? [{
+      headerName: 'DEFAULT', field: 'is_default', minWidth: 110, flex: .5,
+      cellRenderer: ({ data }: { data: MasterDataRecord }) => data?.is_default ? <Tag tone="success">Default</Tag> : null,
+    } as ColDef<MasterDataRecord>] : []),
     { headerName: 'DESCRIPTION', field: 'description', minWidth: 200, flex: 1.4, valueFormatter: params => params.value || '—' },
     { headerName: 'UPDATED', field: 'updated_at', minWidth: 140, valueFormatter: params => params.value ? new Date(params.value).toLocaleDateString() : '' },
     {
-      headerName: 'ACTIONS', width: 180, minWidth: 180, maxWidth: 180, flex: 0, sortable: false,
+      headerName: 'ACTIONS', width: isCurrencyModule(currentModule) ? 290 : 180, minWidth: isCurrencyModule(currentModule) ? 290 : 180, flex: 0, sortable: false,
       cellRenderer: ({ data }: { data: MasterDataRecord }) => <Box display="flex" alignItems="center" height="100%" gap={.3}>
+        {can('master-data:update') && !data.is_default && <Button size="small" disabled={settingDefault === data.id}
+          onClick={() => void setDefaultCurrency(data)} aria-label={`Set ${data.code} as default currency`}
+          startIcon={<StarOutlineRounded sx={{ fontSize: 15 }}/>}>Set default</Button>}
         {can('master-data:update') && <Button size="small" onClick={() => openEdit(data)} aria-label={`Edit ${data.code}`} startIcon={<EditOutlined sx={{ fontSize: 15 }}/>}>Edit</Button>}
         {can('master-data:delete') && <Button size="small" color="error" onClick={() => openDelete(data)} aria-label={`Delete ${data.code}`} startIcon={<DeleteOutlineRounded sx={{ fontSize: 15 }}/>}>Delete</Button>}
       </Box>,
     },
-  ], [can, currentModule])
+  ], [can, currentModule, settingDefault])
 
   const importHeaders = ['code', 'name', ...(currentModule.hasSymbol ? ['symbol'] : []), 'description']
   const importSample: ImportRow = {
@@ -217,6 +258,7 @@ export default function MasterDataRecords() {
       onClose={() => { if (!saving) setFormMode(null) }}
       onSubmit={save}
       busy={saving}
+      dirty={formDirty}
       submitLabel={formMode === 'create' ? 'Create record' : 'Save changes'}
     >
       <Box display="grid" gap={2} pt={.5}>
@@ -224,6 +266,16 @@ export default function MasterDataRecords() {
         <TextField label="Name" required fullWidth value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} inputProps={{ maxLength: currentModule.key === 'currencies' ? 100 : 150 }}/>
         {currentModule.hasSymbol && <TextField label="Symbol" required fullWidth helperText="If left blank, the code is used as the symbol." value={form.symbol} onChange={event => setForm({ ...form, symbol: event.target.value })} inputProps={{ maxLength: currentModule.key === 'currencies' ? 20 : 50 }}/>}
         <TextField label="Description" fullWidth multiline minRows={2} value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} inputProps={{ maxLength: 500 }}/>
+        {isCurrencyModule(currentModule) && <FormControlLabel
+          control={<Checkbox checked={form.isDefault} onChange={event => setForm({ ...form, isDefault: event.target.checked })}/>}
+          label={formMode === 'create'
+            ? 'Set as the default currency for this workspace'
+            : `Make ${form.code.trim().toUpperCase() || 'this currency'} the default currency for this workspace`}
+          sx={{ mt: -.5 }}
+        />}
+        {isCurrencyModule(currentModule) && <Typography fontSize={12} color="text.secondary" sx={{ mt: -.5 }}>
+          The default currency is preloaded in every currency dropdown across the app, so you pick it less often.
+        </Typography>}
         <ErrorMessage message={formError}/>
       </Box>
     </FormDialog>

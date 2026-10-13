@@ -1,5 +1,5 @@
 import { Box, Divider, MenuItem, TextField, Typography } from '@mui/material'
-import { ErrorMessage, FormDialog } from './Common'
+import { ErrorMessage, FormDialog, useFormDirty } from './Common'
 import {
   VENDOR_CATEGORIES,
   VENDOR_TYPES,
@@ -27,6 +27,7 @@ export function VendorFormDialog({ open, title, subtitle, form, setForm, busy, e
   onClose: () => void
   onSubmit: (payload: VendorPayload) => void
 }) {
+  const dirty = useFormDirty(form, open)
   return <FormDialog
     open={open}
     title={title}
@@ -34,6 +35,7 @@ export function VendorFormDialog({ open, title, subtitle, form, setForm, busy, e
     onClose={onClose}
     onSubmit={() => onSubmit(vendorFormToPayload(form))}
     busy={busy}
+    dirty={dirty}
     submitLabel={title.startsWith('Edit') ? 'Save changes' : 'Create vendor'}
   >
     <Box display="grid" gap={2} pt={.5}>

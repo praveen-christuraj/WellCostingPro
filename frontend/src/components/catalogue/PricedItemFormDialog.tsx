@@ -4,8 +4,10 @@ import { ErrorMessage, FormDialog } from '../Common'
 import { MasterSelect } from './MasterSelect'
 import { OptionSelect } from './OptionSelect'
 import {
+  emptyForm,
   formToPayload,
   previewFinalCost,
+  recordToForm,
   type FieldDef,
   type FormState,
   type PricedRecord,
@@ -36,6 +38,10 @@ export function PricedItemFormDialog({ config, open, mode, title, form, setForm,
   const [localError, setLocalError] = useState('')
   const master = config.fields.filter(field => field.section === 'master')
   const rate = config.fields.filter(field => field.section === 'rate')
+  // Unsaved-changes guard: compare against the deterministic opening state
+  // (empty form for create, the record's master fields for edit).
+  const initial = mode === 'create' ? emptyForm(config) : recordToForm(config, record ?? ({} as PricedRecord))
+  const dirty = open && JSON.stringify(form) !== JSON.stringify(initial)
 
   const setField = (key: string, value: string) => {
     const patch: FormState = { [key]: value }
@@ -124,6 +130,7 @@ export function PricedItemFormDialog({ config, open, mode, title, form, setForm,
     onClose={() => { if (!busy) { setLocalError(''); onClose() } }}
     onSubmit={submit}
     busy={busy}
+    dirty={dirty}
     submitLabel={mode === 'create' ? `Create ${config.singular}` : 'Save changes'}
   >
     <Box display="grid" gap={2} pt={.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>

@@ -220,6 +220,7 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
     onClose={() => { if (!saving) { setError(''); onClose() } }}
     onSubmit={() => void save()}
     busy={saving}
+    dirty={dirty}
     submitDisabled={loading || readOnly || !can('rig-well:update')}
     submitLabel="Save draft plan"
     maxWidth="lg"

@@ -386,3 +386,78 @@ def test_overview_and_read_permissions_are_workspace_scoped():
             headers=reader_headers,
             json={"module": "phases", "format": "csv", "record_count": 1},
         ).status_code == 403
+
+
+def test_currency_default_flag_is_workspace_unique_preloaded_and_audited():
+    with TestClient(app) as client:
+        north = login(client, "north")
+        south = login(client, "south")
+        base = "/api/v1/master-data/currencies"
+
+        # The first currency of a workspace becomes the default automatically.
+        usd = client.post(base, headers=north, json={"code": "USD", "name": "US Dollar", "symbol": "$"})
+        assert usd.status_code == 201, usd.text
+        assert usd.json()["is_default"] is True
+        inr = client.post(base, headers=north, json={"code": "INR", "name": "Indian Rupee", "symbol": "₹"})
+        assert inr.json()["is_default"] is False
+
+        # Another workspace keeps its own default.
+        eur = client.post(base, headers=south, json={"code": "EUR", "name": "Euro", "symbol": "€"})
+        assert eur.json()["is_default"] is True
+
+        # Setting a different default moves the flag (one default per workspace).
+        moved = client.patch(f"{base}/{inr.json()['id']}", headers=north, json={"is_default": True})
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["is_default"] is True
+        codes = {row["code"]: row["is_default"] for row in client.get(base, headers=north).json()}
+        assert codes == {"USD": False, "INR": True}
+
+        # The switch is audited.
+        audit = client.get("/api/v1/audit?module=master_data", headers=north)
+        if audit.status_code == 200:
+            summaries = " | ".join(entry["summary"] for entry in audit.json().get("items", []))
+            assert "default" in summaries
+
+        # Clearing the flag leaves the workspace without a default until the next ensure.
+        cleared = client.patch(f"{base}/{inr.json()['id']}", headers=north, json={"is_default": False})
+        assert cleared.json()["is_default"] is False
+
+        # Re-requesting the flag works from any row.
+        assert client.patch(f"{base}/{usd.json()['id']}", headers=north, json={"is_default": True}).json()["is_default"] is True
+
+        # Soft deleting the default clears the flag; restoring re-assigns it only when no default exists.
+        deleted = client.delete(f"{base}/{usd.json()['id']}", headers=north)
+        assert deleted.status_code == 200
+        assert [row["code"] for row in client.get(base, headers=north).json()] == ["INR"]
+        deleted_rows = client.get(f"{base}/deleted", headers=north).json()
+        assert [row["is_default"] for row in deleted_rows] == [False]
+        restored = client.post(f"{base}/{usd.json()['id']}/restore", headers=north)
+        assert restored.json()["is_default"] is True  # no other default existed
+
+
+def test_currency_default_is_rejected_for_other_modules_and_imports_auto_assign():
+    with TestClient(app) as client:
+        north = login(client, "north")
+        base = "/api/v1/master-data"
+
+        # Only Currency supports the default flag.
+        assert client.post(f"{base}/phases", headers=north, json={"code": "DRILL", "name": "Drilling", "is_default": True}).status_code == 422
+        assert client.post(f"{base}/phases", headers=north, json={"code": "DRILL", "name": "Drilling"}).status_code == 201
+
+        # Import creates rows; the first created currency becomes the workspace default.
+        imported = client.post(
+            f"{base}/currencies/import",
+            headers=north,
+            json={"rows": [
+                {"code": "USD", "name": "US Dollar", "symbol": "$"},
+                {"code": "AED", "name": "UAE Dirham", "symbol": "د.إ"},
+            ]},
+        )
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["imported_count"] == 2
+        rows = {row["code"]: row["is_default"] for row in client.get(f"{base}/currencies", headers=north).json()}
+        assert rows == {"USD": True, "AED": False}
+
+        # Phases records never carry a default flag in output.
+        phase = client.get(f"{base}/phases", headers=north).json()[0]
+        assert phase["is_default"] is None

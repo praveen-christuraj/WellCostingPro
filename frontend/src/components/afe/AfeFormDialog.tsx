@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Box, MenuItem, TextField, Typography } from '@mui/material'
-import { ErrorMessage, FormDialog } from '../Common'
+import { ErrorMessage, FormDialog, useFormDirty } from '../Common'
 import { api, body } from '../../lib/api'
 import { AFE_TYPES, type Afe, type AfeReference, type AfeType } from '../../lib/afe'
 
@@ -20,6 +20,7 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
   const [form, setForm] = useState<Form>(emptyForm)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const dirty = useFormDirty(form, open)
 
   useEffect(() => {
     if (!open) return
@@ -81,6 +82,7 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
     onClose={() => { if (!busy) onClose() }}
     onSubmit={() => void save()}
     busy={busy}
+    dirty={dirty}
     submitDisabled={!valid || noRigs}
     submitLabel={record ? 'Save changes' : 'Create AFE'}
     maxWidth="md"

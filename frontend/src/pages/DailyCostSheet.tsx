@@ -10,7 +10,7 @@ import {
 } from '@mui/material'
 import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
-import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
+import { ErrorMessage, FormDialog, PageHeading, Tag, useUnsavedChangesGuard } from '../components/Common'
 import { DailyCostLineDialog, type DailyCostLineKind, type EditableDailyCostLine } from '../components/daily-cost/DailyCostLineDialog'
 import { useCostPrint } from '../components/daily-cost/DailyCostPrintSheet'
 import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
@@ -160,6 +160,16 @@ export default function DailyCostSheet() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
 
+  // Page-level unsaved-changes guard (convention 15): navigation, back and tab
+  // close first offer to save this sheet. The beforeunload handler above stays
+  // for the raw reload case.
+  const leaveGuard = useUnsavedChangesGuard({
+    when: dirty,
+    onSave: () => save(),
+    title: 'Leave without saving?',
+    message: 'This daily cost sheet has changes that are not saved yet. Save them before leaving, or discard them deliberately.',
+  })
+
   const addOrEditLine = (line: EditableDailyCostLine) => {
     if (!lineEditor) return
     const group = GROUP_KEY[lineEditor.kind]
@@ -187,8 +197,8 @@ export default function DailyCostSheet() {
     setNotice('Line removed from the draft. Save to commit the change.')
   }
 
-  const save = async () => {
-    if (!day) return
+  const save = async (): Promise<boolean> => {
+    if (!day) return false
     setSaving(true)
     setSaveError('')
     setNotice('')
@@ -198,8 +208,10 @@ export default function DailyCostSheet() {
       setPayload(saveFromDay(updated))
       setPreview(null)
       setNotice('Daily cost sheet saved. Actual-to-date and remaining AFE balance have been refreshed.')
+      return true
     } catch (caught) {
       setSaveError(caught instanceof Error ? caught.message : 'The daily cost sheet could not be saved')
+      return false
     } finally {
       setSaving(false)
     }
@@ -786,6 +798,9 @@ export default function DailyCostSheet() {
     <FormDialog open={Boolean(lineDelete)} title={`Remove ${lineDelete?.label ?? 'line'}?`} subtitle="This removes the line from this unsaved daily sheet. A saved line is deleted only after you save the sheet." onClose={() => setLineDelete(null)} onSubmit={removeLine} submitLabel="Remove line">
       <Alert severity="warning">This change will affect the AFE actual-to-date and remaining balance after you save.</Alert>
     </FormDialog>
+
+    {/* Intercepts navigation, the back button and tab close while the sheet has unsaved edits. */}
+    {leaveGuard}
 
     <FormDialog open={Boolean(statusAction)} title={statusTitle} subtitle={statusSubtitle} onClose={() => { if (!statusBusy) setStatusAction(null) }} onSubmit={() => void completeStatusAction()} busy={statusBusy} submitLabel={statusAction === 'submit' ? 'Submit daily sheet' : 'Reopen as Draft'} submitDisabled={statusAction === 'reopen' && statusRemarks.trim().length < 3}>
       <Box display="grid" gap={1.5}>

@@ -1674,7 +1674,12 @@ def reference_data(db: Session, organization_id: str) -> AfeReference:
             for row in drill_bits
         ],
         currencies=[
-            {"code": row.currency_code, "name": row.currency_name, "symbol": row.currency_symbol}
+            {
+                "code": row.currency_code,
+                "name": row.currency_name,
+                "symbol": row.currency_symbol,
+                "is_default": bool(row.is_default),
+            }
             for row in currencies
         ],
         afe_types=["Drilling", "Completion"],

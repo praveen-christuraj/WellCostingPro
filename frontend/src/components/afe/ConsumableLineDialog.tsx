@@ -5,6 +5,7 @@ import {
   CONSUMABLE_CATEGORIES, LUMP_SUM_CATEGORIES, amountText, consumableProblems, emptyConsumableLine, phaseOptions, sectionOptions,
   type AfeReference, type ConsumableCategory, type ConsumableLineInput, type WellScope,
 } from '../../lib/afe'
+import { defaultCurrencyCode } from '../../lib/masterData'
 import { DrillBitPicker, FactPanel } from './LinePickers'
 
 const CATEGORY_HINT: Record<ConsumableCategory, string> = {
@@ -25,13 +26,20 @@ type Props = {
 
 export function ConsumableLineDialog({ open, initial, scope, reference, onClose, onSave }: Props) {
   const [line, setLine] = useState<ConsumableLineInput>(() => emptyConsumableLine())
+  const [baseline, setBaseline] = useState<ConsumableLineInput | null>(null)
   const [submitted, setSubmitted] = useState(false)
 
   useEffect(() => {
     if (!open) return
-    setLine(initial ? structuredClone(initial) : emptyConsumableLine())
+    const next = initial ? structuredClone(initial) : emptyConsumableLine()
+    // Lump-sum lines start in the workspace default currency, so it rarely has to be picked.
+    if (!next.currency && next.category !== 'Drill Bits') next.currency = defaultCurrencyCode(reference.currencies)
+    setLine(next)
+    setBaseline(next)
     setSubmitted(false)
-  }, [open, initial])
+  }, [open, initial, reference.currencies])
+  // Unsaved-changes guard: everything typed or picked in this dialog is protected.
+  const dirty = baseline !== null && JSON.stringify(line) !== JSON.stringify(baseline)
 
   const sections = useMemo(() => sectionOptions(scope), [scope])
   const phases = useMemo(() => phaseOptions(scope, line.hole_section_id), [scope, line.hole_section_id])
@@ -51,7 +59,9 @@ export function ConsumableLineDialog({ open, initial, scope, reference, onClose,
       quantity: category === 'Drill Bits' ? (current.quantity && current.quantity !== '1' ? current.quantity : '1') : '1',
       override_rate: category === 'Drill Bits' ? current.override_rate : null,
       estimated_amount: category === 'Drill Bits' ? null : current.estimated_amount ?? '',
-      currency: category === 'Drill Bits' ? (reference.drill_bits.find(item => item.id === current.drill_bit_id)?.currency ?? '') : current.currency,
+      currency: category === 'Drill Bits'
+        ? (reference.drill_bits.find(item => item.id === current.drill_bit_id)?.currency ?? '')
+        : (current.currency || defaultCurrencyCode(reference.currencies)),
     }))
   }
 
@@ -82,6 +92,7 @@ export function ConsumableLineDialog({ open, initial, scope, reference, onClose,
     subtitle="Mud chemicals, cement additives and fuel are estimated per section. Drill bits are priced per bit."
     onClose={onClose}
     onSubmit={save}
+    dirty={dirty}
     submitLabel={initial ? 'Save line' : 'Add consumable'}
     maxWidth="md"
   >
@@ -125,7 +136,7 @@ export function ConsumableLineDialog({ open, initial, scope, reference, onClose,
             { label: 'Model no.', value: bit.model_no },
             { label: 'Serial no.', value: bit.serial_number },
             { label: 'Description', value: bit.description },
-            { label: 'Master rate', value: amountText(bit.captured_rate, bit.currency) },
+            { label: 'Final cost', value: amountText(bit.captured_rate, bit.currency) },
           ]}/>
         </Box>}
 
@@ -142,7 +153,7 @@ export function ConsumableLineDialog({ open, initial, scope, reference, onClose,
             value={line.override_rate ?? ''}
             onChange={event => update({ override_rate: event.target.value.replace(/[^0-9.]/g, '') || null })}
             inputProps={{ inputMode: 'decimal' }}
-            helperText={bit ? `Leave empty to use the master rate. Override is in ${bit.currency || 'the master currency'}.` : 'Leave empty to use the master rate.'}
+            helperText={bit ? `Leave empty to use the master record's final cost (${amountText(bit.captured_rate, bit.currency)}). Override is in ${bit.currency || 'the master currency'}.` : 'Leave empty to use the final cost from the master record.'}
           />
           <TextField label="Currency" value={bit?.currency ?? ''} disabled helperText="Follows the drill bit’s master record."/>
         </>}

@@ -1,5 +1,5 @@
 import { Box, Divider, MenuItem, TextField, Typography } from '@mui/material'
-import { ErrorMessage, FormDialog } from './Common'
+import { ErrorMessage, FormDialog, useFormDirty } from './Common'
 import { SERVICE_CATEGORIES, SERVICE_PROVIDER_TYPES, serviceFormToPayload, type ServiceFormState, type ServicePayload } from '../lib/serviceMaster'
 import type { VendorOption } from '../lib/vendorMaster'
 
@@ -21,6 +21,7 @@ export function ServiceFormDialog({ open, title, subtitle, form, setForm, vendor
   onSubmit: (payload: ServicePayload) => void
 }) {
   const hasCurrentVendorOption = vendors.some(vendor => vendor.id === form.vendor_id)
+  const dirty = useFormDirty(form, open)
 
   return <FormDialog
     open={open}
@@ -29,6 +30,7 @@ export function ServiceFormDialog({ open, title, subtitle, form, setForm, vendor
     onClose={onClose}
     onSubmit={() => onSubmit(serviceFormToPayload(form))}
     busy={busy}
+    dirty={dirty}
     submitLabel={title.startsWith('Edit') ? 'Save changes' : 'Create service'}
   >
     <Box display="grid" gap={2} pt={.5}>

@@ -5,6 +5,7 @@ import {
   LUMP_SUM_CATEGORIES, amountText, daysText, emptyConsumableLine, emptyServiceLine, newKey, scopeRows, toNumber,
   type AfeReference, type ConsumableCategory, type ConsumableLineInput, type ServiceLineInput, type WellScope,
 } from '../../lib/afe'
+import { defaultCurrencyCode } from '../../lib/masterData'
 import { ServicePicker } from './LinePickers'
 
 type Mode = 'consumable' | 'service'
@@ -28,6 +29,7 @@ export function BulkEstimateDialog({ open, initialMode = 'consumable', scope, re
   const [serviceId, setServiceId] = useState('')
   const [currency, setCurrency] = useState('')
   const [amounts, setAmounts] = useState<Record<string, string>>({})
+  const [baseline, setBaseline] = useState('')
   const [submitted, setSubmitted] = useState(false)
 
   useEffect(() => {
@@ -35,10 +37,15 @@ export function BulkEstimateDialog({ open, initialMode = 'consumable', scope, re
     setMode(initialMode)
     setCategory('Mud Chemicals')
     setServiceId('')
-    setCurrency('')
+    // Start in the workspace default currency so it rarely has to be picked.
+    const initialCurrency = defaultCurrencyCode(reference.currencies)
+    setCurrency(initialCurrency)
+    setBaseline(initialCurrency)
     setAmounts({})
     setSubmitted(false)
-  }, [open])
+  }, [open, reference.currencies])
+  // Unsaved-changes guard: amounts typed or the currency changed are protected.
+  const dirty = currency !== baseline || Boolean(serviceId) || Object.values(amounts).some(value => toNumber(value) > 0)
 
   const rows = useMemo(() => scopeRows(scope), [scope])
   const filled = rows.filter(row => toNumber(amounts[row.key]) > 0)
@@ -82,6 +89,7 @@ export function BulkEstimateDialog({ open, initialMode = 'consumable', scope, re
     subtitle="Enter amounts for each hole section and phase from the well plan. Empty rows are skipped."
     onClose={onClose}
     onSubmit={apply}
+    dirty={dirty}
     submitLabel={mode === 'consumable' ? 'Add lines' : 'Add service line'}
     maxWidth="md"
   >

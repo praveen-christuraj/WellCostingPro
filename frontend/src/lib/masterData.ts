@@ -15,6 +15,8 @@ export type MasterDataRecord = {
   name: string
   symbol: string | null
   description: string
+  // True only for the workspace's default currency; null for modules without a default concept.
+  is_default: boolean | null
   is_deleted: boolean
   deleted_at: string | null
   created_at: string
@@ -47,4 +49,15 @@ export type MasterDataOverview = {
 export type DeletedMasterDataRecord = MasterDataRecord & {
   module_key: MasterDataModuleKey
   module_label: string
+}
+
+// The workspace default currency, from a loaded list of master data records.
+// Every currency dropdown preloads this so users do not re-pick it each time.
+export function defaultCurrencyOf(records: Pick<MasterDataRecord, 'code' | 'is_default'>[]): string {
+  return records.find(record => record.is_default)?.code ?? ''
+}
+
+// The workspace default currency from an AFE reference payload.
+export function defaultCurrencyCode(currencies: { code: string; is_default?: boolean }[]): string {
+  return currencies.find(currency => currency.is_default)?.code ?? ''
 }

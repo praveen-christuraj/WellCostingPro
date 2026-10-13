@@ -13,6 +13,17 @@ import {
   type TypeConfig,
 } from '../../lib/catalogue'
 
+// The rate dialog opens prefilled with the record's current pricing and today's date.
+function revisePrefill(record: PricedRecord): FormState {
+  return {
+    unit_rate: String(record.unit_rate ?? ''),
+    cost_uplift: record.cost_uplift === null || record.cost_uplift === undefined ? '100' : String(record.cost_uplift),
+    currency: record.currency ?? '',
+    po_number: String(record.po_number ?? ''),
+    effective_date: todayIso(),
+  }
+}
+
 // Records a new price. Every change needs a reason and an effective date, and is kept
 // in the revision history beside the previous rate.
 export function ReviseRateDialog({ config, record, busy, error, onClose, onSubmit }: {
@@ -31,16 +42,13 @@ export function ReviseRateDialog({ config, record, busy, error, onClose, onSubmi
 
   useEffect(() => {
     if (!record) return
-    setForm({
-      unit_rate: String(record.unit_rate ?? ''),
-      cost_uplift: record.cost_uplift === null || record.cost_uplift === undefined ? '100' : String(record.cost_uplift),
-      currency: record.currency ?? '',
-      po_number: String(record.po_number ?? ''),
-      effective_date: todayIso(),
-    })
+    setForm(revisePrefill(record))
     setReason('')
     setLocalError('')
   }, [record])
+  // Unsaved-changes guard: the dialog is dirty once the prefilled rate, currency,
+  // date or the change reason differs from what it opened with.
+  const dirty = Boolean(record) && JSON.stringify({ form, reason }) !== JSON.stringify({ form: revisePrefill(record!), reason: '' })
 
   if (!record) return null
   const currentFinal = record.final_cost ?? null
@@ -68,6 +76,7 @@ export function ReviseRateDialog({ config, record, busy, error, onClose, onSubmi
     onClose={() => { if (!busy) onClose() }}
     onSubmit={submit}
     busy={busy}
+    dirty={dirty}
     submitLabel={fuel ? 'Save new price' : 'Save revision'}
   >
     <Box display="grid" gap={2} pt={.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>

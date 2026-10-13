@@ -5,7 +5,7 @@ import type { ColDef } from 'ag-grid-community'
 import { api, body } from '../lib/api'
 import type { Permission } from '../lib/types'
 import { useAuth } from '../context/AuthContext'
-import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
+import { ErrorMessage, FormDialog, useFormDirty, PageHeading, Tag } from '../components/Common'
 import { DataTable } from '../components/DataTable'
 
 export default function Permissions() {
@@ -15,6 +15,7 @@ export default function Permissions() {
   const [selected, setSelected] = useState<Permission | null>(null)
   const [key, setKey] = useState('')
   const [description, setDescription] = useState('')
+  const formDirty = useFormDirty({ key, description }, dialog === 'create' || dialog === 'edit')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const load = useCallback(async () => { try { setRows(await api<Permission[]>('/permissions')) } catch (e) { setError((e as Error).message) } }, [])
@@ -28,5 +29,5 @@ export default function Permissions() {
     { headerName: 'CREATED', field: 'created_at', valueFormatter: p => p.value ? new Date(p.value).toLocaleDateString() : '', minWidth: 120 },
     { headerName: 'ACTIONS', width: 135, flex: 0, sortable: false, cellRenderer: ({ data }: { data: Permission }) => <Box display="flex" alignItems="center" height="100%">{can('permissions:update') && <Button size="small" onClick={() => open('edit', data)} sx={{ fontSize: 11 }} startIcon={<EditOutlined sx={{ fontSize: 15 }}/>}>Edit</Button>}{can('permissions:delete') && <Button size="small" color="error" onClick={() => open('delete', data)} sx={{ minWidth: 28, px: .5 }} aria-label={`Delete ${data.key}`}><DeleteOutlineRounded sx={{ fontSize: 17 }}/></Button>}</Box> },
   ], [can])
-  return <><PageHeading eyebrow="USER MANAGEMENT / PERMISSIONS" title="Permissions" subtitle="Define granular capabilities that can be assigned to roles." action={can('permissions:create') && <Button variant="contained" startIcon={<AddRounded/>} onClick={() => open('create')}>Add permission</Button>}/><ErrorMessage message={!dialog ? error : ''}/><DataTable rows={rows} columns={columns} searchPlaceholder="Search permissions..."/><FormDialog open={!!dialog} title={dialog === 'create' ? 'Add a permission' : dialog === 'edit' ? 'Edit permission' : 'Delete permission?'} onClose={() => setDialog(null)} onSubmit={save} busy={busy} submitLabel={dialog === 'delete' ? 'Delete permission' : 'Save changes'} danger={dialog === 'delete'}><Box display="grid" gap={2} pt={.5}>{dialog === 'delete' ? <Typography fontSize={13}>Delete <b>{selected?.key}</b>? This capability will be removed from every role that uses it.</Typography> : <><TextField label="Permission key" required fullWidth value={key} disabled={dialog === 'edit'} onChange={e => setKey(e.target.value.toLowerCase())} helperText="Use resource:action format, e.g. reports:export"/><TextField label="Description" fullWidth multiline rows={3} value={description} onChange={e => setDescription(e.target.value)}/></>}<ErrorMessage message={error}/></Box></FormDialog></>
+  return <><PageHeading eyebrow="USER MANAGEMENT / PERMISSIONS" title="Permissions" subtitle="Define granular capabilities that can be assigned to roles." action={can('permissions:create') && <Button variant="contained" startIcon={<AddRounded/>} onClick={() => open('create')}>Add permission</Button>}/><ErrorMessage message={!dialog ? error : ''}/><DataTable rows={rows} columns={columns} searchPlaceholder="Search permissions..."/><FormDialog open={!!dialog} title={dialog === 'create' ? 'Add a permission' : dialog === 'edit' ? 'Edit permission' : 'Delete permission?'} onClose={() => setDialog(null)} onSubmit={save} busy={busy} dirty={formDirty} submitLabel={dialog === 'delete' ? 'Delete permission' : 'Save changes'} danger={dialog === 'delete'}><Box display="grid" gap={2} pt={.5}>{dialog === 'delete' ? <Typography fontSize={13}>Delete <b>{selected?.key}</b>? This capability will be removed from every role that uses it.</Typography> : <><TextField label="Permission key" required fullWidth value={key} disabled={dialog === 'edit'} onChange={e => setKey(e.target.value.toLowerCase())} helperText="Use resource:action format, e.g. reports:export"/><TextField label="Description" fullWidth multiline rows={3} value={description} onChange={e => setDescription(e.target.value)}/></>}<ErrorMessage message={error}/></Box></FormDialog></>
 }

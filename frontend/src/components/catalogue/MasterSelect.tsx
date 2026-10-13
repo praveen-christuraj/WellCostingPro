@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Autocomplete, TextField } from '@mui/material'
 import { api } from '../../lib/api'
-import type { MasterDataRecord } from '../../lib/masterData'
+import { defaultCurrencyOf, type MasterDataRecord } from '../../lib/masterData'
 
 // Picks an existing Unit of Measure or Currency from Master Data. Values are not created here.
+// When the dialog opens without a currency, the workspace default currency is preloaded so
+// users do not have to pick the same currency on every priced record.
 export function MasterSelect({ label, source, value, onChange, required = false, helper, onError }: {
   label: string
   source: 'uom' | 'currencies'
@@ -19,7 +21,15 @@ export function MasterSelect({ label, source, value, onChange, required = false,
   useEffect(() => {
     setLoading(true)
     api<MasterDataRecord[]>(`/master-data/${source}`)
-      .then(setCodes)
+      .then(records => {
+        setCodes(records)
+        // Preload the default currency for empty fields (new records). A stored
+        // value is never overwritten.
+        if (source === 'currencies' && !value) {
+          const fallback = defaultCurrencyOf(records)
+          if (fallback) onChange(fallback)
+        }
+      })
       .catch(caught => onError?.(caught instanceof Error ? caught.message : `Could not load ${label}`))
       .finally(() => setLoading(false))
   }, [source]) // eslint-disable-line react-hooks/exhaustive-deps
