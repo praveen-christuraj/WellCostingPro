@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useParams } from 'react-router-dom'
 import {
-  AddRounded, ArrowBackRounded, CloudUploadOutlined, ContentCopyOutlined, DeleteOutlineRounded,
+  PrintOutlined, AddRounded, ArrowBackRounded, CloudUploadOutlined, ContentCopyOutlined, DeleteOutlineRounded,
   DownloadOutlined, EditOutlined, LockOutlined, RefreshRounded, SaveOutlined, SendRounded, UndoRounded,
 } from '@mui/icons-material'
 import {
@@ -12,6 +12,8 @@ import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
 import { DailyCostLineDialog, type DailyCostLineKind, type EditableDailyCostLine } from '../components/daily-cost/DailyCostLineDialog'
+import { useCostPrint } from '../components/daily-cost/DailyCostPrintSheet'
+import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import { downloadTemplate, parseImportFile, type ImportRow } from '../lib/export'
@@ -48,6 +50,10 @@ function amountForRate(rate: string, quantity: string, unit: string, basis?: str
 }
 
 export default function DailyCostSheet() {
+  const { print, printSheet } = useCostPrint()
+  const [printOpen, setPrintOpen] = useState(false)
+  const [printBusy, setPrintBusy] = useState(false)
+  const [printError, setPrintError] = useState('')
   const { entryId = '' } = useParams()
   const { can } = useAuth()
   const [day, setDay] = useState<DailyCostDay | null>(null)
@@ -552,6 +558,23 @@ export default function DailyCostSheet() {
     return (initial + current - previous).toFixed(2)
   }
 
+  const printDay = async () => {
+    if (dirty || !day) return
+    setPrintBusy(true)
+    setPrintError('')
+    try {
+      // Re-fetch the saved record, never print an unsaved preview.
+      const saved = await api<DailyCostDay>(`/daily-cost/entries/${entry.id}`)
+      await api('/daily-cost/export-audit', { method: 'POST', body: body({
+        module: 'day-sheet', format: 'pdf', record_count: 1, entry_id: entry.id,
+        well_id: entry.well_id, include_deleted: entry.is_deleted,
+      }) })
+      print({ title: `Daily cost sheet · ${entry.daily_cost_code}`, period: displayDate(entry.cost_date), days: [saved] })
+    } catch (caught) {
+      setPrintError(caught instanceof Error ? caught.message : 'The daily sheet could not be printed')
+    } finally { setPrintBusy(false) }
+  }
+
   const statusTitle = statusAction === 'submit' ? 'Submit daily cost sheet?' : 'Reopen this daily cost sheet?'
   const statusSubtitle = statusAction === 'submit'
     ? 'Submission freezes editing and records the current daily actuals in the review workflow.'
@@ -563,6 +586,10 @@ export default function DailyCostSheet() {
       title={entry.daily_cost_code}
       subtitle={`${entry.well_code} · ${entry.well_name} · ${entry.rig_code} · ${entry.afe_code} ${entry.afe_name} · ${displayDate(entry.cost_date)}`}
       action={<Box display="flex" gap={1} flexWrap="wrap">
+        {canExport && <>
+          <Tooltip title={dirty ? 'Save or discard changes before printing the saved daily sheet.' : 'Print the full saved daily sheet or save as PDF.'}><span><Button variant="outlined" startIcon={<PrintOutlined/>} disabled={dirty || saving || printBusy} onClick={() => void printDay()}>{printBusy ? 'Preparing print…' : 'Print daily sheet'}</Button></span></Tooltip>
+          <Button variant="outlined" startIcon={<PrintOutlined/>} onClick={() => setPrintOpen(true)}>Print well costing sheet</Button>
+        </>}
         <Button component={RouterLink} to="/daily-cost" variant="outlined" startIcon={<ArrowBackRounded/>}>Register</Button>
         <Button variant="outlined" startIcon={<RefreshRounded/>} onClick={() => void load()} disabled={loading || dirty}>{loading ? 'Refreshing…' : 'Refresh'}</Button>
         {entry.status === 'draft' && editable && <>
@@ -673,6 +700,10 @@ export default function DailyCostSheet() {
       <Button variant="outlined" onClick={() => setPayload(originalPayload ?? payload)} disabled={!dirty || saving}>Discard changes</Button>
       <Button variant="contained" startIcon={<SaveOutlined/>} onClick={() => void save()} disabled={saveDisabled}>{saving ? 'Saving…' : 'Save daily sheet'}</Button>
     </Box>}
+
+    <ErrorMessage message={printError}/>
+    {printSheet}
+    <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={entry.well_id}/>
 
     <DailyCostLineDialog
       open={Boolean(lineEditor)} kind={lineEditor?.kind ?? null}

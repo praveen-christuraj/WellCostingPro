@@ -63,6 +63,22 @@ def well_cost_summary(
     )
 
 
+@router.get(
+    "/wells/{well_id}/cost-report", response_model=list[DailyCostDayOut],
+    dependencies=[Depends(require("daily-cost:read")), Depends(require("daily-cost:export"))],
+)
+def well_cost_report(
+    well_id: str, db: Db, user: Current,
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+    include_draft: bool = Query(default=True),
+) -> list[DailyCostDayOut]:
+    """Complete saved sheets for one well; no cross-well or cross-currency totals."""
+    return service.well_cost_report(
+        db, user.organization_id, well_id, date_from=date_from, date_to=date_to, include_draft=include_draft,
+    )
+
+
 @router.get("/entries/deleted", response_model=list[DailyCostEntryOut], dependencies=[Depends(require("daily-cost:read"))])
 def deleted_entries(db: Db, user: Current) -> list[DailyCostEntryOut]:
     return service.list_entries(db, user.organization_id, deleted=True)

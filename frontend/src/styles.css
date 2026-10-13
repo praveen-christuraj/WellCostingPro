@@ -196,7 +196,9 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
 @media print {
   @page { size: A4; margin: 12mm 10mm; }
   body > #root { display: none !important; }
-  body { background: #fff !important; }
+  body { background: #fff !important; overflow: visible !important; }
+  /* Report preparation dialogs are body portals too; never print their overlay. */
+  .MuiModal-root { display: none !important; }
   .afe-print-sheet { display: block !important; color: #000; background: #fff; font-family: Arial, Helvetica, sans-serif; font-size: 9.5pt; line-height: 1.35; }
   .afe-print-sheet h1 { font-size: 15pt; margin: 2mm 0 3mm; }
   .afe-print-sheet h2 { font-size: 11.5pt; margin: 5mm 0 2mm; border-bottom: 1px solid #000; padding-bottom: 1mm; page-break-after: avoid; }
@@ -211,6 +213,7 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .afe-print-sheet .ps-meta th { width: 14%; background: #F3F6FA !important; }
   .afe-print-sheet .ps-line td { background: #FBFCFE; }
   .afe-print-sheet .ps-component td { font-size: 8.5pt; color: #333; }
+  .afe-print-sheet .ps-notes { white-space: pre-wrap; overflow-wrap: anywhere; }
   .afe-print-sheet .ps-sub { font-size: 8.5pt; color: #444; margin-top: .6mm; }
   .afe-print-sheet .ps-total th, .afe-print-sheet .ps-total td { font-weight: 800; background: #E6ECF3 !important; }
   .afe-print-sheet .ps-empty { font-style: italic; color: #444; }

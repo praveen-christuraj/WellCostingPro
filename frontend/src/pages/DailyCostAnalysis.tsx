@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import {
   AccountBalanceWalletOutlined, AnalyticsOutlined, CalendarMonthOutlined, DownloadOutlined,
-  RefreshRounded, SavingsOutlined, TimelineOutlined, TrendingUpRounded, WarningAmberRounded,
+  PrintOutlined, RefreshRounded, SavingsOutlined, TimelineOutlined, TrendingUpRounded, WarningAmberRounded,
 } from '@mui/icons-material'
 import {
   Alert, Box, Button, CircularProgress, FormControlLabel, MenuItem, Paper, Switch, Tab, Tabs,
@@ -13,6 +13,7 @@ import {
 import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, PageHeading, Tag } from '../components/Common'
+import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import {
@@ -85,7 +86,9 @@ export default function DailyCostAnalysis() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [includeDraft, setIncludeDraft] = useState(true)
+  const [printOpen, setPrintOpen] = useState(false)
   const [tab, setTab] = useState(0)
+  const requestVersion = useRef(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
 
@@ -100,32 +103,30 @@ export default function DailyCostAnalysis() {
   }, [])
 
   const load = useCallback(async () => {
-    if (!selectedWell) { setSummary(null); setLoading(false); return }
-    setLoading(true)
+    const version = ++requestVersion.current
     setLoadError('')
+    setSummary(null)
+    if (!selectedWell) { setLoading(false); return }
+    if (dateFrom && dateTo && dateFrom > dateTo) { setLoading(false); return }
+    setLoading(true)
     try {
       const params = new URLSearchParams()
       if (dateFrom) params.set('from', dateFrom)
       if (dateTo) params.set('to', dateTo)
       params.set('include_draft', String(includeDraft))
-      setSummary(await api<DailyCostWellSummary>(`/daily-cost/wells/${selectedWell}/cost-summary?${params.toString()}`))
+      const result = await api<DailyCostWellSummary>(`/daily-cost/wells/${selectedWell}/cost-summary?${params.toString()}`)
+      if (version === requestVersion.current) setSummary(result)
     } catch (caught) {
+      if (version !== requestVersion.current) return
       setLoadError(caught instanceof Error ? caught.message : 'The well cost analysis could not be loaded')
       setSummary(null)
     } finally {
-      setLoading(false)
+      if (version === requestVersion.current) setLoading(false)
     }
   }, [selectedWell, dateFrom, dateTo, includeDraft])
 
   useEffect(() => { void loadWells() }, [loadWells])
   useEffect(() => { void load() }, [load])
-
-  useEffect(() => {
-    if (!selectedWell && wells.length) {
-      setSelectedWell(wells[0].id)
-      navigate(`/daily-cost/analysis/${wells[0].id}`, { replace: true })
-    }
-  }, [wells, selectedWell, navigate])
 
   const currency = summary?.totals.currency ?? ''
   const factorGroups = summary?.factors ?? []
@@ -224,18 +225,21 @@ export default function DailyCostAnalysis() {
       title="Well cost analysis"
       subtitle="Every AFE and daily sheet for one well, costed day by day and cut by activity, section, party, rate source and currency."
       action={<Box display="flex" gap={1} flexWrap="wrap">
+        {canExport && <Button variant="outlined" startIcon={<PrintOutlined/>} disabled={!selectedWell} onClick={() => setPrintOpen(true)}>Print well costing sheet</Button>}
         <Button component={RouterLink} to="/daily-cost" variant="outlined" startIcon={<CalendarMonthOutlined/>}>Daily register</Button>
         <Button variant="outlined" startIcon={<RefreshRounded/>} onClick={() => void load()} disabled={loading || !selectedWell}>{loading ? 'Refreshing…' : 'Refresh'}</Button>
       </Box>}
     />
+    <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={wells} initialWellId={selectedWell}/>
     <ErrorMessage message={loadError}/>
 
     <Paper variant="outlined" sx={{ p: 1.8, borderRadius: 2, mb: 1.8 }}>
       <Box display="grid" gap={1.4} sx={{ gridTemplateColumns: { xs: '1fr', md: '1.4fr 1fr 1fr auto' } }} alignItems="center">
         <TextField select label="Well" value={selectedWell} onChange={event => {
           setSelectedWell(event.target.value)
-          navigate(`/daily-cost/analysis/${event.target.value}`)
+          navigate(event.target.value ? `/daily-cost/analysis/${event.target.value}` : '/daily-cost/analysis')
         }} helperText={summary ? `${summary.well.rig_code} · ${summary.well.rig_name}` : 'Only wells with daily costs are listed'}>
+          <MenuItem value="">Select one well</MenuItem>
           {wells.map(well => <MenuItem key={well.id} value={well.id}>{well.well_code} · {well.well_name}</MenuItem>)}
         </TextField>
         <TextField type="date" label="Cost date from" value={dateFrom} onChange={event => setDateFrom(event.target.value)} InputLabelProps={{ shrink: true }}/>
@@ -251,10 +255,9 @@ export default function DailyCostAnalysis() {
     {loading && !summary && <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box>}
 
     {!loading && !summary && !loadError && <Paper variant="outlined" sx={{ p: 3, borderRadius: 2, textAlign: 'center' }}>
-      <Typography fontWeight={800} fontSize={15}>No daily costs are tracked yet</Typography>
+      <Typography fontWeight={800} fontSize={15}>{wells.length ? 'Select a well to view its costs' : 'No daily costs are tracked yet'}</Typography>
       <Typography color="text.secondary" fontSize={12.5} mt={.6} mb={1.8}>
-        Start a daily cost sheet from the Daily Cost register for a configured well and a saved AFE estimate.
-        Every factor captured there is reported on this page.
+        {wells.length ? 'Choose one well above. Costs and AFE budgets are never combined across wells.' : 'Start a daily cost sheet from the Daily Cost register for a configured well and a saved AFE estimate.'}
       </Typography>
       <Button component={RouterLink} to="/daily-cost" variant="contained" startIcon={<CalendarMonthOutlined/>}>Open the daily register</Button>
     </Paper>}

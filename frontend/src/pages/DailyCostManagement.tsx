@@ -1,45 +1,25 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom'
-import ReactECharts from 'echarts-for-react'
-import type { EChartsOption } from 'echarts'
 import {
   AddRounded, DeleteForeverOutlined, DeleteOutlineRounded, EventNoteOutlined,
-  FactCheckOutlined, FilterAltOffOutlined, InsightsOutlined, Inventory2Outlined, RestoreRounded,
-  RefreshRounded, TaskAltOutlined, WarningAmberRounded,
+  FilterAltOffOutlined, InsightsOutlined, RestoreRounded, RefreshRounded, PrintOutlined,
 } from '@mui/icons-material'
 import {
-  Alert, Box, Button, CircularProgress, MenuItem, Paper, TextField, Typography, useTheme,
+  Alert, Box, Button, CircularProgress, MenuItem, Paper, TextField, Typography,
 } from '@mui/material'
 import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
+import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import {
   dailyMoney, DAILY_COST_STATUSES, displayDate, entryQuery, localToday,
-  type DailyCostDay, type DailyCostEntry, type DailyCostOverview, type DailyCostReference,
+  type DailyCostDay, type DailyCostEntry, type DailyCostReference,
   type DailyCostStatus,
 } from '../lib/dailyCost'
 
 type PendingAction = { kind: 'delete' | 'restore' | 'purge'; rows: DailyCostEntry[] }
-
-function StatCard({ label, value, hint, icon, tone = 'default' }: {
-  label: string; value: string | number; hint: string; icon: ReactNode; tone?: 'default' | 'warning'
-}) {
-  return <Paper className="stat-card" variant="outlined" sx={{ p: 2, borderRadius: 2, minWidth: 0 }}>
-    <Box display="flex" alignItems="center" justifyContent="space-between" gap={1}>
-      <Typography color="text.secondary" fontSize={10.5} fontWeight={800} letterSpacing={.75} textTransform="uppercase">{label}</Typography>
-      <Box className="table-icon" sx={tone === 'warning' ? { color: 'warning.dark', bgcolor: 'warning.light' } : undefined}>{icon}</Box>
-    </Box>
-    <Typography className="stat-value" sx={{ fontSize: 25, my: 1, overflowWrap: 'anywhere' }}>{value}</Typography>
-    <Typography color="text.secondary" fontSize={11.3}>{hint}</Typography>
-  </Paper>
-}
-
-function prettyCurrencyMap(map: Record<string, string>): string {
-  const items = Object.entries(map)
-  return items.length ? items.map(([code, value]) => dailyMoney(value, code)).join(' · ') : '—'
-}
 
 function isValidCostDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
@@ -50,10 +30,8 @@ function isValidCostDate(value: string): boolean {
 export default function DailyCostManagement() {
   const { can } = useAuth()
   const navigate = useNavigate()
-  const theme = useTheme()
   const [params, setParams] = useSearchParams()
   const deletedView = params.get('view') === 'deleted'
-  const [overview, setOverview] = useState<DailyCostOverview | null>(null)
   const [rows, setRows] = useState<DailyCostEntry[]>([])
   const [reference, setReference] = useState<DailyCostReference | null>(null)
   const [loading, setLoading] = useState(true)
@@ -63,6 +41,7 @@ export default function DailyCostManagement() {
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [actionError, setActionError] = useState('')
   const [actionBusy, setActionBusy] = useState(false)
+  const [printOpen, setPrintOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
@@ -70,7 +49,6 @@ export default function DailyCostManagement() {
   const [afeId, setAfeId] = useState('')
   const [costDate, setCostDate] = useState(localToday())
   const [remarks, setRemarks] = useState('')
-  const [chartCurrency, setChartCurrency] = useState('')
   const [filterWell, setFilterWell] = useState('')
   const [filterAfe, setFilterAfe] = useState('')
   const [filterStatus, setFilterStatus] = useState<'' | DailyCostStatus>('')
@@ -87,16 +65,12 @@ export default function DailyCostManagement() {
     setLoadError('')
     setSelected([])
     try {
-      const [overviewData, entries, ref] = await Promise.all([
-        api<DailyCostOverview>('/daily-cost/overview'),
+      const [entries, ref] = await Promise.all([
         api<DailyCostEntry[]>(deletedView ? '/daily-cost/entries/deleted' : `/daily-cost/entries${filterQuery}`),
         api<DailyCostReference>('/daily-cost/reference'),
       ])
-      setOverview(overviewData)
       setRows(entries)
       setReference(ref)
-      const currencies = Object.keys(overviewData.actual_to_date_by_currency)
-      setChartCurrency(current => currencies.includes(current) ? current : currencies[0] ?? '')
     } catch (caught) {
       setLoadError(caught instanceof Error ? caught.message : 'Daily Cost Management could not be loaded')
     } finally {
@@ -205,20 +179,6 @@ export default function DailyCostManagement() {
     }) })
   }
 
-  // Daily basis: running actual for the same AFE, oldest sheet first, so a cost
-  // accountant can read each day against the budget left at that point.
-  const cumulativeById = useMemo(() => {
-    const running = new Map<string, number>()
-    const result = new Map<string, string>()
-    const ordered = [...rows].sort((left, right) => left.cost_date.localeCompare(right.cost_date))
-    for (const row of ordered) {
-      const total = (running.get(row.afe_id) ?? 0) + Number(row.total_cost)
-      running.set(row.afe_id, total)
-      result.set(row.id, total.toFixed(2))
-    }
-    return result
-  }, [rows])
-
   const columns = useMemo<ColDef<DailyCostEntry>[]>(() => [
     { headerName: 'DATE', field: 'cost_date', minWidth: 125, width: 130, valueFormatter: params => displayDate(String(params.value ?? '')) },
     { headerName: 'DAILY SHEET', field: 'daily_cost_code', minWidth: 230, flex: 1.1 },
@@ -231,13 +191,6 @@ export default function DailyCostManagement() {
     } },
     { headerName: 'UPA / NPT', field: 'upa_total', minWidth: 160, valueGetter: params => params.data
       ? `${dailyMoney(params.data.upa_total, params.data.standard_currency)} / ${dailyMoney(params.data.npt_total, params.data.standard_currency)}` : '—' },
-    { headerName: 'ACTUAL TO DATE', field: 'id', minWidth: 165, valueGetter: params => params.data ? dailyMoney(cumulativeById.get(params.data.id) ?? '0', params.data.standard_currency) : '—',
-      cellRenderer: (params: ICellRendererParams<DailyCostEntry>) => {
-        const row = params.data
-        if (!row) return null
-        const value = Number(cumulativeById.get(row.id) ?? 0)
-        return <Typography fontSize={12} fontWeight={700} color={value > 0 ? 'text.primary' : 'text.secondary'}>{dailyMoney(value, row.standard_currency)}</Typography>
-      } },
     { headerName: 'STATUS', field: 'status', minWidth: 120, cellRenderer: (params: ICellRendererParams<DailyCostEntry>) => <Tag tone={params.value === 'submitted' ? 'success' : 'info'}>{DAILY_COST_STATUSES[params.value as 'draft' | 'submitted'] ?? String(params.value ?? '')}</Tag> },
     { headerName: 'ACTIONS', field: 'id', minWidth: deletedView ? 205 : 170, width: deletedView ? 215 : 180, sortable: false,
       cellRenderer: (params: ICellRendererParams<DailyCostEntry>) => {
@@ -252,23 +205,7 @@ export default function DailyCostManagement() {
         </Box>
       },
     },
-  ], [can, deletedView, cumulativeById])
-
-  const currencies = Object.keys(overview?.actual_to_date_by_currency ?? {})
-  const chartRows = overview?.trend.filter(point => point.currency === chartCurrency) ?? []
-  const chartOption: EChartsOption = {
-    animation: false,
-    grid: { left: 16, right: 18, top: 24, bottom: 35, containLabel: true },
-    legend: { top: 0, textStyle: { color: theme.palette.text.secondary }, itemWidth: 12, itemHeight: 8 },
-    tooltip: { trigger: 'axis', valueFormatter: (value: unknown) => dailyMoney(Number(value), chartCurrency) },
-    xAxis: { type: 'category', data: chartRows.map(point => point.cost_date.slice(5)), axisLabel: { color: theme.palette.text.secondary }, axisLine: { lineStyle: { color: theme.palette.divider } } },
-    yAxis: { type: 'value', axisLabel: { color: theme.palette.text.secondary }, splitLine: { lineStyle: { color: theme.palette.divider } } },
-    series: [
-      { name: 'Actual', type: 'line', smooth: true, symbol: 'circle', symbolSize: 5, itemStyle: { color: theme.palette.primary.main }, lineStyle: { width: 2.5 }, areaStyle: { color: `${theme.palette.primary.main}20` }, data: chartRows.map(point => Number(point.actual)) },
-      { name: 'UPA', type: 'line', smooth: true, symbolSize: 4, itemStyle: { color: theme.palette.warning.main }, lineStyle: { width: 1.7 }, data: chartRows.map(point => Number(point.upa)) },
-      { name: 'NPT', type: 'line', smooth: true, symbolSize: 4, itemStyle: { color: theme.palette.error.main }, lineStyle: { width: 1.7 }, data: chartRows.map(point => Number(point.npt)) },
-    ],
-  }
+  ], [can, deletedView])
 
   const pendingCount = pending?.rows.length ?? 0
   const actionTitle = pending?.kind === 'delete'
@@ -295,10 +232,11 @@ export default function DailyCostManagement() {
           component={RouterLink}
           to={filterWell ? `/daily-cost/analysis/${filterWell}` : '/daily-cost/analysis'}
         >Well cost analysis</Button>}
+        {!deletedView && can('daily-cost:export') && <Button variant="outlined" startIcon={<PrintOutlined/>} onClick={() => setPrintOpen(true)}>Print well costing sheet</Button>}
         <Button variant="outlined" startIcon={<RefreshRounded/>} onClick={() => void load()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</Button>
         {deletedView
           ? <Button variant="outlined" startIcon={<EventNoteOutlined/>} onClick={() => { setParams({}); setNotice('') }}>Active register</Button>
-          : can('daily-cost:read') && <Button variant="outlined" startIcon={<RestoreRounded/>} onClick={() => { setParams({ view: 'deleted' }); setNotice('') }}>Deleted entries{overview?.deleted_entries ? ` · ${overview.deleted_entries}` : ''}</Button>}
+          : can('daily-cost:read') && <Button variant="outlined" startIcon={<RestoreRounded/>} onClick={() => { setParams({ view: 'deleted' }); setNotice('') }}>Deleted entries</Button>}
         {!deletedView && can('daily-cost:create') && <Button variant="contained" startIcon={<AddRounded/>} onClick={openCreate} disabled={!wells.length || !reference?.afes.length}>New daily sheet</Button>}
       </Box>}
     />
@@ -337,53 +275,6 @@ export default function DailyCostManagement() {
       </Alert>}
     </Paper>}
 
-    {!deletedView && overview && <>
-      {overview.over_budget_afes > 0 && <Alert severity="warning" icon={<WarningAmberRounded/>} sx={{ mb: 2 }}>
-        {overview.over_budget_afes} AFE{overview.over_budget_afes === 1 ? ' has' : 's have'} actual-to-date costs above the locked budget. Review remaining balances in the daily sheets.
-      </Alert>}
-      <Box display="grid" gap={1.4} mb={2} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' } }}>
-        <StatCard label="Active daily sheets" value={overview.active_entries} hint={`${overview.draft_entries} Draft · ${overview.submitted_entries} Submitted`} icon={<EventNoteOutlined fontSize="small"/>}/>
-        <StatCard label="AFE budgets tracked" value={overview.active_baselines} hint={`${overview.wells_tracked} wells with daily activity`} icon={<Inventory2Outlined fontSize="small"/>}/>
-        <StatCard label="AFE planned" value={prettyCurrencyMap(overview.total_planned_by_currency)} hint="Frozen estimate totals, once per AFE" icon={<TaskAltOutlined fontSize="small"/>}/>
-        <StatCard label="Actual to date" value={prettyCurrencyMap(overview.actual_to_date_by_currency)} hint="Active sheets across tracked AFEs" icon={<FactCheckOutlined fontSize="small"/>} tone={overview.over_budget_afes ? 'warning' : 'default'}/>
-      </Box>
-      <Box display="grid" gap={1.7} mb={2} sx={{ gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1.15fr) minmax(360px, .85fr)' } }}>
-        <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, minWidth: 0 }}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap" mb={1.2}>
-            <Box><Typography fontWeight={800} fontSize={15}>Actual spend · last 30 days</Typography><Typography color="text.secondary" fontSize={11.5} mt={.25}>Daily actuals with UPA and NPT separated for visibility.</Typography></Box>
-            {currencies.length > 1 && <TextField select size="small" label="Currency" value={chartCurrency} onChange={event => setChartCurrency(event.target.value)} sx={{ minWidth: 115 }}>{currencies.map(code => <MenuItem key={code} value={code}>{code}</MenuItem>)}</TextField>}
-          </Box>
-          {chartRows.length
-            ? <Box height={230}><ReactECharts option={chartOption} notMerge lazyUpdate style={{ height: '100%', width: '100%' }}/></Box>
-            : <Typography color="text.secondary" fontSize={12.5} py={7} textAlign="center">Daily trend will appear when sheets are recorded in the last 30 days.</Typography>}
-        </Paper>
-        <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, minWidth: 0 }}>
-          <Typography fontWeight={800} fontSize={15}>Budget by cost group</Typography>
-          <Typography color="text.secondary" fontSize={11.5} mt={.25} mb={1}>Group totals are kept in each AFE's standard currency; balances include all active sheets.</Typography>
-          <Box sx={{ overflowX: 'auto' }}>
-            <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 440, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.15, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
-              <thead><tr><th>CURRENCY / GROUP</th><th>AFE PLANNED</th><th>ACTUAL</th><th>REMAINING</th></tr></thead>
-              <tbody>{overview.groups.map((group, index) => <tr key={`${group.currency}-${group.cost_group}-${index}`}>
-                <td><Typography fontSize={12} fontWeight={700}>{group.cost_group}</Typography><Typography fontSize={10.5} color="text.secondary">{group.currency}</Typography></td>
-                <td>{dailyMoney(group.planned, group.currency)}</td><td>{dailyMoney(group.actual, group.currency)}</td>
-                <td><Typography color={Number(group.balance) < 0 ? 'error.main' : 'success.main'} fontSize={12} fontWeight={700}>{dailyMoney(group.balance, group.currency)}</Typography></td>
-              </tr>)}</tbody>
-            </Box>
-          </Box>
-          <Box display="flex" justifyContent="space-between" gap={1} mt={1.2}>
-            <Typography fontSize={11} color="text.secondary">Remaining AFE balance</Typography>
-            <Typography fontSize={11} fontWeight={800}>{prettyCurrencyMap(overview.remaining_by_currency)}</Typography>
-          </Box>
-        </Paper>
-      </Box>
-      {overview.recent_activity.length > 0 && <Paper variant="outlined" sx={{ px: 2, py: 1.4, borderRadius: 2, mb: 2 }}>
-        <Typography fontWeight={800} fontSize={13} mb={.4}>Recent activity</Typography>
-        <Box display="grid" gap={.65} sx={{ gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' } }}>
-          {overview.recent_activity.slice(0, 4).map(item => <Typography key={item.id} fontSize={11.5} color="text.secondary" noWrap title={item.summary}>{new Date(item.created_at).toLocaleString()} · {item.summary || `${item.action} ${item.entity_label}`}</Typography>)}
-        </Box>
-      </Paper>}
-    </>}
-
     {loading && !rows.length ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <>
       {selected.length > 0 && <Paper variant="outlined" sx={{ p: 1.4, borderRadius: 2, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <Typography fontSize={12} fontWeight={700} mr="auto">{selected.length} sheet{selected.length === 1 ? '' : 's'} selected</Typography>
@@ -410,6 +301,8 @@ export default function DailyCostManagement() {
         {deletedView ? 'There are no deleted daily sheets.' : 'No daily sheets yet. Start from a saved AFE estimate on a configured well.'}
       </Typography>}
     </>}
+
+    <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={filterWell}/>
 
     <FormDialog open={createOpen} title="Start a daily cost sheet" subtitle="The first sheet locks the AFE estimate, FX factors, well plan, service rates and Master Data catalogue prices for this well/AFE." onClose={() => setCreateOpen(false)} onSubmit={() => void createEntry()} busy={creating} submitLabel="Create daily sheet" submitDisabled={!selectedAfe || !selectedWell || !createDateValid || Boolean(selectedDuplicate) || missingSubActivities}>
       <Box display="grid" gap={1.6}>

@@ -196,10 +196,15 @@ class DailyCostImportResponse(BaseModel):
 
 
 class DailyCostExportAudit(_Strict):
-    module: Literal["entries", "deleted", "day-sheet", "budget-comparison"]
+    module: Literal["entries", "deleted", "day-sheet", "budget-comparison", "well-cost-sheet"]
     format: Literal["csv", "xlsx", "pdf"]
     record_count: int = Field(ge=0, le=1_000_000)
     include_deleted: bool = False
+    well_id: str = Field(default="", max_length=36)
+    entry_id: str = Field(default="", max_length=36)
+    date_from: date | None = None
+    date_to: date | None = None
+    include_draft: bool = True
 
 
 # ---------------------------------------------------------------------------
