@@ -2490,6 +2490,30 @@ def _factor_rows(
     return result
 
 
+def well_cost_report(
+    db: Session, organization_id: str, well_id: str, *,
+    date_from: date | None = None, date_to: date | None = None, include_draft: bool = True,
+) -> list[DailyCostDayOut]:
+    """Return every persisted section, including empty sheets, in date order."""
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="The start date must not be after the end date")
+    well = db.scalar(select(Well).where(
+        Well.id == well_id, Well.organization_id == organization_id, Well.is_deleted.is_(False),
+    ))
+    if well is None:
+        raise HTTPException(status_code=404, detail="Well not found in this workspace")
+    query = select(DailyCostEntry.id).where(
+        DailyCostEntry.organization_id == organization_id, DailyCostEntry.well_id == well_id,
+        DailyCostEntry.is_deleted.is_(False), DailyCostEntry.cost_date <= (date_to or date.today()),
+    )
+    if date_from:
+        query = query.where(DailyCostEntry.cost_date >= date_from)
+    if not include_draft:
+        query = query.where(DailyCostEntry.status == "submitted")
+    entry_ids = db.scalars(query.order_by(DailyCostEntry.cost_date, DailyCostEntry.afe_id, DailyCostEntry.id)).all()
+    return [get_day(db, organization_id, entry_id) for entry_id in entry_ids]
+
+
 def well_cost_summary(
     db: Session,
     organization_id: str,
@@ -2500,6 +2524,8 @@ def well_cost_summary(
     include_draft: bool = True,
 ) -> DailyCostWellSummary:
     """Cost the whole well: daily run sheet, AFE positions and every captured factor."""
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="The start date must not be after the end date")
     well = db.scalars(
         select(Well).options(joinedload(Well.rig))
         .where(Well.id == well_id, Well.organization_id == organization_id, Well.is_deleted.is_(False))
@@ -2520,6 +2546,7 @@ def well_cost_summary(
     windowed = [
         row for row in entries
         if (date_from is None or row.cost_date >= date_from) and (date_to is None or row.cost_date <= date_to)
+        and (include_draft or row.status == "submitted")
     ]
     baseline_ids = {row.baseline_id for row in entries}
     baselines = list(db.scalars(
@@ -2527,12 +2554,13 @@ def well_cost_summary(
             selectinload(DailyCostBaseline.budget_lines), selectinload(DailyCostBaseline.well_sections)
         ).where(DailyCostBaseline.organization_id == organization_id, DailyCostBaseline.id.in_(baseline_ids))
     ).unique().all()) if baseline_ids else []
-    currency = baselines[0].standard_currency if baselines else ""
-    for baseline in sorted(baselines, key=lambda row: row.locked_at):
-        if baseline.standard_currency != currency:
-            currency = ""  # mixed standard currencies cannot be added together
-    if len({row.standard_currency for row in entries}) > 1:
-        currency = ""
+    currencies = {row.standard_currency for row in baselines} | {row.standard_currency for row in entries}
+    if len(currencies) > 1:
+        raise HTTPException(status_code=409, detail=(
+            "This well has AFEs in different standard currencies. Combined totals are not valid. "
+            "Open individual daily sheets or print the well costing sheet for separate AFE/currency totals."
+        ))
+    currency = next(iter(currencies), "")
 
     afe_options: list[DailyCostAfeOption] = []
     for afe in sorted({row.afe_id: row.afe for row in entries}.values(), key=lambda row: row.afe_code):
@@ -3104,7 +3132,12 @@ def import_daily_cost(
 def record_export(db: Session, user: User, data: DailyCostExportAudit, request: Request | None) -> None:
     _audit(
         db, user=user, action="export", entity_type="daily_cost_export", entity_id=None,
-        label=data.module, summary=f"Exported {data.record_count} {data.module} record(s) as {data.format.upper()}" + (" including deleted records" if data.include_deleted else ""),
+        label=data.module, summary=f"Exported {data.record_count} {data.module} record(s) as {data.format.upper()}"
+        + (" including deleted records" if data.include_deleted else "")
+        + (f"; well {data.well_id}" if data.well_id else "")
+        + (f"; daily sheet {data.entry_id}" if data.entry_id else "")
+        + (f"; period {data.date_from or 'inception'} to {data.date_to or date.today()}; include drafts: {data.include_draft}"
+           if data.module == "well-cost-sheet" else ""),
         request=request,
     )
     _commit(db)

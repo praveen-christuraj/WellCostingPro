@@ -1,4 +1,4 @@
-.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback
+.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check
 
 test:
 	cd backend && ../.venv/bin/python -m pytest -q
@@ -23,3 +23,11 @@ ui-check:
 # Restore the pre-design-layer interface. Use it if the enhanced UI is rejected.
 ui-rollback:
 	bash scripts/ui-rollback.sh
+
+# Full daily/well printing and list-only register regressions (jsdom is a dev-only install).
+daily-cost-check:
+	cd frontend && npm install --no-save jsdom && \
+		NODE_PATH="$$PWD/node_modules" ./node_modules/.bin/esbuild ../.agent/tools/daily-cost-check.jsx \
+		--bundle --platform=node --format=esm --jsx=automatic \
+		--outfile=node_modules/.cache/daily-cost-check.mjs --external:jsdom && \
+		node node_modules/.cache/daily-cost-check.mjs

@@ -775,3 +775,119 @@ def test_every_daily_cost_write_locks_without_a_join():
             "PostgreSQL rejects FOR UPDATE over the nullable side of an outer join "
             "(HTTP 503 on every write). Keep row locks single-table:\n" + "\n".join(offenders)
         )
+
+
+def test_well_cost_report_is_complete_scoped_and_respects_dates_status_and_deletion():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        well_id, entry_id = setup["well"]["id"], setup["entry"]["id"]
+        saved = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json={
+            "remarks": "Full shift record",
+            "services": [{
+                "activity_id": setup["activity"]["id"], "sub_activity_id": setup["sub1"]["id"],
+                "hole_section_id": setup["hole"]["id"], "phase_id": setup["phase"]["id"],
+                "vendor_id": setup["vendor"]["id"], "service_id": setup["service"]["id"],
+                "baseline_service_rate_id": setup["baseline"]["service_rates"][0]["id"],
+                "charging_basis": "Day Rate", "charge_category": "Operation", "quantity": "12",
+                "quantity_unit": "hours", "currency": "USD", "remarks": "Service remarks",
+            }], "consumables": [], "tangibles": [],
+        })
+        assert saved.status_code == 200, saved.text
+        assert client.post(f"/api/v1/daily-cost/entries/{entry_id}/submit", headers=headers,
+                           json={"remarks": "Reviewed"}).status_code == 200
+        draft = _post(client, "/api/v1/daily-cost/entries", headers, {
+            "well_id": well_id, "afe_id": setup["afe"]["id"], "cost_date": "2026-10-11",
+        })
+        future = _post(client, "/api/v1/daily-cost/entries", headers, {
+            "well_id": well_id, "afe_id": setup["afe"]["id"], "cost_date": "2099-01-01",
+        })
+        path = f"/api/v1/daily-cost/wells/{well_id}/cost-report"
+        report = client.get(path + "?to=2026-10-13", headers=headers)
+        assert report.status_code == 200, report.text
+        assert [day["entry"]["id"] for day in report.json()] == [entry_id, draft["entry"]["id"]]
+        assert report.json()[0]["services"] == saved.json()["services"]
+        assert report.json()[0]["entry"]["remarks"] == "Full shift record"
+        assert report.json()[0]["entry"]["status_remarks"] == "Reviewed"
+        assert report.json()[1]["services"] == []
+        submitted = client.get(path + "?include_draft=false&to=2026-10-13", headers=headers).json()
+        assert [day["entry"]["id"] for day in submitted] == [entry_id]
+        single = client.get(path + "?from=2026-10-11&to=2026-10-11", headers=headers).json()
+        assert [day["entry"]["id"] for day in single] == [draft["entry"]["id"]]
+        assert client.get(path + "?from=2026-10-12&to=2026-10-11", headers=headers).status_code == 422
+        assert future["entry"]["id"] not in [day["entry"]["id"] for day in client.get(path, headers=headers).json()]
+        assert client.delete(f"/api/v1/daily-cost/entries/{draft['entry']['id']}", headers=headers).status_code == 200
+        assert len(client.get(path + "?to=2026-10-13", headers=headers).json()) == 1
+        assert client.get(path, headers=login(client, "south")).status_code == 404
+        other = _post(client, "/api/v1/rig-well/wells", headers, {
+            "rig_id": setup["rig"]["id"], "well_code": "WELL-02", "well_name": "Other well",
+            "well_location": "Other field", "block": "B", "objective": "Development",
+        })
+        assert client.get(f"/api/v1/daily-cost/wells/{other['id']}/cost-report", headers=headers).json() == []
+        summary = client.get(f"/api/v1/daily-cost/wells/{well_id}/cost-summary?include_draft=false", headers=headers)
+        assert summary.json()["totals"]["sheets"] == 1
+        assert client.get(f"/api/v1/daily-cost/wells/{well_id}/cost-summary?from=2026-10-12&to=2026-10-11", headers=headers).status_code == 422
+
+
+def test_well_cost_report_requires_read_and_export_and_audits_scope():
+    from sqlalchemy import select
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        path = f"/api/v1/daily-cost/wells/{setup['well']['id']}/cost-report"
+        with SessionLocal() as db:
+            user = db.scalar(select(User).where(User.email == "owner@example.com", User.organization_id == select(Organization.id).where(Organization.slug == "north").scalar_subquery()))
+            role = user.roles[0]
+            role.is_owner = False
+            role.permissions = [permission for permission in role.permissions if permission.key != "daily-cost:export"]
+            db.commit()
+        assert client.get(path, headers=headers).status_code == 403
+        with SessionLocal() as db:
+            role = db.scalar(select(Role).where(Role.organization_id == select(Organization.id).where(Organization.slug == "north").scalar_subquery()))
+            role.permissions.append(db.scalar(select(Permission).where(
+                Permission.organization_id == role.organization_id, Permission.key == "daily-cost:export")))
+            role.permissions = [permission for permission in role.permissions if permission.key != "daily-cost:read"]
+            db.commit()
+        assert client.get(path, headers=headers).status_code == 403
+        with SessionLocal() as db:
+            role = db.scalar(select(Role).where(Role.organization_id == select(Organization.id).where(Organization.slug == "north").scalar_subquery()))
+            role.is_owner = True
+            db.commit()
+        assert client.post("/api/v1/daily-cost/export-audit", headers=headers, json={
+            "module": "well-cost-sheet", "format": "pdf", "record_count": 1,
+            "well_id": setup["well"]["id"], "date_from": "2026-10-10", "date_to": "2026-10-13",
+            "include_draft": False,
+        }).status_code == 204
+        with SessionLocal() as db:
+            audit = db.scalar(select(AuditLog).where(AuditLog.entity_type == "daily_cost_export"))
+            assert setup["well"]["id"] in audit.summary
+            assert "2026-10-10 to 2026-10-13" in audit.summary
+            assert "include drafts: False" in audit.summary
+
+
+def test_well_analysis_never_sums_mixed_standard_currencies():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        _post(client, "/api/v1/master-data/currencies", headers, {"code": "EUR", "name": "Euro", "symbol": "EUR"})
+        afe = _post(client, "/api/v1/afe/afes", headers, {
+            "rig_id": setup["rig"]["id"], "well_id": setup["well"]["id"],
+            "afe_code": "AFE-EUR", "afe_name": "Euro AFE", "afe_type": "Drilling", "remarks": "",
+        }, status=200)
+        estimate = client.put(f"/api/v1/afe/afes/{afe['id']}/estimate", headers=headers, json={
+            "services": [], "tangibles": [], "standard_currency": "EUR", "exchange_rates": [],
+            "consumables": [{"category": "Mud Chemicals", "hole_section_id": setup["hole"]["id"],
+                             "phase_id": setup["phase"]["id"], "estimated_amount": "500", "currency": "EUR"}],
+        })
+        assert estimate.status_code == 200, estimate.text
+        _post(client, "/api/v1/daily-cost/entries", headers, {
+            "well_id": setup["well"]["id"], "afe_id": afe["id"], "cost_date": "2026-10-11",
+        })
+        path = f"/api/v1/daily-cost/wells/{setup['well']['id']}"
+        response = client.get(path + "/cost-summary", headers=headers)
+        assert response.status_code == 409
+        assert "different standard currencies" in response.json()["detail"]
+        response = client.get(path + "/cost-report?to=2026-10-13", headers=headers)
+        assert response.status_code == 200, response.text
+        assert [day["entry"]["standard_currency"] for day in response.json()] == ["USD", "EUR"]
+        assert [day["comparison"]["planned_total"] for day in response.json()] == ["6000.00", "500.00"]
