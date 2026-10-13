@@ -62,6 +62,7 @@ from app.schemas.vendor_master import (
     VendorUpdate,
 )
 from app.services import audit
+from app.services.dependencies import assert_no_dependencies
 
 router = APIRouter(prefix="/master-data", tags=["Vendors & PO/SO Orders"])
 
@@ -1039,6 +1040,7 @@ def permanently_delete_vendor(vendor_id: str, request: Request, db: Db, user: Cu
                 f"{'record' if remaining_services == 1 else 'records'}. Permanently delete those services first."
             ),
         )
+    assert_no_dependencies(db, vendor, user.organization_id, entity_label=f"vendor {vendor.vendor_code}")
     _audit(
         db,
         user=user,
@@ -1179,6 +1181,8 @@ def bulk_permanent_delete_vendors(
                 status_code=409,
                 detail=f"Vendor {vendor.vendor_code} is still referenced by {remaining_services} service rows",
             )
+    for vendor in vendors:
+        assert_no_dependencies(db, vendor, user.organization_id, entity_label=f"vendor {vendor.vendor_code}")
     for vendor in vendors:
         _audit(
             db,

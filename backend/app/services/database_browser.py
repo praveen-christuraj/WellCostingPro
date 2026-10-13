@@ -138,9 +138,16 @@ def _scope_for(table: Table, seen: frozenset[str] = frozenset()) -> tuple[Callab
         return (lambda org: table.c.organization_id == org), "organization_id"
     if table.name in seen or len(seen) >= MAX_SCOPE_DEPTH:
         return None
-    for constraint in sorted(table.foreign_key_constraints, key=lambda item: item.name or ""):
-        if len(constraint.columns) != 1:
-            continue
+    column_order = {column.name: index for index, column in enumerate(table.columns)}
+    single_column_constraints = [constraint for constraint in table.foreign_key_constraints if len(constraint.columns) == 1]
+    for constraint in sorted(
+        single_column_constraints,
+        key=lambda item: (
+            column_order.get(next(iter(item.columns)).name, len(column_order)),
+            next(iter(item.columns)).name,
+            item.name or "",
+        ),
+    ):
         parent = list(constraint.columns)[0]
         reference = list(constraint.elements)[0].column
         resolved = _scope_for(reference.table, seen | {table.name})

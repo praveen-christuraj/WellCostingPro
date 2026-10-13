@@ -42,3 +42,4 @@ from app.models.catalogue import (
     Tangible,
     TangibleRevision,
 )
+from app.models.costing_set import UserCostingSet, UserCostingSetItem

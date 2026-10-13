@@ -22,6 +22,7 @@ from app.schemas.service_master import (
     normalize_provider_type,
 )
 from app.services import audit
+from app.services.dependencies import assert_no_dependencies
 
 router = APIRouter(prefix="/master-data/services", tags=["Master Data Management · Services"])
 
@@ -542,6 +543,7 @@ def permanently_delete_service(service_id: str, request: Request, db: Db, user: 
     service = _service_or_404(db, service_id, user.organization_id)
     if not service.is_deleted:
         raise HTTPException(status_code=409, detail="Only a deleted service can be permanently deleted")
+    assert_no_dependencies(db, service, user.organization_id, entity_label=f"service {service.service_code}")
     _audit_service(
         db,
         service=service,
@@ -611,6 +613,8 @@ def bulk_permanent_delete_services(
     user: Current,
 ) -> MasterDataBulkActionResponse:
     services = _services_for_ids(db, data.ids, user.organization_id, deleted=True)
+    for service in services:
+        assert_no_dependencies(db, service, user.organization_id, entity_label=f"service {service.service_code}")
     for service in services:
         _audit_service(
             db,

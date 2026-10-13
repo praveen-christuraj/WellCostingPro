@@ -20,7 +20,15 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.api.deps import Current, Db, granted, owner, require
 from app.models import (
     Activity,
+    Afe,
     AuditLog,
+    DailyCostBaseline,
+    DailyCostConsumableLine,
+    DailyCostEntry,
+    DailyCostOtherExpenseLine,
+    DailyCostServiceLine,
+    DailyCostTangibleLine,
+    DailyCostWellRateBaseline,
     HoleSection,
     Phase,
     Rig,
@@ -396,6 +404,57 @@ def _count_children(db: Session, model: Any, organization_id: str, **filters: An
     return int(db.scalar(statement) or 0)
 
 
+def _counts_by_parent(
+    db: Session,
+    model: Any,
+    parent_column: Any,
+    organization_id: str,
+    parent_ids: list[str],
+    *,
+    active_only: bool = False,
+) -> dict[str, int]:
+    if not parent_ids:
+        return {}
+    statement = select(parent_column, func.count(model.id)).where(
+        model.organization_id == organization_id,
+        parent_column.in_(parent_ids),
+    )
+    if active_only and hasattr(model, "is_deleted"):
+        statement = statement.where(model.is_deleted.is_(False))
+    return {str(parent_id): int(count) for parent_id, count in db.execute(statement.group_by(parent_column)).all()}
+
+
+def _daily_cost_line_counts_by_sub_activity(
+    db: Session,
+    organization_id: str,
+    sub_activity_ids: list[str],
+    *,
+    active_entries_only: bool,
+) -> dict[str, int]:
+    if not sub_activity_ids:
+        return {}
+    counts: dict[str, int] = defaultdict(int)
+    line_models = (
+        DailyCostServiceLine,
+        DailyCostConsumableLine,
+        DailyCostTangibleLine,
+        DailyCostOtherExpenseLine,
+    )
+    for model in line_models:
+        statement = select(model.sub_activity_id, func.count(model.id)).where(
+            model.organization_id == organization_id,
+            model.sub_activity_id.in_(sub_activity_ids),
+        )
+        if active_entries_only:
+            statement = statement.join(DailyCostEntry, model.entry_id == DailyCostEntry.id).where(
+                DailyCostEntry.organization_id == organization_id,
+                DailyCostEntry.is_deleted.is_(False),
+            )
+        for sub_activity_id, count in db.execute(statement.group_by(model.sub_activity_id)).all():
+            counts[str(sub_activity_id)] += int(count)
+    return dict(counts)
+
+
 def _code_conflict_message(entity: str, code: str, *, deleted: bool = False) -> str:
     if deleted:
         return f"{entity} code '{code}' is retained in Deleted Entries; restore or permanently delete it first"
@@ -678,10 +737,22 @@ def update_rig(rig_id: str, data: RigUpdate, request: Request, db: Db, user: Cur
 def soft_delete_rig(rig_id: str, request: Request, db: Db, user: Current) -> RigOut:
     rig = _rig_or_404(db, rig_id, user.organization_id, include_deleted=False)
     active_wells = _count_children(db, Well, user.organization_id, rig_id=rig.id, is_deleted=False)
+    active_afes = _count_children(db, Afe, user.organization_id, rig_id=rig.id, is_deleted=False)
+    active_daily_sheets = _count_children(db, DailyCostEntry, user.organization_id, rig_id=rig.id, is_deleted=False)
+    dependencies = []
     if active_wells:
+        dependencies.append(f"{active_wells} active well(s)")
+    if active_afes:
+        dependencies.append(f"{active_afes} active AFE(s)")
+    if active_daily_sheets:
+        dependencies.append(f"{active_daily_sheets} active daily-cost sheet(s)")
+    if dependencies:
         raise HTTPException(
             status_code=409,
-            detail=f"Rig {rig.rig_code} has {active_wells} active well(s). Move its wells to Deleted Entries first.",
+            detail=(
+                f"Rig {rig.rig_code} still has {', '.join(dependencies)}. "
+                "Move dependent wells and costing records to their respective Deleted Entries first."
+            ),
         )
     rig.is_deleted = True
     rig.deleted_at = _now()
@@ -728,10 +799,22 @@ def permanently_delete_rig(rig_id: str, request: Request, db: Db, user: Current)
     if not rig.is_deleted:
         raise HTTPException(status_code=409, detail="Move the rig to Deleted Entries before permanent deletion")
     wells = _count_children(db, Well, user.organization_id, rig_id=rig.id)
-    if wells:
+    afes = _count_children(db, Afe, user.organization_id, rig_id=rig.id)
+    daily_sheets = _count_children(db, DailyCostEntry, user.organization_id, rig_id=rig.id)
+    if wells or afes or daily_sheets:
+        dependencies = []
+        if wells:
+            dependencies.append(f"{wells} well record(s)")
+        if afes:
+            dependencies.append(f"{afes} AFE record(s)")
+        if daily_sheets:
+            dependencies.append(f"{daily_sheets} daily-cost sheet(s)")
         raise HTTPException(
             status_code=409,
-            detail=f"Rig {rig.rig_code} still has {wells} well record(s). Permanently delete the wells first.",
+            detail=(
+                f"Rig {rig.rig_code} retains {', '.join(dependencies)}. Permanently delete the dependent "
+                "wells, AFEs, and daily-cost sheets first in their respective Deleted Entries."
+            ),
         )
     _record_audit(
         db, user=user, action="permanent_delete", entity_type="rig", record_id=rig.id,
@@ -750,22 +833,25 @@ def permanently_delete_rig(rig_id: str, request: Request, db: Db, user: Current)
 )
 def bulk_delete_rigs(data: RigWellIDs, request: Request, db: Db, user: Current) -> RigWellBulkActionResponse:
     rigs = _records_for_ids(db, Rig, data.ids, user.organization_id, deleted=False)
-    counts = {
-        rig_id: int(value)
-        for rig_id, value in db.execute(
-            select(Well.rig_id, func.count(Well.id))
-            .where(
-                Well.organization_id == user.organization_id,
-                Well.rig_id.in_(data.ids),
-                Well.is_deleted.is_(False),
-            )
-            .group_by(Well.rig_id)
-        ).all()
-    }
-    blocked = [(rig, counts.get(rig.id, 0)) for rig in rigs if counts.get(rig.id, 0)]
+    rig_ids = [rig.id for rig in rigs]
+    well_counts = _counts_by_parent(db, Well, Well.rig_id, user.organization_id, rig_ids, active_only=True)
+    afe_counts = _counts_by_parent(db, Afe, Afe.rig_id, user.organization_id, rig_ids, active_only=True)
+    daily_counts = _counts_by_parent(db, DailyCostEntry, DailyCostEntry.rig_id, user.organization_id, rig_ids, active_only=True)
+    blocked = [
+        (rig, [
+            *( [f"{well_counts[rig.id]} active well(s)"] if well_counts.get(rig.id) else [] ),
+            *( [f"{afe_counts[rig.id]} active AFE(s)"] if afe_counts.get(rig.id) else [] ),
+            *( [f"{daily_counts[rig.id]} active daily-cost sheet(s)"] if daily_counts.get(rig.id) else [] ),
+        ])
+        for rig in rigs
+        if well_counts.get(rig.id) or afe_counts.get(rig.id) or daily_counts.get(rig.id)
+    ]
     if blocked:
-        rig, count = blocked[0]
-        raise HTTPException(status_code=409, detail=f"Rig {rig.rig_code} has {count} active well(s); delete its wells first")
+        rig, dependencies = blocked[0]
+        raise HTTPException(
+            status_code=409,
+            detail=f"Rig {rig.rig_code} still has {', '.join(dependencies)}. Delete or move each dependent record first.",
+        )
     deleted_at = _now()
     for rig in rigs:
         rig.is_deleted = True
@@ -1034,12 +1120,21 @@ def soft_delete_well(well_id: str, request: Request, db: Db, user: Current) -> W
     active_children = _count_children(
         db, WellSubActivity, user.organization_id, well_id=well.id, is_deleted=False
     )
+    active_afes = _count_children(db, Afe, user.organization_id, well_id=well.id, is_deleted=False)
+    active_daily_sheets = _count_children(db, DailyCostEntry, user.organization_id, well_id=well.id, is_deleted=False)
+    dependencies = []
     if active_children:
+        dependencies.append(f"{active_children} active sub activity record(s)")
+    if active_afes:
+        dependencies.append(f"{active_afes} active AFE(s)")
+    if active_daily_sheets:
+        dependencies.append(f"{active_daily_sheets} active daily-cost sheet(s)")
+    if dependencies:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Well {well.well_code} has {active_children} active sub activity record(s). "
-                "Move those sub activities to Deleted Entries first."
+                f"Well {well.well_code} still has {', '.join(dependencies)}. "
+                "Move dependent sub activities and costing records to their respective Deleted Entries first."
             ),
         )
     well.is_deleted = True
@@ -1088,10 +1183,27 @@ def permanently_delete_well(well_id: str, request: Request, db: Db, user: Curren
     if not well.is_deleted:
         raise HTTPException(status_code=409, detail="Move the well to Deleted Entries before permanent deletion")
     sub_activities = _count_children(db, WellSubActivity, user.organization_id, well_id=well.id)
-    if sub_activities:
+    afes = _count_children(db, Afe, user.organization_id, well_id=well.id)
+    daily_sheets = _count_children(db, DailyCostEntry, user.organization_id, well_id=well.id)
+    afe_baselines = _count_children(db, DailyCostBaseline, user.organization_id, well_id=well.id)
+    rate_baselines = _count_children(db, DailyCostWellRateBaseline, user.organization_id, well_id=well.id)
+    if sub_activities or afes or daily_sheets or afe_baselines or rate_baselines:
+        dependencies = []
+        if sub_activities:
+            dependencies.append(f"{sub_activities} sub activity record(s)")
+        if afes:
+            dependencies.append(f"{afes} AFE record(s)")
+        if daily_sheets:
+            dependencies.append(f"{daily_sheets} daily-cost sheet(s)")
+        if afe_baselines or rate_baselines:
+            dependencies.append("retained daily-cost baseline history")
         raise HTTPException(
             status_code=409,
-            detail=f"Well {well.well_code} retains {sub_activities} sub activity record(s). Permanently delete them first.",
+            detail=(
+                f"Well {well.well_code} retains {', '.join(dependencies)}. Permanently delete linked "
+                "sub activities, AFEs, and daily-cost sheets first. Immutable daily-cost baselines are kept "
+                "for audit, so a well with baseline history must remain in Deleted Entries."
+            ),
         )
     _record_audit(
         db, user=user, action="permanent_delete", entity_type="well", record_id=well.id,
@@ -1110,22 +1222,31 @@ def permanently_delete_well(well_id: str, request: Request, db: Db, user: Curren
 )
 def bulk_delete_wells(data: RigWellIDs, request: Request, db: Db, user: Current) -> RigWellBulkActionResponse:
     wells = _records_for_ids(db, Well, data.ids, user.organization_id, deleted=False)
-    counts = {
-        well_id: int(value)
-        for well_id, value in db.execute(
-            select(WellSubActivity.well_id, func.count(WellSubActivity.id))
-            .where(
-                WellSubActivity.organization_id == user.organization_id,
-                WellSubActivity.well_id.in_(data.ids),
-                WellSubActivity.is_deleted.is_(False),
-            )
-            .group_by(WellSubActivity.well_id)
-        ).all()
-    }
-    blocked = [(well, counts.get(well.id, 0)) for well in wells if counts.get(well.id, 0)]
+    well_ids = [well.id for well in wells]
+    sub_activity_counts = _counts_by_parent(
+        db, WellSubActivity, WellSubActivity.well_id, user.organization_id, well_ids, active_only=True
+    )
+    afe_counts = _counts_by_parent(db, Afe, Afe.well_id, user.organization_id, well_ids, active_only=True)
+    daily_counts = _counts_by_parent(
+        db, DailyCostEntry, DailyCostEntry.well_id, user.organization_id, well_ids, active_only=True
+    )
+    blocked = []
+    for well in wells:
+        dependencies = []
+        if sub_activity_counts.get(well.id):
+            dependencies.append(f"{sub_activity_counts[well.id]} active sub activity record(s)")
+        if afe_counts.get(well.id):
+            dependencies.append(f"{afe_counts[well.id]} active AFE(s)")
+        if daily_counts.get(well.id):
+            dependencies.append(f"{daily_counts[well.id]} active daily-cost sheet(s)")
+        if dependencies:
+            blocked.append((well, dependencies))
     if blocked:
-        well, count = blocked[0]
-        raise HTTPException(status_code=409, detail=f"Well {well.well_code} has {count} active sub activity record(s); delete them first")
+        well, dependencies = blocked[0]
+        raise HTTPException(
+            status_code=409,
+            detail=f"Well {well.well_code} still has {', '.join(dependencies)}. Delete or move each dependent record first.",
+        )
     deleted_at = _now()
     for well in wells:
         well.is_deleted = True
@@ -1629,6 +1750,17 @@ def soft_delete_sub_activity(
     record = _sub_activity_or_404(
         db, record_id, user.organization_id, well_id=well.id, include_deleted=False
     )
+    costing_lines = _daily_cost_line_counts_by_sub_activity(
+        db, user.organization_id, [record.id], active_entries_only=True
+    ).get(record.id, 0)
+    if costing_lines:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Sub activity {record.sub_activity_code} is used by {costing_lines} line(s) on active daily-cost sheets. "
+                "Delete or complete those daily-cost sheets before moving the sub activity to Deleted Entries."
+            ),
+        )
     record.is_deleted = True
     record.deleted_at = _now()
     _record_audit(
@@ -1673,6 +1805,17 @@ def permanently_delete_sub_activity(record_id: str, request: Request, db: Db, us
     record = _sub_activity_or_404(db, record_id, user.organization_id)
     if not record.is_deleted:
         raise HTTPException(status_code=409, detail="Move the sub activity to Deleted Entries before permanent deletion")
+    costing_lines = _daily_cost_line_counts_by_sub_activity(
+        db, user.organization_id, [record.id], active_entries_only=False
+    ).get(record.id, 0)
+    if costing_lines:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Sub activity {record.sub_activity_code} is retained by {costing_lines} daily-cost line(s). "
+                "Permanently delete the linked daily-cost sheets first; submitted and deleted sheets keep their line history."
+            ),
+        )
     label = f"{record.well.well_code} / {record.sub_activity_code}"
     _record_audit(
         db, user=user, action="permanent_delete", entity_type="well_sub_activity", record_id=record.id,
@@ -1711,6 +1854,19 @@ def bulk_delete_sub_activities(
         raise HTTPException(status_code=422, detail="Duplicate record IDs are not allowed")
     if len(records) != len(data.ids):
         raise HTTPException(status_code=404, detail="One or more sub activities do not belong to the selected well")
+    costing_line_counts = _daily_cost_line_counts_by_sub_activity(
+        db, user.organization_id, [record.id for record in records], active_entries_only=True
+    )
+    blocked = [(record, costing_line_counts.get(record.id, 0)) for record in records if costing_line_counts.get(record.id)]
+    if blocked:
+        record, count = blocked[0]
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Sub activity {record.sub_activity_code} is used by {count} line(s) on active daily-cost sheets. "
+                "Delete or complete those sheets before moving selected sub activities to Deleted Entries."
+            ),
+        )
     deleted_at = _now()
     for record in records:
         record.is_deleted = True
@@ -2004,8 +2160,58 @@ def bulk_permanently_delete(
     selected_rigs = _selected_ids(records, "rig")
     selected_wells = _selected_ids(records, "well")
     selected_sub_activities = _selected_ids(records, "well_sub_activity")
+    selected_rig_ids = [record.id for record in records.get("rig", [])]
+    selected_well_ids = [record.id for record in records.get("well", [])]
+    rig_afe_counts = _counts_by_parent(db, Afe, Afe.rig_id, user.organization_id, selected_rig_ids)
+    rig_daily_counts = _counts_by_parent(
+        db, DailyCostEntry, DailyCostEntry.rig_id, user.organization_id, selected_rig_ids
+    )
+    well_afe_counts = _counts_by_parent(db, Afe, Afe.well_id, user.organization_id, selected_well_ids)
+    well_daily_counts = _counts_by_parent(
+        db, DailyCostEntry, DailyCostEntry.well_id, user.organization_id, selected_well_ids
+    )
+    well_baseline_counts = _counts_by_parent(
+        db, DailyCostBaseline, DailyCostBaseline.well_id, user.organization_id, selected_well_ids
+    )
+    well_rate_baseline_counts = _counts_by_parent(
+        db, DailyCostWellRateBaseline, DailyCostWellRateBaseline.well_id, user.organization_id, selected_well_ids
+    )
+    sub_activity_line_counts = _daily_cost_line_counts_by_sub_activity(
+        db,
+        user.organization_id,
+        [record.id for record in records.get("well_sub_activity", [])],
+        active_entries_only=False,
+    )
+    blocked_sub_activities = [
+        (record, sub_activity_line_counts.get(record.id, 0))
+        for record in records.get("well_sub_activity", [])
+        if sub_activity_line_counts.get(record.id)
+    ]
+    if blocked_sub_activities:
+        record, count = blocked_sub_activities[0]
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Sub activity {record.sub_activity_code} is retained by {count} daily-cost line(s). "
+                "Permanently delete the linked daily-cost sheets first; historical line records are retained "
+                "until their sheet is purged."
+            ),
+        )
 
     for rig in records.get("rig", []):
+        if rig_afe_counts.get(rig.id) or rig_daily_counts.get(rig.id):
+            dependencies = []
+            if rig_afe_counts.get(rig.id):
+                dependencies.append(f"{rig_afe_counts[rig.id]} AFE record(s)")
+            if rig_daily_counts.get(rig.id):
+                dependencies.append(f"{rig_daily_counts[rig.id]} daily-cost sheet(s)")
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Rig {rig.rig_code} retains {', '.join(dependencies)}. Permanently delete those records "
+                    "in AFE Management or Daily Cost Management first."
+                ),
+            )
         remaining_wells = list(
             db.scalars(
                 select(Well.id).where(
@@ -2017,6 +2223,27 @@ def bulk_permanently_delete(
         if any(well_id not in selected_wells for well_id in remaining_wells):
             raise HTTPException(status_code=409, detail=f"Permanently delete every well under rig {rig.rig_code} first")
     for well in records.get("well", []):
+        if (
+            well_afe_counts.get(well.id)
+            or well_daily_counts.get(well.id)
+            or well_baseline_counts.get(well.id)
+            or well_rate_baseline_counts.get(well.id)
+        ):
+            dependencies = []
+            if well_afe_counts.get(well.id):
+                dependencies.append(f"{well_afe_counts[well.id]} AFE record(s)")
+            if well_daily_counts.get(well.id):
+                dependencies.append(f"{well_daily_counts[well.id]} daily-cost sheet(s)")
+            if well_baseline_counts.get(well.id) or well_rate_baseline_counts.get(well.id):
+                dependencies.append("retained daily-cost baseline history")
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Well {well.well_code} retains {', '.join(dependencies)}. Permanently delete linked AFEs "
+                    "and daily-cost sheets first. Immutable daily-cost baselines are retained for audit, so "
+                    "this well must remain in Deleted Entries."
+                ),
+            )
         remaining_sub_activities = list(
             db.scalars(
                 select(WellSubActivity.id).where(

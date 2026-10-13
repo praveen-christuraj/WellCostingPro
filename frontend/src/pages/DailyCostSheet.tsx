@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useParams } from 'react-router-dom'
 import {
   PrintOutlined, AddRounded, ArrowBackRounded, CloudUploadOutlined, ContentCopyOutlined, DeleteOutlineRounded,
-  DownloadOutlined, EditOutlined, LockOutlined, RefreshRounded, SaveOutlined, SendRounded, UndoRounded,
+  DownloadOutlined, EditOutlined, LockOutlined, PlaylistAddRounded, RefreshRounded, SaveOutlined, SendRounded, UndoRounded,
 } from '@mui/icons-material'
 import {
   Alert, Box, Button, CircularProgress, LinearProgress, Paper, Table, TableBody, TableCell,
@@ -12,17 +12,21 @@ import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag, useUnsavedChangesGuard } from '../components/Common'
 import { DailyCostLineDialog, type DailyCostLineKind, type EditableDailyCostLine } from '../components/daily-cost/DailyCostLineDialog'
+import { DailyCostBulkScopeDialog } from '../components/daily-cost/DailyCostBulkScopeDialog'
+import { CostingSetPickerDialog } from '../components/CostingSetPickerDialog'
 import { useCostPrint } from '../components/daily-cost/DailyCostPrintSheet'
 import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import { downloadTemplate, parseImportFile, type ImportRow } from '../lib/export'
 import {
-  DAILY_COST_STATUSES, DAILY_ONE_TIME_CATEGORIES, dailyMoney, displayDate, entryQuery, otherExpenseLabel, saveFromDay,
+  DAILY_COST_STATUSES, DAILY_ONE_TIME_CATEGORIES, dailyMoney, deriveClassification, displayDate, entryQuery, otherExpenseLabel, saveFromDay,
   type DailyCostBaseline, type DailyCostComparisonLine, type DailyCostDay, type DailyCostGroup,
   type AnyDailyCostLine, type DailyCostImportResult, type DailyCostPreview, type DailyCostReference,
-  type DailyCostSavePayload,
+  type DailyCostSavePayload, type DailyCostServiceInput, type DailyQuantityUnit,
+  type ConsumableCategory, type ConsumableKind,
 } from '../lib/dailyCost'
+import type { CostingSet, CostingSetGroup } from '../lib/costingSets'
 
 /** Where each dialog kind lives inside the save payload. */
 type LineGroupKey = 'services' | 'consumables' | 'tangibles' | 'other_expenses'
@@ -61,6 +65,7 @@ export default function DailyCostSheet() {
   const [printError, setPrintError] = useState('')
   const { entryId = '' } = useParams()
   const { can } = useAuth()
+  const canReadCostingSets = can('costing-sets:read')
   const [day, setDay] = useState<DailyCostDay | null>(null)
   const [baseline, setBaseline] = useState<DailyCostBaseline | null>(null)
   const [reference, setReference] = useState<DailyCostReference | null>(null)
@@ -90,7 +95,17 @@ export default function DailyCostSheet() {
   const [previousBusy, setPreviousBusy] = useState(false)
   const [previousError, setPreviousError] = useState('')
   const [copyBusy, setCopyBusy] = useState(false)
+  const [costingSets, setCostingSets] = useState<CostingSet[]>([])
+  const [costingSetError, setCostingSetError] = useState('')
+  const [setPickerGroup, setSetPickerGroup] = useState<CostingSetGroup | null>(null)
+  const [selectedServiceIndices, setSelectedServiceIndices] = useState<number[]>([])
+  const [serviceSelectionResetKey, setServiceSelectionResetKey] = useState(0)
+  const [bulkScopeOpen, setBulkScopeOpen] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
+  const clearServiceSelection = () => {
+    setSelectedServiceIndices([])
+    setServiceSelectionResetKey(value => value + 1)
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -105,6 +120,8 @@ export default function DailyCostSheet() {
       setBaseline(baselineData)
       setReference(referenceData)
       setPayload(saveFromDay(dayData))
+      setSelectedServiceIndices([])
+      setServiceSelectionResetKey(value => value + 1)
       setPreview(null)
       setPreviewError('')
       setSaveError('')
@@ -117,6 +134,32 @@ export default function DailyCostSheet() {
 
   useEffect(() => { void load() }, [load])
 
+  useEffect(() => {
+    if (!canReadCostingSets) {
+      setCostingSets([])
+      setCostingSetError('')
+      return
+    }
+    let active = true
+    setCostingSetError('')
+    api<CostingSet[]>('/costing-sets')
+      .then(records => { if (active) setCostingSets(records) })
+      .catch(caught => {
+        if (active) {
+          setCostingSets([])
+          setCostingSetError(caught instanceof Error ? caught.message : 'Costing sets could not be loaded')
+        }
+      })
+    return () => { active = false }
+  }, [canReadCostingSets])
+
+  const selectedServiceLines = useMemo(
+    () => selectedServiceIndices.flatMap(index => {
+      const line = payload.services[index]
+      return line ? [{ index, line }] : []
+    }),
+    [selectedServiceIndices, payload.services],
+  )
   const originalPayload = useMemo(() => day ? saveFromDay(day) : null, [day])
   const dirty = Boolean(originalPayload && JSON.stringify(payload) !== JSON.stringify(originalPayload))
   const editable = Boolean(day && day.entry.status === 'draft' && can('daily-cost:update'))
@@ -180,6 +223,7 @@ export default function DailyCostSheet() {
       else rows[index] = line
       return { ...current, [group]: rows }
     })
+    if (group === 'services') clearServiceSelection()
     setPreview(null)
     setLineEditor(null)
     setNotice(group === 'other_expenses'
@@ -192,9 +236,23 @@ export default function DailyCostSheet() {
     const group = GROUP_KEY[lineDelete.kind]
     const { index } = lineDelete
     setPayload(current => ({ ...current, [group]: current[group].filter((_row, rowIndex) => rowIndex !== index) }))
+    if (group === 'services') clearServiceSelection()
     setPreview(null)
     setLineDelete(null)
     setNotice('Line removed from the draft. Save to commit the change.')
+  }
+
+  const applyBulkServiceScope = (updates: { index: number; line: DailyCostServiceInput }[]) => {
+    const updateByIndex = new Map(updates.map(item => [item.index, item.line]))
+    setPayload(current => ({
+      ...current,
+      services: current.services.map((line, index) => updateByIndex.get(index) ?? line),
+    }))
+    clearServiceSelection()
+    setBulkScopeOpen(false)
+    setPreview(null)
+    setPreviewError('')
+    setNotice(`${updates.length} service line${updates.length === 1 ? '' : 's'} updated in the draft. Preview will validate the changes; save to commit them.`)
   }
 
   const save = async (): Promise<boolean> => {
@@ -345,6 +403,157 @@ export default function DailyCostSheet() {
     await api('/daily-cost/export-audit', { method: 'POST', body: body({
       module: 'day-sheet', format, record_count: recordCount, include_deleted: false,
     }) })
+  }
+
+  const applyCostingSet = (costingSet: CostingSet) => {
+    if (!day || !baseline || !reference) return
+    const available = costingSet.items.filter(item => item.is_available)
+    let skipped = costingSet.items.length - available.length
+    let addedCount = 0
+    const nextServices = payload.services.slice()
+    const nextConsumables = payload.consumables.slice()
+    const nextTangibles = payload.tangibles.slice()
+    const preferredActivityId = payload.services[0]?.activity_id
+      ?? reference.activities.find(item => deriveClassification(item) === 'Planned')?.id
+      ?? reference.activities[0]?.id
+      ?? ''
+    const activity = reference.activities.find(item => item.id === preferredActivityId)
+    const subActivity = reference.sub_activities.find(item =>
+      item.well_id === day.entry.well_id && item.activity_id === preferredActivityId,
+    )
+    const defaultSection = baseline.sections[0]
+    const defaultPhase = defaultSection?.phases[0]
+    const duplicateServices = new Set(nextServices.map(line => `${line.service_id}:${line.sub_activity_id ?? ''}`))
+    const duplicateCatalogueItems = new Set([
+      ...nextConsumables.map(line => `${line.item_kind}:${line.item_id}:${line.activity_id}:${line.sub_activity_id ?? ''}`),
+      ...nextTangibles.map(line => `tangible:${line.tangible_id}:${line.activity_id}:${line.sub_activity_id ?? ''}`),
+    ])
+
+    if (!activity || !subActivity) {
+      skipped += available.length
+    } else if (deriveClassification(activity) !== 'Planned' && !subActivity.responsible_party.trim() && costingSet.item_group !== 'services') {
+      skipped += available.length
+    } else if (costingSet.item_group === 'services') {
+      for (const item of available) {
+        const service = reference.services.find(option => option.id === item.item_id)
+        const rate = baseline.service_rates.find(option => option.service_id === item.item_id)
+        if (!service || !rate) { skipped += 1; continue }
+        const sectionId = rate.hole_section_id ?? defaultSection?.hole_section_id ?? null
+        const phaseId = rate.phase_id ?? (sectionId === defaultSection?.hole_section_id ? defaultPhase?.phase_id : null) ?? null
+        const duplicateKey = `${service.id}:${subActivity.id}`
+        const vendor = service.vendor_id ? reference.vendors.find(option => option.id === service.vendor_id) : null
+        const category = (rate.charge_category || 'Operation') as DailyCostServiceInput['charge_category']
+        const quantityUnit: DailyQuantityUnit = rate.charging_basis === 'Per Service Rate' ? 'service'
+          : rate.charging_basis === 'Per Section Rate' ? 'section'
+            : DAILY_ONE_TIME_CATEGORIES.includes(category) ? 'unit' : 'days'
+        if (duplicateServices.has(duplicateKey)
+          || !baseline.exchange_rates[rate.currency]
+          || (rate.charging_basis !== 'Day Rate' && !sectionId)
+          || (deriveClassification(activity) !== 'Planned' && !vendor && !service.vendor_name && !subActivity.responsible_party)) {
+          skipped += 1
+          continue
+        }
+        nextServices.push({
+          id: null,
+          activity_id: activity.id,
+          hole_section_id: sectionId,
+          phase_id: sectionId ? phaseId : null,
+          sub_activity_id: subActivity.id,
+          vendor_id: vendor?.id ?? null,
+          party_name: vendor?.vendor_name || service.vendor_name || subActivity.responsible_party || '',
+          quantity: '1',
+          currency: rate.currency,
+          override_rate: null,
+          override_reason: '',
+          remarks: `Added from costing set ${costingSet.name}`,
+          service_id: service.id,
+          baseline_service_rate_id: rate.id,
+          charging_basis: rate.charging_basis,
+          charge_category: category,
+          quantity_unit: quantityUnit,
+        })
+        duplicateServices.add(duplicateKey)
+        addedCount += 1
+      }
+    } else if (costingSet.item_group === 'tangibles') {
+      for (const item of available) {
+        const catalogueItem = reference.catalogue_items.find(option => option.item_kind === 'tangible' && option.id === item.item_id)
+        const snapshot = baseline.catalogue_rates.find(option => option.item_kind === 'tangible' && option.id === item.item_id)
+        const duplicateKey = `tangible:${item.item_id}:${activity.id}:${subActivity.id}`
+        if (!catalogueItem || !snapshot || duplicateCatalogueItems.has(duplicateKey) || !baseline.exchange_rates[snapshot.currency]) {
+          skipped += 1
+          continue
+        }
+        nextTangibles.push({
+          id: null,
+          activity_id: activity.id,
+          hole_section_id: defaultSection?.hole_section_id ?? null,
+          phase_id: defaultPhase?.phase_id ?? null,
+          sub_activity_id: subActivity.id,
+          vendor_id: null,
+          party_name: subActivity.responsible_party || '',
+          quantity: '1',
+          currency: snapshot.currency,
+          override_rate: null,
+          override_reason: '',
+          remarks: `Added from costing set ${costingSet.name}`,
+          tangible_id: catalogueItem.id,
+        })
+        duplicateCatalogueItems.add(duplicateKey)
+        addedCount += 1
+      }
+    } else {
+      const categoryByKind: Record<ConsumableKind, ConsumableCategory> = {
+        mud_chemical: 'Mud Chemicals', cement_additive: 'Cement Additives', fuel: 'Fuel', drill_bit: 'Drill Bits',
+      }
+      for (const item of available) {
+        if (item.item_kind === 'service' || item.item_kind === 'tangible') { skipped += 1; continue }
+        const kind = item.item_kind as ConsumableKind
+        const catalogueItem = reference.catalogue_items.find(option => option.item_kind === kind && option.id === item.item_id)
+        const snapshot = baseline.catalogue_rates.find(option => option.item_kind === kind && option.id === item.item_id)
+        const duplicateKey = `${kind}:${item.item_id}:${activity.id}:${subActivity.id}`
+        if (!catalogueItem || !snapshot || duplicateCatalogueItems.has(duplicateKey)
+          || !defaultSection || !baseline.exchange_rates[snapshot.currency]) {
+          skipped += 1
+          continue
+        }
+        nextConsumables.push({
+          id: null,
+          activity_id: activity.id,
+          hole_section_id: defaultSection.hole_section_id,
+          phase_id: defaultPhase?.phase_id ?? null,
+          sub_activity_id: subActivity.id,
+          vendor_id: null,
+          party_name: subActivity.responsible_party || '',
+          quantity: '1',
+          currency: snapshot.currency,
+          override_rate: null,
+          override_reason: '',
+          remarks: `Added from costing set ${costingSet.name}`,
+          category: categoryByKind[kind],
+          item_kind: kind,
+          item_id: catalogueItem.id,
+        })
+        duplicateCatalogueItems.add(duplicateKey)
+        addedCount += 1
+      }
+    }
+
+    if (addedCount) {
+      if (costingSet.item_group === 'services') clearServiceSelection()
+      setPayload(current => ({
+        ...current,
+        services: nextServices,
+        consumables: nextConsumables,
+        tangibles: nextTangibles,
+      }))
+      setPreview(null)
+      setPreviewError('')
+      setNotice(`${addedCount} line${addedCount === 1 ? '' : 's'} added from “${costingSet.name}”.${skipped ? ` ${skipped} unavailable, duplicate or unpriced item(s) skipped.` : ''} Review the draft, then save.`)
+    } else {
+      setNotice(`No lines were added from “${costingSet.name}”. ${skipped} item(s) were unavailable, duplicated, missing a locked AFE rate or unsupported by the current well setup.`)
+    }
+    setSetPickerGroup(null)
   }
 
   if (loading && !day) return <Box py={12} display="grid" sx={{ placeItems: 'center' }}><CircularProgress/></Box>
@@ -660,6 +869,7 @@ export default function DailyCostSheet() {
     />
 
     {notice && <Alert severity="success" sx={{ mb: 1.5 }} onClose={() => setNotice('')}>{notice}</Alert>}
+    {costingSetError && <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setCostingSetError('')}>{costingSetError}</Alert>}
     <ErrorMessage message={saveError}/>
     {previewError && <Alert severity="error" sx={{ mb: 1.5 }} action={can('daily-cost:update') ? <Button color="inherit" size="small" onClick={() => { setPreviewError(''); setPreview(null); setPreviewRetry(value => value + 1) }}>Retry preview</Button> : undefined}>{previewError}</Alert>}
     {entry.status === 'submitted' && <Alert severity="info" icon={<LockOutlined/>} sx={{ mb: 1.5 }}>
@@ -724,9 +934,27 @@ export default function DailyCostSheet() {
     </Paper>
 
     <Box display="grid" gap={1.8}>
-      <LineGroup title="Services" subtitle="AFE Day Rate, Per Service Rate and Per Section Rate charges. Hours convert to a portion of the locked day rate." count={payload.services.length} rows={services} columns={makeColumns('service')} editable={editable} canExport={canExport} onExport={recordExport} onAdd={() => setLineEditor({ kind: 'service', index: null })} onImport={openImport}/>
-      <LineGroup title="Consumables" subtitle="Itemized chemical, additive, fuel and drill-bit usage, reconciled to either item or category-level AFE allowances." count={payload.consumables.length} rows={consumables} columns={makeColumns('consumable')} editable={editable} canExport={canExport} onExport={recordExport} onAdd={() => setLineEditor({ kind: 'consumable', index: null })} onImport={openImport}/>
-      <LineGroup title="Tangibles" subtitle="Actual tangible usage priced from the locked catalogue or a justified daily override." count={payload.tangibles.length} rows={tangibles} columns={makeColumns('tangible')} editable={editable} canExport={canExport} onExport={recordExport} onAdd={() => setLineEditor({ kind: 'tangible', index: null })} onImport={openImport}/>
+      <LineGroup
+        title="Services" subtitle="AFE Day Rate, Per Service Rate and Per Section Rate charges. Hours convert to a portion of the locked day rate."
+        count={payload.services.length} rows={services} columns={makeColumns('service')} editable={editable} canExport={canExport}
+        onExport={recordExport} onAdd={() => setLineEditor({ kind: 'service', index: null })} onImport={openImport}
+        selectable selectedCount={selectedServiceLines.length} selectionResetKey={serviceSelectionResetKey}
+        onSelectionChange={rows => setSelectedServiceIndices(rows.map(row => row.lineIndex))}
+        onBulkEdit={() => setBulkScopeOpen(true)} bulkEditLabel="Assign Activity / scope"
+        onAddFromSet={canReadCostingSets ? () => setSetPickerGroup('services') : undefined}
+      />
+      <LineGroup
+        title="Consumables" subtitle="Itemized chemical, additive, fuel and drill-bit usage, reconciled to either item or category-level AFE allowances."
+        count={payload.consumables.length} rows={consumables} columns={makeColumns('consumable')} editable={editable} canExport={canExport}
+        onExport={recordExport} onAdd={() => setLineEditor({ kind: 'consumable', index: null })} onImport={openImport}
+        onAddFromSet={canReadCostingSets ? () => setSetPickerGroup('consumables') : undefined}
+      />
+      <LineGroup
+        title="Tangibles" subtitle="Actual tangible usage priced from the locked catalogue or a justified daily override."
+        count={payload.tangibles.length} rows={tangibles} columns={makeColumns('tangible')} editable={editable} canExport={canExport}
+        onExport={recordExport} onAdd={() => setLineEditor({ kind: 'tangible', index: null })} onImport={openImport}
+        onAddFromSet={canReadCostingSets ? () => setSetPickerGroup('tangibles') : undefined}
+      />
       <LineGroup
         title="Other Expenses"
         subtitle="Unexpected charges — Lost In Hole, hole problems, fishing, claims. No AFE allowance: the amount is deducted from the AFE total and every line needs a remark."
@@ -783,6 +1011,25 @@ export default function DailyCostSheet() {
     {printSheet}
     <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={entry.well_id}/>
 
+    <DailyCostBulkScopeDialog
+      open={bulkScopeOpen && editable}
+      selections={selectedServiceLines}
+      allLines={payload.services}
+      baseline={baseline}
+      reference={reference}
+      wellId={entry.well_id}
+      onClose={() => setBulkScopeOpen(false)}
+      onApply={applyBulkServiceScope}
+    />
+    <CostingSetPickerDialog
+      open={setPickerGroup !== null && editable && canReadCostingSets}
+      group={setPickerGroup ?? 'services'}
+      destination="daily-cost"
+      sets={costingSets}
+      onClose={() => setSetPickerGroup(null)}
+      onApply={applyCostingSet}
+    />
+
     <DailyCostLineDialog
       open={Boolean(lineEditor)} kind={lineEditor?.kind ?? null}
       initialLine={(() => {
@@ -830,20 +1077,33 @@ export default function DailyCostSheet() {
   </>
 }
 
-function LineGroup({ title, subtitle, count, rows, columns, editable, canExport, onExport, onAdd, onImport, addLabel }: {
+function LineGroup({
+  title, subtitle, count, rows, columns, editable, canExport, onExport, onAdd, onImport, addLabel,
+  onAddFromSet, selectable = false, selectedCount = 0, onSelectionChange, onBulkEdit, bulkEditLabel,
+  selectionResetKey,
+}: {
   title: string; subtitle: string; count: number; rows: GridLine[]; columns: ColDef<GridLine>[]; editable: boolean
   canExport: boolean; onExport: (format: 'csv' | 'xlsx' | 'pdf', count: number) => Promise<void>
-  onAdd: () => void; onImport: () => void; addLabel?: string
+  onAdd: () => void; onImport: () => void; addLabel?: string; onAddFromSet?: () => void
+  selectable?: boolean; selectedCount?: number; onSelectionChange?: (rows: GridLine[]) => void
+  onBulkEdit?: () => void; bulkEditLabel?: string; selectionResetKey?: number
 }) {
   return <Paper variant="outlined" sx={{ borderRadius: 2, overflow: 'hidden' }}>
     <Box display="flex" justifyContent="space-between" alignItems="center" gap={1.5} flexWrap="wrap" p={1.8}>
       <Box><Typography fontWeight={800} fontSize={14}>{title} <Typography component="span" fontSize={12} color="text.secondary" fontWeight={600}>({count})</Typography></Typography><Typography color="text.secondary" fontSize={11.2} mt={.25}>{subtitle}</Typography></Box>
-      {editable && <Box display="flex" gap={.7}>
+      {editable && <Box display="flex" gap={.7} flexWrap="wrap">
         <Button size="small" onClick={onImport} startIcon={<CloudUploadOutlined sx={{ fontSize: 17 }}/>}>Import</Button>
+        {onAddFromSet && <Button size="small" variant="outlined" onClick={onAddFromSet} startIcon={<PlaylistAddRounded sx={{ fontSize: 17 }}/>}>Add from set</Button>}
+        {onBulkEdit && selectedCount > 0 && <Button size="small" variant="outlined" onClick={onBulkEdit} startIcon={<EditOutlined sx={{ fontSize: 16 }}/>}>{bulkEditLabel ?? 'Bulk edit'} ({selectedCount})</Button>}
         <Button size="small" variant="contained" onClick={onAdd} startIcon={<AddRounded sx={{ fontSize: 17 }}/>}>Add {addLabel ?? (title === 'Services' ? 'service' : title === 'Consumables' ? 'usage' : 'tangible')}</Button>
       </Box>}
     </Box>
-    <DataTable rows={rows} columns={columns} rowKey="id" searchPlaceholder={`Search ${title.toLowerCase()} by item, activity, vendor or status…`} exportName={`daily-cost-${title.toLowerCase()}`} canExport={canExport} onExport={canExport ? onExport : undefined}/>
+    <DataTable
+      rows={rows} columns={columns} rowKey="id"
+      searchPlaceholder={`Search ${title.toLowerCase()} by item, activity, vendor or status…`}
+      exportName={`daily-cost-${title.toLowerCase()}`} canExport={canExport} onExport={canExport ? onExport : undefined}
+      selectable={editable && selectable} onSelectionChange={onSelectionChange} selectionResetKey={selectionResetKey}
+    />
     {count === 0 && <Typography color="text.secondary" fontSize={11.5} textAlign="center" py={1.2}>No {title.toLowerCase()} recorded for this day yet.</Typography>}
   </Paper>
 }

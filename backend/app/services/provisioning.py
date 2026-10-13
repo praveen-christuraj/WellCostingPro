@@ -44,6 +44,7 @@ CAPABILITIES = {resource: actions for resource, actions in {
         "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
         "submit", "reopen",
     ),
+    "costing-sets": ("read", "create", "update", "delete", "import", "export"),
 }.items()}
 
 
