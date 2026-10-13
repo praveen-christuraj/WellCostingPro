@@ -45,6 +45,7 @@ def _upper(value: Any) -> Any:
 
 
 class AfeCreate(BaseModel):
+    configuration_scope: Literal["drilling", "completion"] = "drilling"
     rig_id: str = Field(min_length=1, max_length=36)
     well_id: str = Field(min_length=1, max_length=36)
     afe_code: str = Field(min_length=1, max_length=50)
@@ -67,6 +68,8 @@ class AfeCreate(BaseModel):
 
 class AfeUpdate(BaseModel):
     """Header edits are allowed only while the AFE is a draft."""
+
+    configuration_scope: Literal["drilling", "completion"] | None = None
 
     rig_id: str | None = Field(default=None, min_length=1, max_length=36)
     well_id: str | None = Field(default=None, min_length=1, max_length=36)
@@ -101,6 +104,7 @@ class AfeStatusIn(BaseModel):
 
 
 class AfeOut(BaseModel):
+    configuration_scope: Literal["drilling", "completion"] = "drilling"
     id: str
     rig_id: str
     rig_code: str
@@ -487,6 +491,7 @@ class ScopeSectionOut(BaseModel):
 
 
 class WellScopeOut(BaseModel):
+    scope: Literal["drilling", "completion"] = "drilling"
     well_id: str
     well_code: str
     well_name: str
@@ -566,6 +571,9 @@ class AfeReferenceRig(BaseModel):
 
 
 class AfeReferenceWell(BaseModel):
+    completion_config_status: str = "draft"
+    completion_status: str = "active"
+    completion_section_count: int = 0
     id: str
     rig_id: str
     well_code: str

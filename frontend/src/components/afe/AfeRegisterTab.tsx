@@ -13,7 +13,7 @@ import { afeTotalText, type Afe, type AfeReference, type ImportResponse } from '
 import { AfeFormDialog } from './AfeFormDialog'
 import { ErrorDetails, StatusTag } from './AfeShared'
 
-export const AFE_IMPORT_HEADERS = ['rig_code', 'well_code', 'afe_code', 'afe_name', 'afe_type']
+export const AFE_IMPORT_HEADERS = ['rig_code', 'well_code', 'afe_code', 'afe_name', 'afe_type', 'configuration_scope']
 export const AFE_IMPORT_OPTIONAL_HEADERS = ['remarks']
 
 function RowActions({ afe, canEdit, canDelete, onEstimate, onEdit, onDelete }: {
@@ -124,6 +124,7 @@ export function AfeRegisterTab({ reference, onReferenceChanged }: {
   const columns = useMemo<ColDef<Afe>[]>(() => [
     { headerName: 'AFE CODE', field: 'afe_code', minWidth: 130, flex: .8 },
     { headerName: 'AFE NAME', field: 'afe_name', minWidth: 200, flex: 1.3 },
+    { headerName: 'CONFIGURATION SCOPE', field: 'configuration_scope', minWidth: 155 },
     { headerName: 'TYPE', field: 'afe_type', minWidth: 115, maxWidth: 130 },
     { headerName: 'RIG', field: 'rig_name', minWidth: 150, flex: 1, valueFormatter: params => params.data ? `${params.data.rig_code} · ${params.data.rig_name}` : '' },
     { headerName: 'WELL', field: 'well_name', minWidth: 180, flex: 1.1, valueFormatter: params => params.data ? `${params.data.well_code} · ${params.data.well_name}` : '' },
@@ -201,7 +202,7 @@ export function AfeRegisterTab({ reference, onReferenceChanged }: {
       subtitle="Each row names an active rig and well by code. Existing AFE codes are updated only while they are draft."
       headers={AFE_IMPORT_HEADERS}
       optionalHeaders={AFE_IMPORT_OPTIONAL_HEADERS}
-      sample={{ rig_code: 'RIG-01', well_code: 'WELL-01', afe_code: 'AFE-DR-001', afe_name: 'Surface and intermediate hole', afe_type: 'Drilling', remarks: '' }}
+      sample={{ rig_code: 'RIG-01', well_code: 'WELL-01', afe_code: 'AFE-DR-001', afe_name: 'Surface and intermediate hole', afe_type: 'Drilling', configuration_scope: 'drilling', remarks: '' }}
       templateName="afe-register-template"
       onRows={importRows}
     />

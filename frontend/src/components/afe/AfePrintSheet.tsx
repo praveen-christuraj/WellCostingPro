@@ -35,7 +35,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
     </header>
 
     <section>
-      <h2>1. Well configuration</h2>
+      <h2>1. Well configuration · {afe.configuration_scope}</h2>
       <table className="ps-table">
         <tbody>
           <tr><th>Well code</th><td>{well.well_code}</td><th>Well name</th><td>{well.well_name}</td><th>Location / block</th><td>{well.well_location} / {well.block}</td></tr>

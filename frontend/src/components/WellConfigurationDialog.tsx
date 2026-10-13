@@ -32,6 +32,13 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
   const keyCounter = useRef(0)
   const nextKey = () => `row-${++keyCounter.current}`
   const [options, setOptions] = useState<RigWellConfigurationOptions>({ hole_sections: [], phases: [] })
+  const [scope, setScope] = useState<'drilling' | 'completion'>('drilling')
+  const [revision, setRevision] = useState(0)
+  const [transition, setTransition] = useState<'configure' | 'draft' | 'complete' | 'activate' | null>(null)
+  const [transitionRemarks, setTransitionRemarks] = useState('')
+  const [transitionError, setTransitionError] = useState('')
+  const [dirty, setDirty] = useState(false)
+  useEffect(() => { if (open) { setScope('drilling'); setDirty(false); setTransition(null) } }, [open, well?.id])
   const [configuration, setConfiguration] = useState<WellConfiguration | null>(null)
   const [sections, setSections] = useState<SectionInput[]>([])
   const [depthUnit, setDepthUnit] = useState<'m' | 'ft'>('m')
@@ -55,7 +62,7 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
     setSections([])
     Promise.all([
       api<RigWellConfigurationOptions>('/rig-well/configuration-options'),
-      api<WellConfiguration>(`/rig-well/wells/${well.id}/configuration`),
+      api<WellConfiguration>(`/rig-well/wells/${well.id}/configuration?scope=${scope}`),
     ]).then(([referenceOptions, result]) => {
       if (!current) return
       setOptions(referenceOptions)
@@ -80,21 +87,24 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
       if (current) setLoading(false)
     })
     return () => { current = false }
-  }, [open, well?.id])
+  }, [open, well?.id, scope, revision])
 
   const updateSection = (key: string, patch: Partial<SectionInput>) => {
+    setDirty(true)
     setSections(rows => rows.map(row => row.key === key ? { ...row, ...patch } : row))
   }
   const updatePhase = (sectionKey: string, phaseKey: string, patch: Partial<PhaseInput>) => {
+    setDirty(true)
     setSections(rows => rows.map(section => section.key === sectionKey
       ? { ...section, phases: section.phases.map(phase => phase.key === phaseKey ? { ...phase, ...patch } : phase) }
       : section))
   }
-  const addSection = () => setSections(rows => [...rows, {
+  const addSection = () => { setDirty(true); setSections(rows => [...rows, {
     key: nextKey(), hole_section_id: '', from_depth: '', to_depth: '', remarks: '', phases: [],
-  }])
-  const removeSection = (key: string) => setSections(rows => rows.filter(row => row.key !== key))
+  }]) }
+  const removeSection = (key: string) => { setDirty(true); setSections(rows => rows.filter(row => row.key !== key)) }
   const moveSection = (index: number, direction: -1 | 1) => {
+    setDirty(true)
     setSections(rows => {
       const target = index + direction
       if (target < 0 || target >= rows.length) return rows
@@ -103,12 +113,12 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
       return reordered
     })
   }
-  const addPhase = (sectionKey: string) => setSections(rows => rows.map(section => section.key === sectionKey
+  const addPhase = (sectionKey: string) => { setDirty(true); setSections(rows => rows.map(section => section.key === sectionKey
     ? { ...section, phases: [...section.phases, { key: nextKey(), phase_id: '', days: '', remarks: '' }] }
-    : section))
-  const removePhase = (sectionKey: string, phaseKey: string) => setSections(rows => rows.map(section => section.key === sectionKey
+    : section)) }
+  const removePhase = (sectionKey: string, phaseKey: string) => { setDirty(true); setSections(rows => rows.map(section => section.key === sectionKey
     ? { ...section, phases: section.phases.filter(phase => phase.key !== phaseKey) }
-    : section))
+    : section)) }
 
   const validate = (): string[] => {
     const problems: string[] = []
@@ -159,6 +169,7 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
       await api(`/rig-well/wells/${well.id}/configuration`, {
         method: 'PUT',
         body: body({
+          scope,
           depth_unit: depthUnit,
           sections: sections.map(section => ({
             hole_section_id: section.hole_section_id,
@@ -174,7 +185,8 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
         }),
       })
       onSaved()
-      onClose()
+      setDirty(false)
+      setRevision(value => value + 1)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The well plan could not be saved')
     } finally {
@@ -184,7 +196,24 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
 
   const optionById = (items: MasterConfigurationOption[], id: string) => items.find(item => item.id === id)
 
-  return <FormDialog
+  const transitionLabels = { configure: 'Mark configured', draft: 'Reopen as Draft', complete: 'Mark completed', activate: 'Reactivate scope' }
+  const confirmTransition = async () => {
+    if (!well || !transition) return
+    setSaving(true)
+    setTransitionError('')
+    try {
+      await api(`/rig-well/wells/${well.id}/transition`, {
+        method: 'POST', body: body({ scope, action: transition, remarks: transitionRemarks.trim() }),
+      })
+      setTransition(null)
+      setRevision(value => value + 1)
+      onSaved()
+    } catch (caught) {
+      setTransitionError(caught instanceof Error ? caught.message : 'Scope status could not be changed')
+    } finally { setSaving(false) }
+  }
+
+  return <><FormDialog
     open={open}
     title={well ? `Well plan · ${well.well_code}` : 'Well plan'}
     subtitle={well ? `${well.rig_display}  /  ${well.well_name}. Build the well from Hole Sections, then assign one or more Master Data Phases per section.` : undefined}
@@ -195,19 +224,31 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
     submitLabel="Save draft plan"
     maxWidth="lg"
   >
+    <TextField select label="Well scope" fullWidth value={scope} disabled={loading || saving || dirty}
+      onChange={event => { setError(''); setScope(event.target.value as 'drilling' | 'completion') }}
+      helperText={dirty ? 'Save the draft before switching scopes, or Cancel to discard edits.' : 'Each scope has its own sections, phases, depths, planned days and lifecycle.'} sx={{ mb: 2 }}>
+      <MenuItem value="drilling">Drilling Well Configuration</MenuItem>
+      <MenuItem value="completion">Completion Well Configuration</MenuItem>
+    </TextField>
     {loading ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <Box display="grid" gap={2} pt={.5}>
       {configuration && <Box display="flex" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap" sx={{ bgcolor: 'action.hover', borderRadius: 2, px: 2, py: 1.3 }}>
         <Box><Typography fontSize={12} fontWeight={800}>{configuration.rig_code} / {configuration.well_code} — {configuration.well_name}</Typography><Typography fontSize={11} color="text.secondary" mt={.25}>Plan total · {sections.length} section(s) · {totalDays.toFixed(2)} days</Typography></Box>
         <Box display="flex" gap={1} alignItems="center"><Tag tone={configuration.config_status === 'configured' ? 'success' : 'warning'}>{configuration.config_status}</Tag><Tag tone={configuration.status === 'completed' ? 'neutral' : 'info'}>{configuration.status}</Tag></Box>
       </Box>}
 
+      {configuration && can('rig-well:update') && <Box display="flex" gap={1} flexWrap="wrap">
+        {(configuration.status === 'completed' ? ['activate'] as const
+          : configuration.config_status === 'configured' ? ['draft', 'complete'] as const
+          : configuration.sections.length ? ['configure'] as const : []).map(action =>
+          <Button key={action} size="small" variant="outlined" disabled={saving || dirty} onClick={() => { setTransitionRemarks(''); setTransitionError(''); setTransition(action) }}>{transitionLabels[action]}</Button>)}
+      </Box>}
       {!can('rig-well:update') && configuration && <Alert severity="info">Your role has view-only access to this well plan. Contact an administrator if you need update access.</Alert>}
-      {can('rig-well:update') && configuration && readOnly && <Alert severity="info">This well plan is read-only while the well is {configuration.status === 'completed' ? 'completed' : 'configured'}. Reopen the plan as Draft from the well register before editing.</Alert>}
+      {can('rig-well:update') && configuration && readOnly && <Alert severity="info">This well plan is read-only while the well is {configuration.status === 'completed' ? 'completed' : 'configured'}. Reactivate this scope and reopen its plan as Draft before editing.</Alert>}
       {options.hole_sections.length === 0 && <Alert severity="warning" action={can('master-data:read') ? <Button component={RouterLink} to="/master-data/records?module=hole-sections" size="small">Hole Sections</Button> : undefined}>No active Hole Sections are configured for this workspace yet.</Alert>}
       {options.phases.length === 0 && <Alert severity="warning" action={can('master-data:read') ? <Button component={RouterLink} to="/master-data/records?module=phases" size="small">Phases</Button> : undefined}>No active Phases are configured for this workspace yet.</Alert>}
 
       <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: '1fr 1fr 1fr' }} gap={1.5}>
-        <TextField select label="Depth unit" value={depthUnit} disabled={readOnly} onChange={event => setDepthUnit(event.target.value as 'm' | 'ft')}>
+        <TextField select label="Depth unit" value={depthUnit} disabled={readOnly} onChange={event => { setDirty(true); setDepthUnit(event.target.value as 'm' | 'ft') }}>
           <MenuItem value="m">Metres (m)</MenuItem><MenuItem value="ft">Feet (ft)</MenuItem>
         </TextField>
         <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, px: 1.5, py: 1 }}><Typography fontSize={10} fontWeight={800} color="text.secondary" textTransform="uppercase">Planned total depth</Typography><Typography fontSize={15} fontWeight={800} mt={.3}>{finalDepth ? `${Number(finalDepth).toLocaleString()} ${depthUnit}` : '—'}</Typography></Box>
@@ -269,4 +310,13 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
       <ErrorMessage message={error}/>
     </Box>}
   </FormDialog>
+    <FormDialog open={!!transition} title={`${transition ? transitionLabels[transition] : 'Update scope'} · ${scope}`}
+      subtitle="This change applies only to the selected well configuration scope."
+      onClose={() => { if (!saving) setTransition(null) }} onSubmit={() => void confirmTransition()}
+      busy={saving} submitDisabled={transitionRemarks.trim().length < 3} submitLabel={transition ? transitionLabels[transition] : 'Confirm'}>
+      <TextField label="Reason / audit note" required fullWidth multiline minRows={3} value={transitionRemarks}
+        onChange={event => setTransitionRemarks(event.target.value)} inputProps={{ maxLength: 500 }}/>
+      <ErrorMessage message={transitionError}/>
+    </FormDialog>
+  </>
 }

@@ -19,6 +19,9 @@ export type RigOption = {
 }
 
 export type Well = {
+  completion_status: 'active' | 'completed'
+  completion_config_status: 'draft' | 'configured'
+  completion_section_count: number
   id: string
   rig_id: string
   rig_code: string
@@ -64,7 +67,10 @@ export type WellSectionDraft = {
   phases: WellPhaseDraft[]
 }
 
+export type WellConfigurationScope = 'drilling' | 'completion'
+
 export type WellConfiguration = {
+  scope: WellConfigurationScope
   well_id: string
   well_code: string
   well_name: string

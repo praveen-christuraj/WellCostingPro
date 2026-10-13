@@ -490,7 +490,7 @@ export default function AfeEstimate() {
     <PageHeading
       eyebrow="AFE MANAGEMENT / COST ESTIMATE"
       title={`${afe.afe_code} · ${afe.afe_name}`}
-      subtitle={`${afe.rig_code} · ${afe.well_code} ${afe.well_name} · ${afe.afe_type} AFE. Sections and phases come from the well plan.`}
+      subtitle={`${afe.rig_code} · ${afe.well_code} ${afe.well_name} · ${afe.afe_type} AFE · ${afe.configuration_scope} configuration. Sections and phases come from the scoped well plan.`}
       action={<Box display="flex" gap={1} flexWrap="wrap" justifyContent="flex-end">
         <Button variant="outlined" startIcon={<ArrowBackRounded/>} onClick={goBack}>AFE cost estimation</Button>
         {canPrint && <Tooltip title={dirty ? 'Save the estimate before printing.' : estimateReady ? 'Print the complete AFE' : 'Save an estimate before printing.'}><span>
@@ -540,7 +540,7 @@ export default function AfeEstimate() {
     <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, mb: 2, borderRadius: 2 }}>
       <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={2} flexWrap="wrap" mb={1.2}>
         <Box>
-          <Typography fontWeight={800} fontSize={15}>Well configuration</Typography>
+          <Typography fontWeight={800} fontSize={15}>Well configuration · {afe.configuration_scope}</Typography>
           <Typography color="text.secondary" fontSize={12} mt={.3}>{saved.well.well_code} · {saved.well.well_name} · {saved.well.well_location} · Block {saved.well.block}</Typography>
         </Box>
         <Box display="flex" gap={1} alignItems="center" flexWrap="wrap">

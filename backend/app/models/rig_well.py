@@ -1,6 +1,6 @@
 """Tenant-scoped rigs, wells, and well configuration.
 
-A rig owns wells; each well may carry a depth/phase configuration.  The
+A rig owns wells; each well may carry independent Drilling and Completion plans.  The
 configuration rows are replaced as a single audited draft, while rigs and
 wells use the common soft-delete lifecycle.
 """
@@ -77,6 +77,9 @@ class Well(RigWellRecord):
         UniqueConstraint("organization_id", "well_code", name="uq_wells_org_code"),
         CheckConstraint("status IN ('active', 'completed')", name="ck_wells_status"),
         CheckConstraint("config_status IN ('draft', 'configured')", name="ck_wells_config_status"),
+        CheckConstraint("completion_status IN ('active', 'completed')", name="ck_wells_completion_status"),
+        CheckConstraint("completion_config_status IN ('draft', 'configured')", name="ck_wells_completion_config_status"),
+        CheckConstraint("completion_depth_unit IN ('m', 'ft')", name="ck_wells_completion_depth_unit"),
         CheckConstraint("depth_unit IN ('m', 'ft')", name="ck_wells_depth_unit"),
         Index("ix_wells_org_rig", "organization_id", "rig_id"),
         Index("ix_wells_org_deleted", "organization_id", "is_deleted"),
@@ -97,13 +100,32 @@ class Well(RigWellRecord):
     )
     depth_unit: Mapped[str] = mapped_column(String(10), default="m", server_default="m", nullable=False)
 
+    # Existing columns and sections remain the Drilling baseline for compatibility.
+    completion_status: Mapped[str] = mapped_column(String(20), default="active", server_default="active", nullable=False)
+    completion_config_status: Mapped[str] = mapped_column(String(20), default="draft", server_default="draft", nullable=False)
+    completion_depth_unit: Mapped[str] = mapped_column(String(10), default="m", server_default="m", nullable=False)
+
+    def sections_for_scope(self, scope: str) -> list["WellSection"]:
+        return self.completion_sections if scope == "completion" else self.sections
+
+    def scope_value(self, scope: str, field: str) -> str:
+        return getattr(self, f"completion_{field}" if scope == "completion" else field)
+
+    def set_scope_value(self, scope: str, field: str, value: str) -> None:
+        setattr(self, f"completion_{field}" if scope == "completion" else field, value)
+
     rig: Mapped[Rig] = relationship(back_populates="wells", lazy="joined")
     sections: Mapped[list["WellSection"]] = relationship(
+        primaryjoin="and_(Well.id == WellSection.well_id, WellSection.scope == 'drilling')",
         back_populates="well",
         lazy="selectin",
         order_by="WellSection.sort_order",
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+    completion_sections: Mapped[list["WellSection"]] = relationship(
+        primaryjoin="and_(Well.id == WellSection.well_id, WellSection.scope == 'completion')",
+        lazy="selectin", order_by="WellSection.sort_order", viewonly=True,
     )
     sub_activities: Mapped[list["WellSubActivity"]] = relationship(
         "WellSubActivity", back_populates="well", lazy="noload", passive_deletes=True
@@ -116,7 +138,8 @@ class WellSection(Base):
     __tablename__ = "well_sections"
     __table_args__ = (
         Index("ix_well_sections_org_well", "organization_id", "well_id"),
-        UniqueConstraint("well_id", "sort_order", name="uq_well_sections_order"),
+        UniqueConstraint("well_id", "scope", "sort_order", name="uq_well_sections_order"),
+        CheckConstraint("scope IN ('drilling', 'completion')", name="ck_well_sections_scope"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
@@ -126,6 +149,7 @@ class WellSection(Base):
     well_id: Mapped[str] = mapped_column(
         ForeignKey("wells.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    scope: Mapped[str] = mapped_column(String(20), default="drilling", server_default="drilling", nullable=False)
     hole_section_id: Mapped[str] = mapped_column(
         ForeignKey("hole_sections.id", ondelete="RESTRICT"), nullable=False, index=True
     )

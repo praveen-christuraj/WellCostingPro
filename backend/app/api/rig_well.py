@@ -236,6 +236,9 @@ def _well_out(well: Well, sub_activity_count: int = 0) -> WellOut:
     total_depth, total_days = _well_totals(well)
     rig = well.rig
     return WellOut(
+        completion_status=well.completion_status,
+        completion_config_status=well.completion_config_status,
+        completion_section_count=len(well.completion_sections),
         id=well.id,
         rig_id=well.rig_id,
         rig_code=rig.rig_code if rig else "",
@@ -261,10 +264,12 @@ def _well_out(well: Well, sub_activity_count: int = 0) -> WellOut:
     )
 
 
-def _well_configuration_out(well: Well) -> WellConfigurationOut:
-    total_depth, total_days = _well_totals(well)
+def _well_configuration_out(well: Well, scope: str = "drilling") -> WellConfigurationOut:
+    scoped_sections = well.sections_for_scope(scope)
+    total_depth = scoped_sections[-1].to_depth if scoped_sections else None
+    total_days = sum((phase.days for section in scoped_sections for phase in section.phases), Decimal("0"))
     sections = []
-    for section in well.sections:
+    for section in scoped_sections:
         section_days = sum((phase.days for phase in section.phases), Decimal("0"))
         phases = [
             {
@@ -291,14 +296,15 @@ def _well_configuration_out(well: Well) -> WellConfigurationOut:
             }
         )
     return WellConfigurationOut(
+        scope=scope,
         well_id=well.id,
         well_code=well.well_code,
         well_name=well.well_name,
         rig_code=well.rig.rig_code if well.rig else "",
         rig_name=well.rig.rig_name if well.rig else "",
-        status=well.status,
-        config_status=well.config_status,
-        depth_unit=well.depth_unit,
+        status=well.scope_value(scope, "status"),
+        config_status=well.scope_value(scope, "config_status"),
+        depth_unit=well.scope_value(scope, "depth_unit"),
         total_depth=total_depth,
         total_days=total_days,
         sections=sections,
@@ -1241,8 +1247,8 @@ def import_wells(data: RigWellImportRequest, request: Request, db: Db, user: Cur
     response_model=WellConfigurationOut,
     dependencies=[Depends(require("rig-well:read"))],
 )
-def get_well_configuration(well_id: str, db: Db, user: Current) -> WellConfigurationOut:
-    return _well_configuration_out(_well_or_404(db, well_id, user.organization_id, include_deleted=False))
+def get_well_configuration(well_id: str, db: Db, user: Current, scope: Literal["drilling", "completion"] = "drilling") -> WellConfigurationOut:
+    return _well_configuration_out(_well_or_404(db, well_id, user.organization_id, include_deleted=False), scope)
 
 
 @router.put(
@@ -1258,9 +1264,9 @@ def save_well_configuration(
     user: Current,
 ) -> WellConfigurationOut:
     well = _well_or_404(db, well_id, user.organization_id, include_deleted=False)
-    if well.status == "completed":
+    if well.scope_value(data.scope, "status") == "completed":
         raise HTTPException(status_code=409, detail="Reactivate the completed well before editing its configuration")
-    if well.config_status != "draft":
+    if well.scope_value(data.scope, "config_status") != "draft":
         raise HTTPException(status_code=409, detail="Reopen the configured well as Draft before editing its configuration")
 
     seen_sections: set[str] = set()
@@ -1296,14 +1302,15 @@ def save_well_configuration(
 
     # Delete old rows through the ORM so the phase cascade is handled in the
     # same transaction. The configuration itself has one explicit audit event.
-    for old_section in list(well.sections):
+    for old_section in list(well.sections_for_scope(data.scope)):
         db.delete(old_section)
     db.flush()
-    well.depth_unit = data.depth_unit
+    well.set_scope_value(data.scope, "depth_unit", data.depth_unit)
     for section_order, (master_section, phase_rows) in enumerate(resolved):
         section_row = WellSection(
             organization_id=user.organization_id,
             well_id=well.id,
+            scope=data.scope,
             hole_section_id=master_section.id,
             from_depth=data.sections[section_order].from_depth,
             to_depth=data.sections[section_order].to_depth,
@@ -1326,12 +1333,12 @@ def save_well_configuration(
     _record_audit(
         db, user=user, action="update", entity_type="well_configuration", record_id=well.id,
         entity_label=well.well_code,
-        summary=f"Saved draft configuration for well {well.well_code}: {len(data.sections)} section(s)",
+        summary=f"Saved {data.scope} draft configuration for well {well.well_code}: {len(data.sections)} section(s)",
         request=request,
     )
     _commit(db)
-    db.expire(well, ["sections"])
-    return _well_configuration_out(well)
+    db.expire(well, ["sections", "completion_sections"])
+    return _well_configuration_out(well, data.scope)
 
 
 @router.post(
@@ -1349,37 +1356,37 @@ def transition_well(
     well = _well_or_404(db, well_id, user.organization_id, include_deleted=False)
     action = data.action
     if action == "configure":
-        if well.status != "active":
+        if well.scope_value(data.scope, "status") != "active":
             raise HTTPException(status_code=409, detail="Reactivate the well before marking it configured")
-        if well.config_status != "draft":
+        if well.scope_value(data.scope, "config_status") != "draft":
             raise HTTPException(status_code=409, detail="The well is already configured")
-        if not well.sections:
+        if not well.sections_for_scope(data.scope):
             raise HTTPException(status_code=409, detail="Save at least one section and phase before marking the well configured")
-        well.config_status = "configured"
+        well.set_scope_value(data.scope, "config_status", "configured")
         label = "configured"
     elif action == "draft":
-        if well.status != "active":
+        if well.scope_value(data.scope, "status") != "active":
             raise HTTPException(status_code=409, detail="Reactivate the well before reopening its configuration")
-        if well.config_status != "configured":
+        if well.scope_value(data.scope, "config_status") != "configured":
             raise HTTPException(status_code=409, detail="The well is already in Draft")
-        well.config_status = "draft"
+        well.set_scope_value(data.scope, "config_status", "draft")
         label = "Draft"
     elif action == "complete":
-        if well.status != "active":
+        if well.scope_value(data.scope, "status") != "active":
             raise HTTPException(status_code=409, detail="The well is already completed")
-        if well.config_status != "configured" or not well.sections:
+        if well.scope_value(data.scope, "config_status") != "configured" or not well.sections_for_scope(data.scope):
             raise HTTPException(status_code=409, detail="Configure the well before marking it completed")
-        well.status = "completed"
+        well.set_scope_value(data.scope, "status", "completed")
         label = "completed"
     else:
-        if well.status != "completed":
+        if well.scope_value(data.scope, "status") != "completed":
             raise HTTPException(status_code=409, detail="Only a completed well can be reactivated")
-        well.status = "active"
+        well.set_scope_value(data.scope, "status", "active")
         label = "active"
     _record_audit(
         db, user=user, action="update", entity_type="well", record_id=well.id,
         entity_label=well.well_code,
-        summary=f"Changed well {well.well_code} to {label}: {data.remarks.strip()}",
+        summary=f"Changed well {well.well_code} {data.scope} scope to {label}: {data.remarks.strip()}",
         request=request,
     )
     _commit(db)

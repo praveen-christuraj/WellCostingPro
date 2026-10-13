@@ -4,9 +4,9 @@ import { ErrorMessage, FormDialog } from '../Common'
 import { api, body } from '../../lib/api'
 import { AFE_TYPES, type Afe, type AfeReference, type AfeType } from '../../lib/afe'
 
-type Form = { rig_id: string; well_id: string; afe_code: string; afe_name: string; afe_type: AfeType; remarks: string }
+type Form = { configuration_scope: 'drilling' | 'completion'; rig_id: string; well_id: string; afe_code: string; afe_name: string; afe_type: AfeType; remarks: string }
 
-const emptyForm = (): Form => ({ rig_id: '', well_id: '', afe_code: '', afe_name: '', afe_type: 'Drilling', remarks: '' })
+const emptyForm = (): Form => ({ configuration_scope: 'drilling', rig_id: '', well_id: '', afe_code: '', afe_name: '', afe_type: 'Drilling', remarks: '' })
 
 // Create or edit an AFE header. Rig and well come from Rig & Well Management. The well must be active
 // and its plan must be marked Configured, because the estimate prices against its sections and phases.
@@ -25,21 +25,29 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
     if (!open) return
     setError('')
     setForm(record
-      ? { rig_id: record.rig_id, well_id: record.well_id, afe_code: record.afe_code, afe_name: record.afe_name, afe_type: record.afe_type, remarks: record.remarks }
+      ? { configuration_scope: record.configuration_scope, rig_id: record.rig_id, well_id: record.well_id, afe_code: record.afe_code, afe_name: record.afe_name, afe_type: record.afe_type, remarks: record.remarks }
       : emptyForm())
   }, [open, record])
 
   const wells = useMemo(() => (reference?.wells ?? []).filter(well => well.rig_id === form.rig_id), [reference, form.rig_id])
   const selectedWell = wells.find(well => well.id === form.well_id)
-  const wellEligible = (well: NonNullable<AfeReference['wells']>[number]) =>
-    (well.status === 'active' && well.config_status === 'configured' && well.section_count > 0) || well.id === record?.well_id
-  const wellNote = (well: NonNullable<AfeReference['wells']>[number]) =>
-    well.section_count === 0 ? ' · no plan saved' : well.status !== 'active' ? ' · not active' : well.config_status !== 'configured' ? ' · plan not configured' : ''
+  const scopeState = (well: AfeReference['wells'][number]) => form.configuration_scope === 'completion'
+    ? { status: well.completion_status, config_status: well.completion_config_status, section_count: well.completion_section_count }
+    : well
+  const wellEligible = (well: AfeReference['wells'][number]) => {
+    const plan = scopeState(well)
+    return (plan.status === 'active' && plan.config_status === 'configured' && plan.section_count > 0)
+      || (well.id === record?.well_id && form.configuration_scope === record.configuration_scope)
+  }
+  const wellNote = (well: AfeReference['wells'][number]) => {
+    const plan = scopeState(well)
+    return plan.section_count === 0 ? ' · no scoped plan saved' : plan.status !== 'active' ? ' · scope completed' : plan.config_status !== 'configured' ? ' · scope not configured' : ''
+  }
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm(current => ({ ...current, [key]: value }))
   const setRig = (rigId: string) => setForm(current => ({ ...current, rig_id: rigId, well_id: '' }))
 
-  const valid = Boolean(form.rig_id && form.well_id && form.afe_code.trim() && form.afe_name.trim() && form.afe_type)
+  const valid = Boolean(form.rig_id && form.well_id && form.afe_code.trim() && form.afe_name.trim() && form.afe_type && selectedWell && wellEligible(selectedWell))
   const noRigs = !reference?.rigs.length
 
   const save = async () => {
@@ -51,6 +59,7 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
       afe_code: form.afe_code.trim().toUpperCase(),
       afe_name: form.afe_name.trim(),
       afe_type: form.afe_type,
+      configuration_scope: form.configuration_scope,
       remarks: form.remarks.trim(),
     }
     try {
@@ -78,6 +87,13 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
   >
     <Box display="grid" gap={2} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
       {noRigs && <Box sx={{ gridColumn: '1 / -1' }}><ErrorMessage message="Create an active rig and a well with a Configured plan in Rig & Well Management first."/></Box>}
+      <TextField select label="Scoped configuration" required value={form.configuration_scope}
+        onChange={event => set('configuration_scope', event.target.value as Form['configuration_scope'])}
+        helperText="Only this plan supplies the estimate's sections, phases, depths and days."
+        sx={{ gridColumn: '1 / -1' }}>
+        <MenuItem value="drilling">Drilling Well Configuration</MenuItem>
+        <MenuItem value="completion">Completion Well Configuration</MenuItem>
+      </TextField>
       <TextField
         select label="Rig" required value={form.rig_id} onChange={event => setRig(event.target.value)}
         helperText="Only rigs from Rig & Well Management are listed."
@@ -87,7 +103,7 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
       <TextField
         select label="Well" required value={form.well_id} onChange={event => set('well_id', event.target.value)}
         disabled={!form.rig_id}
-        helperText={!form.rig_id ? 'Choose a rig first.' : !wells.length ? 'This rig has no wells yet.' : selectedWell && !wellEligible(selectedWell) ? 'This well is not active, or its plan is not marked Configured.' : 'Wells must be active and have a plan marked Configured.'}
+        helperText={!form.rig_id ? 'Choose a rig first.' : !wells.length ? 'This rig has no wells yet.' : selectedWell && !wellEligible(selectedWell) ? 'This scoped plan is not active or not marked Configured.' : 'The selected scope must be active and have a plan marked Configured.'}
         error={Boolean(selectedWell) && !wellEligible(selectedWell!)}
       >
         {wells.map(well => <MenuItem key={well.id} value={well.id} disabled={!wellEligible(well)}>
@@ -100,7 +116,7 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
         inputProps={{ maxLength: 50 }}
       />
       <TextField
-        select label="AFE type" required value={form.afe_type} onChange={event => set('afe_type', event.target.value as AfeType)}
+        select label="AFE type" required value={form.afe_type} onChange={event => setForm(current => ({ ...current, afe_type: event.target.value as AfeType, configuration_scope: event.target.value === 'Completion' ? 'completion' : 'drilling' }))}
         helperText="Drilling or completion scope for this well."
       >
         {AFE_TYPES.map(type => <MenuItem key={type} value={type}>{type}</MenuItem>)}
