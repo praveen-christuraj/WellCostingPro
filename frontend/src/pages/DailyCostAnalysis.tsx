@@ -4,7 +4,8 @@ import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import {
   AccountBalanceWalletOutlined, AnalyticsOutlined, CalendarMonthOutlined, DownloadOutlined,
-  PrintOutlined, RefreshRounded, SavingsOutlined, TimelineOutlined, TrendingUpRounded, WarningAmberRounded,
+  PrintOutlined, RefreshRounded, ReportProblemOutlined, SavingsOutlined, TimelineOutlined, TrendingUpRounded,
+  WarningAmberRounded,
 } from '@mui/icons-material'
 import {
   Alert, Box, Button, CircularProgress, FormControlLabel, MenuItem, Paper, Switch, Tab, Tabs,
@@ -179,6 +180,7 @@ export default function DailyCostAnalysis() {
         { name: 'Services', type: 'bar', stack: 'day', itemStyle: { color: theme.palette.primary.main }, data: summary.daily.map(row => Number(row.services)) },
         { name: 'Consumables', type: 'bar', stack: 'day', itemStyle: { color: theme.palette.secondary.main }, data: summary.daily.map(row => Number(row.consumables)) },
         { name: 'Tangibles', type: 'bar', stack: 'day', itemStyle: { color: theme.palette.info.main }, data: summary.daily.map(row => Number(row.tangibles)) },
+        { name: 'Other expenses', type: 'bar', stack: 'day', itemStyle: { color: theme.palette.warning.main }, data: summary.daily.map(row => Number(row.other_expenses)) },
         { name: 'NPT', type: 'line', symbolSize: 5, itemStyle: { color: theme.palette.error.main }, data: summary.daily.map(row => Number(row.npt)) },
       ],
     }
@@ -196,6 +198,13 @@ export default function DailyCostAnalysis() {
     { headerName: 'SERVICES', field: 'services', minWidth: 140, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
     { headerName: 'CONSUMABLES', field: 'consumables', minWidth: 140, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
     { headerName: 'TANGIBLES', field: 'tangibles', minWidth: 135, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
+    {
+      headerName: 'OTHER EXPENSES', field: 'other_expenses', minWidth: 155,
+      valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency),
+      cellRenderer: (params: ICellRendererParams<DailyCostDailyRow>) => Number(params.data?.other_expenses ?? 0) > 0
+        ? <Typography fontSize={12} fontWeight={700} color="warning.main">{dailyMoney(String(params.value ?? '0'), currency)}</Typography>
+        : <Typography fontSize={12} color="text.secondary">—</Typography>,
+    },
     { headerName: 'DAY TOTAL', field: 'total', minWidth: 145, cellRenderer: (params: ICellRendererParams<DailyCostDailyRow>) => <Typography fontSize={12} fontWeight={800}>{dailyMoney(String(params.value ?? '0'), currency)}</Typography> },
     { headerName: 'UPA', field: 'upa', minWidth: 125, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
     { headerName: 'NPT', field: 'npt', minWidth: 125, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
@@ -265,9 +274,10 @@ export default function DailyCostAnalysis() {
     {summary && <>
       {summary.warnings.map(warning => <Alert key={warning.code} severity={warning.severity} icon={warning.severity === 'info' ? undefined : <WarningAmberRounded/>} sx={{ mb: 1.4 }}>{warning.message}</Alert>)}
 
-      <Box display="grid" gap={1.3} mb={1.8} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)', lg: 'repeat(6, 1fr)' } }}>
+      <Box display="grid" gap={1.3} mb={1.8} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)', lg: 'repeat(7, 1fr)' } }}>
         <StatCard label="AFE planned" value={dailyMoney(summary.totals.planned, currency)} hint={`${summary.afes.length} AFE locked on this well`} icon={<AccountBalanceWalletOutlined fontSize="small"/>}/>
         <StatCard label="Actual to date" value={dailyMoney(summary.totals.actual, currency)} hint={`${summary.totals.used_percent}% of the locked AFE`} icon={<TrendingUpRounded fontSize="small"/>}/>
+        <StatCard label="Other expenses" value={dailyMoney(summary.totals.other_expenses, currency)} hint="LIH and similar charges deducted from the AFE" tone={Number(summary.totals.other_expenses) > 0 ? 'warning' : 'default'} icon={<ReportProblemOutlined fontSize="small"/>}/>
         <StatCard label="Remaining balance" value={dailyMoney(summary.totals.balance, currency)} hint={Number(summary.totals.balance) < 0 ? 'Over the AFE budget' : 'Planned less actual to date'} tone={Number(summary.totals.balance) < 0 ? 'warning' : 'good'} icon={<SavingsOutlined fontSize="small"/>}/>
         <StatCard label="Average per day" value={dailyMoney(summary.totals.average_per_day, currency)} hint={`${summary.totals.recorded_days} recorded of ${summary.totals.elapsed_days} elapsed days`} icon={<TimelineOutlined fontSize="small"/>}/>
         <StatCard label="UPA to date" value={dailyMoney(summary.totals.upa, currency)} hint="Unplanned activity charges" tone={Number(summary.totals.upa) > 0 ? 'warning' : 'default'} icon={<AnalyticsOutlined fontSize="small"/>}/>
@@ -286,7 +296,7 @@ export default function DailyCostAnalysis() {
         </Paper>
         <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, minWidth: 0 }}>
           <Typography fontWeight={800} fontSize={15}>Cost group by day</Typography>
-          <Typography color="text.secondary" fontSize={11.5} mt={.25}>Services, consumables and tangibles stacked per well-day, with NPT overlaid.</Typography>
+          <Typography color="text.secondary" fontSize={11.5} mt={.25}>Services, consumables, tangibles and other expenses stacked per well-day, with NPT overlaid.</Typography>
           {summary.daily.length
             ? <Box height={250} mt={1}><ReactECharts option={groupOption} notMerge lazyUpdate style={{ height: '100%', width: '100%' }}/></Box>
             : <Typography color="text.secondary" fontSize={12.5} py={6} textAlign="center">No daily sheets match this filter.</Typography>}
@@ -302,14 +312,15 @@ export default function DailyCostAnalysis() {
           </Typography>
         </Box>
         <Box sx={{ overflowX: 'auto' }}>
-          <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 620, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
-            <thead><tr><th>AFE</th><th>STATUS</th><th>SHEETS</th><th align="right">PLANNED</th><th align="right">ACTUAL</th><th align="right">BALANCE</th><th align="right">DAYS</th></tr></thead>
+          <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 720, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
+            <thead><tr><th>AFE</th><th>STATUS</th><th>SHEETS</th><th align="right">PLANNED</th><th align="right">ACTUAL</th><th align="right">OTHER EXPENSES</th><th align="right">BALANCE</th><th align="right">DAYS</th></tr></thead>
             <tbody>{summary.afes.map(afe => <tr key={afe.afe_id}>
               <td><Typography fontSize={12} fontWeight={700}>{afe.afe_code}</Typography><Typography fontSize={10.5} color="text.secondary">{afe.afe_name}</Typography></td>
               <td><Tag tone={afe.over_budget ? 'warning' : 'info'}>{afe.afe_status}</Tag></td>
               <td>{afe.sheets} · {displayDate(afe.first_day)} → {displayDate(afe.last_day)}</td>
               <td align="right">{dailyMoney(afe.planned_total, afe.currency)}</td>
               <td align="right">{dailyMoney(afe.actual, afe.currency)}</td>
+              <td align="right">{Number(afe.other_expenses) > 0 ? <Typography fontSize={12} fontWeight={700} color="warning.main">− {dailyMoney(afe.other_expenses, afe.currency)}</Typography> : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
               <td align="right"><Typography fontSize={12} fontWeight={700} color={Number(afe.balance) < 0 ? 'error.main' : 'success.main'}>{dailyMoney(afe.balance, afe.currency)}</Typography></td>
               <td align="right">{afe.days_recorded}</td>
             </tr>)}</tbody>

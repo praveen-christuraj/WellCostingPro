@@ -5,6 +5,14 @@ export type ChargeCategory =
   | 'Mobilization' | 'Demobilization' | 'Operation' | 'Standby'
   | 'Personnel-Operation' | 'Personnel-Standby' | 'Fixed Charge' | 'Others'
 export type ConsumableCategory = 'Mud Chemicals' | 'Cement Additives' | 'Fuel' | 'Drill Bits'
+/** Unexpected charges with no AFE allowance (Lost In Hole, hole problems, claims). */
+export type OtherExpenseType =
+  | 'LIH' | 'HOLE_PROBLEM' | 'FISHING' | 'SIDE_TRACK' | 'EQUIPMENT_DAMAGE'
+  | 'THIRD_PARTY_CLAIM' | 'PENALTY' | 'MISC'
+export type OtherExpenseUnit = 'unit' | 'days' | 'hours'
+/** The four cost groups of a daily sheet. Only the last one has no AFE budget. */
+export type DailyCostGroup = 'Services' | 'Consumables' | 'Tangibles' | 'Other Expenses'
+export const DAILY_COST_GROUPS: DailyCostGroup[] = ['Services', 'Consumables', 'Tangibles', 'Other Expenses']
 export type ConsumableKind = 'mud_chemical' | 'cement_additive' | 'fuel' | 'drill_bit'
 export type DailyQuantityUnit = 'days' | 'hours' | 'service' | 'section' | 'unit'
 
@@ -39,6 +47,7 @@ export type DailyCostCatalogueOption = {
 export type DailyCostVendorOption = {
   id: string; vendor_code: string; vendor_name: string; vendor_type: string; status: string; display_name: string
 }
+export type DailyCostOtherExpenseTypeOption = { code: OtherExpenseType; label: string }
 export type DailyCostReference = {
   rigs: DailyCostRigOption[]; wells: DailyCostWellOption[]; afes: DailyCostAfeOption[]
   activities: DailyCostActivityOption[]; sub_activities: DailyCostSubActivityOption[]
@@ -46,6 +55,7 @@ export type DailyCostReference = {
   vendors: DailyCostVendorOption[]; currencies: string[]; charge_categories: ChargeCategory[]
   charge_bases: ChargingBasis[]; quantity_units: DailyQuantityUnit[]; classifications: CostClassification[]
   consumable_categories: ConsumableCategory[]
+  other_expense_types: DailyCostOtherExpenseTypeOption[]
 }
 
 export type DailyCostRateOption = {
@@ -74,8 +84,9 @@ export type DailyCostEntry = {
   well_id: string; well_code: string; well_name: string; afe_id: string; afe_code: string; afe_name: string
   afe_status: string; cost_date: string; standard_currency: string; remarks: string; status: DailyCostStatus
   submitted_at: string | null; submitted_by: string; status_remarks: string
-  services_count: number; consumables_count: number; tangibles_count: number
-  services_total: string; consumables_total: string; tangibles_total: string; total_cost: string
+  services_count: number; consumables_count: number; tangibles_count: number; other_expenses_count: number
+  services_total: string; consumables_total: string; tangibles_total: string; other_expenses_total: string
+  total_cost: string
   upa_total: string; npt_total: string; rate_baseline_locked_at: string; budget_baseline_locked_at: string
   warning_count: number; is_deleted: boolean; deleted_at: string | null
   created_by: string; updated_by: string; created_at: string; updated_at: string
@@ -94,9 +105,14 @@ export type DailyCostConsumableInput = DailyCostLineBase & {
   category: ConsumableCategory; item_kind: ConsumableKind; item_id: string
 }
 export type DailyCostTangibleInput = DailyCostLineBase & { tangible_id: string }
+export type DailyCostOtherExpenseInput = DailyCostLineBase & {
+  expense_type: OtherExpenseType; expense_description: string
+  quantity_unit: OtherExpenseUnit; unit_rate: string
+}
 export type DailyCostSavePayload = {
   remarks: string; services: DailyCostServiceInput[]
   consumables: DailyCostConsumableInput[]; tangibles: DailyCostTangibleInput[]
+  other_expenses: DailyCostOtherExpenseInput[]
 }
 
 export type DailyCostLineOutput = DailyCostLineBase & {
@@ -121,35 +137,49 @@ export type DailyCostTangibleLine = DailyCostLineOutput & {
   tangible_id: string; tangible_code: string; tangible_name: string; uom: string
   catalogue_rate_snapshot_id: string | null
 }
+export type DailyCostOtherExpenseLine = DailyCostLineOutput & {
+  expense_type: OtherExpenseType; expense_type_label: string; expense_description: string
+}
+/** Every priced line of a sheet, whichever cost group it belongs to. */
+export type AnyDailyCostLine =
+  | DailyCostServiceLine | DailyCostConsumableLine | DailyCostTangibleLine | DailyCostOtherExpenseLine
 
 export type DailyCostComparisonGroup = {
-  cost_group: 'Services' | 'Consumables' | 'Tangibles'; planned: string; actual_to_date: string; balance: string
+  cost_group: DailyCostGroup; planned: string; actual_to_date: string; balance: string
 }
 export type DailyCostComparisonLine = {
-  budget_key: string; cost_group: 'Services' | 'Consumables' | 'Tangibles'; budget_kind: string
+  budget_key: string; cost_group: DailyCostGroup; budget_kind: string
   item_code: string; item_name: string; planned: string; actual_to_date: string; balance: string; is_planned: boolean
 }
+/**
+ * `actual_to_date` covers all four groups, so `balance` is the AFE total less the
+ * tracked actuals and less the other expenses. The two split fields keep the
+ * separately accounted deduction visible.
+ */
 export type DailyCostComparison = {
-  effective_on: string; currency: string; planned_total: string; actual_to_date: string; balance: string
+  effective_on: string; currency: string; planned_total: string; actual_to_date: string
+  tracked_actual_to_date: string; other_expenses_to_date: string; balance: string
   over_budget: boolean; includes_draft_entries: boolean; upa_to_date: string; npt_to_date: string
   groups: DailyCostComparisonGroup[]; budget_lines: DailyCostComparisonLine[]
 }
 export type DailyCostWarning = { code: string; severity: 'info' | 'warning' | 'error'; message: string }
 export type DailyCostDay = {
   entry: DailyCostEntry; services: DailyCostServiceLine[]; consumables: DailyCostConsumableLine[]
-  tangibles: DailyCostTangibleLine[]; comparison: DailyCostComparison; warnings: DailyCostWarning[]
+  tangibles: DailyCostTangibleLine[]; other_expenses: DailyCostOtherExpenseLine[]
+  comparison: DailyCostComparison; warnings: DailyCostWarning[]
 }
 export type DailyCostPreview = {
   services: DailyCostServiceLine[]; consumables: DailyCostConsumableLine[]; tangibles: DailyCostTangibleLine[]
-  services_total: string; consumables_total: string; tangibles_total: string; total_cost: string
-  upa_total: string; npt_total: string; warnings: DailyCostWarning[]
+  other_expenses: DailyCostOtherExpenseLine[]
+  services_total: string; consumables_total: string; tangibles_total: string; other_expenses_total: string
+  total_cost: string; upa_total: string; npt_total: string; warnings: DailyCostWarning[]
 }
 export type DailyCostOverview = {
   active_entries: number; deleted_entries: number; submitted_entries: number; draft_entries: number
   wells_tracked: number; active_baselines: number; over_budget_afes: number
   total_planned_by_currency: Record<string, string>; actual_to_date_by_currency: Record<string, string>
   remaining_by_currency: Record<string, string>
-  groups: { currency: string; cost_group: 'Services' | 'Consumables' | 'Tangibles'; planned: string; actual: string; balance: string }[]
+  groups: { currency: string; cost_group: DailyCostGroup; planned: string; actual: string; balance: string }[]
   trend: { cost_date: string; currency: string; actual: string; upa: string; npt: string }[]
   recent_activity: { id: string; action: string; entity_type: string; entity_label: string; summary: string; created_at: string }[]
 }
@@ -175,6 +205,26 @@ export const DAILY_CHARGE_CATEGORIES: ChargeCategory[] = [
 ]
 export const DAILY_CHARGING_BASES: ChargingBasis[] = ['Day Rate', 'Per Service Rate', 'Per Section Rate']
 export const DAILY_CONSUMABLE_CATEGORIES: ConsumableCategory[] = ['Mud Chemicals', 'Cement Additives', 'Fuel', 'Drill Bits']
+/**
+ * Types an operator can book an unexpected charge against. The API snapshots the
+ * label on every line, so history keeps the wording that was in force when the
+ * cost was recorded; this list only seeds the picker before a reference loads.
+ */
+export const OTHER_EXPENSE_TYPES: DailyCostOtherExpenseTypeOption[] = [
+  { code: 'LIH', label: 'Lost In Hole (LIH)' },
+  { code: 'HOLE_PROBLEM', label: 'Hole Problem' },
+  { code: 'FISHING', label: 'Fishing & Recovery' },
+  { code: 'SIDE_TRACK', label: 'Side Track & Re-entry' },
+  { code: 'EQUIPMENT_DAMAGE', label: 'Equipment Damage / Loss' },
+  { code: 'THIRD_PARTY_CLAIM', label: 'Third Party Claim' },
+  { code: 'PENALTY', label: 'Penalty / Fine' },
+  { code: 'MISC', label: 'Miscellaneous Other Cost' },
+]
+export const OTHER_EXPENSE_MIN_REMARKS = 3
+
+export function otherExpenseLabel(code: string, options: DailyCostOtherExpenseTypeOption[] = OTHER_EXPENSE_TYPES): string {
+  return options.find(option => option.code === code)?.label ?? code
+}
 export const DAILY_ONE_TIME_CATEGORIES: ChargeCategory[] = ['Mobilization', 'Demobilization', 'Fixed Charge']
 
 export function dailyMoney(value: string | number | null | undefined, currency = ''): string {
@@ -221,6 +271,14 @@ export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
       currency: line.currency, override_rate: line.override_rate, override_reason: line.override_reason,
       remarks: line.remarks, tangible_id: line.tangible_id,
     })),
+    other_expenses: day.other_expenses.map(line => ({
+      id: line.id, activity_id: line.activity_id, hole_section_id: line.hole_section_id,
+      phase_id: line.phase_id, sub_activity_id: line.sub_activity_id,
+      vendor_id: line.vendor_id, party_name: line.party_name, quantity: line.quantity,
+      currency: line.currency, override_rate: null, override_reason: '',
+      remarks: line.remarks, expense_type: line.expense_type, expense_description: line.expense_description,
+      quantity_unit: line.quantity_unit as OtherExpenseUnit, unit_rate: line.captured_rate,
+    })),
   }
 }
 
@@ -230,12 +288,12 @@ export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
 
 export type DailyCostAfePosition = {
   afe_id: string; afe_code: string; afe_name: string; afe_status: string; currency: string
-  planned_total: string; actual: string; balance: string; over_budget: boolean
+  planned_total: string; actual: string; other_expenses: string; balance: string; over_budget: boolean
   sheets: number; days_recorded: number; first_day: string | null; last_day: string | null
 }
 export type DailyCostDailyRow = {
-  cost_date: string; services: string; consumables: string; tangibles: string; total: string
-  upa: string; npt: string; cumulative: string; budget_balance: string; sheets: number
+  cost_date: string; services: string; consumables: string; tangibles: string; other_expenses: string
+  total: string; upa: string; npt: string; cumulative: string; budget_balance: string; sheets: number
   status: 'draft' | 'submitted' | 'mixed'
 }
 export type DailyCostFactorRow = {
@@ -250,7 +308,7 @@ export type DailyCostFactorGroup = {
 }
 export type DailyCostWellTotals = {
   currency: string; planned: string; actual: string; balance: string; used_percent: string
-  services: string; consumables: string; tangibles: string; upa: string; npt: string
+  services: string; consumables: string; tangibles: string; other_expenses: string; upa: string; npt: string
   planned_days: string; recorded_days: number; elapsed_days: number; average_per_day: string
   days_to_budget: string | null; first_day: string | null; last_day: string | null
   sheets: number; draft_sheets: number; submitted_sheets: number; lines: number

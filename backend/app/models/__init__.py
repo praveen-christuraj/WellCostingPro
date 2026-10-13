@@ -24,6 +24,7 @@ from app.models.daily_cost import (
     DailyCostCatalogueRateSnapshot,
     DailyCostConsumableLine,
     DailyCostEntry,
+    DailyCostOtherExpenseLine,
     DailyCostServiceLine,
     DailyCostTangibleLine,
     DailyCostWellRateBaseline,

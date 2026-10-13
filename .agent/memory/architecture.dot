@@ -269,6 +269,7 @@ digraph WellCostingPro {
   "backend/app/services/catalogue_specs.py" -> "backend/app/services/catalogue.py";
   "backend/app/services/daily_cost.py" -> "backend/app/models/__init__.py";
   "backend/app/services/daily_cost.py" -> "backend/app/models/catalogue.py";
+  "backend/app/services/daily_cost.py" -> "backend/app/models/daily_cost.py";
   "backend/app/services/daily_cost.py" -> "backend/app/models/entities.py";
   "backend/app/services/daily_cost.py" -> "backend/app/models/rig_well.py";
   "backend/app/services/daily_cost.py" -> "backend/app/schemas/afe.py";

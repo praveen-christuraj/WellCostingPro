@@ -18,12 +18,17 @@ import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import { downloadTemplate, parseImportFile, type ImportRow } from '../lib/export'
 import {
-  DAILY_COST_STATUSES, DAILY_ONE_TIME_CATEGORIES, dailyMoney, displayDate, entryQuery, saveFromDay,
-  type DailyCostBaseline, type DailyCostComparisonLine, type DailyCostDay,
-  type DailyCostImportResult, type DailyCostPreview, type DailyCostReference,
-  type DailyCostSavePayload, type DailyCostServiceInput, type DailyCostConsumableInput,
-  type DailyCostTangibleInput,
+  DAILY_COST_STATUSES, DAILY_ONE_TIME_CATEGORIES, dailyMoney, displayDate, entryQuery, otherExpenseLabel, saveFromDay,
+  type DailyCostBaseline, type DailyCostComparisonLine, type DailyCostDay, type DailyCostGroup,
+  type AnyDailyCostLine, type DailyCostImportResult, type DailyCostPreview, type DailyCostReference,
+  type DailyCostSavePayload,
 } from '../lib/dailyCost'
+
+/** Where each dialog kind lives inside the save payload. */
+type LineGroupKey = 'services' | 'consumables' | 'tangibles' | 'other_expenses'
+const GROUP_KEY: Record<DailyCostLineKind, LineGroupKey> = {
+  service: 'services', consumable: 'consumables', tangible: 'tangibles', other: 'other_expenses',
+}
 
 type GridLine = {
   id: string; lineIndex: number; item: string; activity: string; section: string; subActivity: string
@@ -59,7 +64,7 @@ export default function DailyCostSheet() {
   const [day, setDay] = useState<DailyCostDay | null>(null)
   const [baseline, setBaseline] = useState<DailyCostBaseline | null>(null)
   const [reference, setReference] = useState<DailyCostReference | null>(null)
-  const [payload, setPayload] = useState<DailyCostSavePayload>({ remarks: '', services: [], consumables: [], tangibles: [] })
+  const [payload, setPayload] = useState<DailyCostSavePayload>({ remarks: '', services: [], consumables: [], tangibles: [], other_expenses: [] })
   const [preview, setPreview] = useState<DailyCostPreview | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -157,40 +162,26 @@ export default function DailyCostSheet() {
 
   const addOrEditLine = (line: EditableDailyCostLine) => {
     if (!lineEditor) return
+    const group = GROUP_KEY[lineEditor.kind]
+    const index = lineEditor.index
     setPayload(current => {
-      if (lineEditor.kind === 'service') {
-        const value = line as DailyCostServiceInput
-        const services = [...current.services]
-        if (lineEditor.index === null) services.push(value)
-        else services[lineEditor.index] = value
-        return { ...current, services }
-      }
-      if (lineEditor.kind === 'consumable') {
-        const value = line as DailyCostConsumableInput
-        const consumables = [...current.consumables]
-        if (lineEditor.index === null) consumables.push(value)
-        else consumables[lineEditor.index] = value
-        return { ...current, consumables }
-      }
-      const value = line as DailyCostTangibleInput
-      const tangibles = [...current.tangibles]
-      if (lineEditor.index === null) tangibles.push(value)
-      else tangibles[lineEditor.index] = value
-      return { ...current, tangibles }
+      const rows = [...current[group]] as EditableDailyCostLine[]
+      if (index === null) rows.push(line)
+      else rows[index] = line
+      return { ...current, [group]: rows }
     })
     setPreview(null)
     setLineEditor(null)
-    setNotice('Line updated. Preview and AFE remaining balance are recalculating; save to commit the change.')
+    setNotice(group === 'other_expenses'
+      ? 'Other expense updated. The AFE remaining balance is being recalculated with the deduction; save to commit the change.'
+      : 'Line updated. Preview and AFE remaining balance are recalculating; save to commit the change.')
   }
 
   const removeLine = () => {
     if (!lineDelete) return
-    setPayload(current => ({
-      ...current,
-      services: lineDelete.kind === 'service' ? current.services.filter((_row, index) => index !== lineDelete.index) : current.services,
-      consumables: lineDelete.kind === 'consumable' ? current.consumables.filter((_row, index) => index !== lineDelete.index) : current.consumables,
-      tangibles: lineDelete.kind === 'tangible' ? current.tangibles.filter((_row, index) => index !== lineDelete.index) : current.tangibles,
-    }))
+    const group = GROUP_KEY[lineDelete.kind]
+    const { index } = lineDelete
+    setPayload(current => ({ ...current, [group]: current[group].filter((_row, rowIndex) => rowIndex !== index) }))
     setPreview(null)
     setLineDelete(null)
     setNotice('Line removed from the draft. Save to commit the change.')
@@ -250,17 +241,20 @@ export default function DailyCostSheet() {
     try {
       const source = saveFromDay(previousDay)
       const copyList = <T extends { id?: string | null }>(rows: T[]) => rows.map(line => ({ ...line, id: null }))
-      const copyServices = copyList(source.services)
-      const copyConsumables = copyList(source.consumables)
-      const copyTangibles = copyList(source.tangibles)
+      const copied = {
+        services: copyList(source.services), consumables: copyList(source.consumables),
+        tangibles: copyList(source.tangibles), other_expenses: copyList(source.other_expenses),
+      }
       setPayload(current => ({
         remarks: current.remarks,
-        services: mode === 'replace' ? copyServices : [...current.services, ...copyServices],
-        consumables: mode === 'replace' ? copyConsumables : [...current.consumables, ...copyConsumables],
-        tangibles: mode === 'replace' ? copyTangibles : [...current.tangibles, ...copyTangibles],
+        services: mode === 'replace' ? copied.services : [...current.services, ...copied.services],
+        consumables: mode === 'replace' ? copied.consumables : [...current.consumables, ...copied.consumables],
+        tangibles: mode === 'replace' ? copied.tangibles : [...current.tangibles, ...copied.tangibles],
+        other_expenses: mode === 'replace' ? copied.other_expenses : [...current.other_expenses, ...copied.other_expenses],
       }))
       setPreview(null)
       const count = source.services.length + source.consumables.length + source.tangibles.length
+        + source.other_expenses.length
       setNotice(count
         ? `${count} line${count === 1 ? '' : 's'} copied from ${previousDay.entry.daily_cost_code} (${displayDate(previousDay.entry.cost_date)}). Review quantities, dates and rates before saving.`
         : `${previousDay.entry.daily_cost_code} has no lines to copy.`)
@@ -349,8 +343,9 @@ export default function DailyCostSheet() {
 
   const entry = day.entry
   const standard = entry.standard_currency
-  const allPreview = preview ? [...preview.services, ...preview.consumables, ...preview.tangibles] : []
-  const allSaved = [...day.services, ...day.consumables, ...day.tangibles]
+  const allPreview = preview
+    ? [...preview.services, ...preview.consumables, ...preview.tangibles, ...preview.other_expenses] : []
+  const allSaved = [...day.services, ...day.consumables, ...day.tangibles, ...day.other_expenses]
   const savedAmount = Number(entry.total_cost)
   const workingAmount = hasPreviewForEdits ? Number(preview?.total_cost ?? savedAmount) : savedAmount
   const actualToDate = Number(day.comparison.actual_to_date) + (hasPreviewForEdits ? workingAmount - savedAmount : 0)
@@ -373,6 +368,7 @@ export default function DailyCostSheet() {
     const knownKeys = new Set(comparisonRows.map(line => line.budget_key))
     for (const [group, lines] of [
       ['Services', preview.services], ['Consumables', preview.consumables], ['Tangibles', preview.tangibles],
+      ['Other Expenses', preview.other_expenses],
     ] as const) {
       const added = new Map<string, { code: string; name: string; amount: number }>()
       for (const line of lines) {
@@ -380,6 +376,7 @@ export default function DailyCostSheet() {
         const previous = added.get(line.budget_key) ?? { code: '', name: '', amount: 0 }
         if ('service_code' in line) { previous.code = line.service_code; previous.name = line.service_name }
         else if ('item_code' in line) { previous.code = line.item_code; previous.name = line.item_name }
+        else if ('expense_type' in line) { previous.code = line.expense_type; previous.name = line.expense_type_label }
         else { previous.code = line.tangible_code; previous.name = line.tangible_name }
         previous.amount += Number(line.standard_amount)
         added.set(line.budget_key, previous)
@@ -394,6 +391,19 @@ export default function DailyCostSheet() {
       }
     }
   }
+
+  // Other expenses are their own group: they are part of the day's cost and are
+  // simultaneously deducted from the AFE amount, so both halves stay visible.
+  const savedOther = Number(entry.other_expenses_total)
+  const workingOther = hasPreviewForEdits ? Number(preview?.other_expenses_total ?? savedOther) : savedOther
+  const otherDelta = workingOther - savedOther
+  const trackedActualToDate = Number(day.comparison.tracked_actual_to_date)
+    + (hasPreviewForEdits ? workingAmount - savedAmount - otherDelta : 0)
+  const otherToDate = Number(day.comparison.other_expenses_to_date) + otherDelta
+  const otherItems = (hasPreviewForEdits ? preview?.other_expenses : day.other_expenses) ?? []
+  const otherItemSummary = otherItems.length
+    ? [...new Set(otherItems.map(line => line.expense_type_label))].join(', ')
+    : [...new Set(day.other_expenses.map(line => line.expense_type_label))].join(', ')
 
   const scopeName = (sectionId: string | null, phaseId: string | null) => {
     if (!sectionId) return 'No hole section'
@@ -411,10 +421,11 @@ export default function DailyCostSheet() {
     return vendor?.vendor_name || party || '—'
   }
   const getGridRows = (kind: DailyCostLineKind): GridLine[] => {
-    const inputs = kind === 'service' ? payload.services : kind === 'consumable' ? payload.consumables : payload.tangibles
-    const outputs = kind === 'service' ? preview?.services ?? (!dirty ? day.services : [])
-      : kind === 'consumable' ? preview?.consumables ?? (!dirty ? day.consumables : [])
-        : preview?.tangibles ?? (!dirty ? day.tangibles : [])
+    const group = GROUP_KEY[kind]
+    const inputs = payload[group] as EditableDailyCostLine[]
+    // Priced rows come from the preview while the sheet is dirty, otherwise from the
+    // saved sheet; either way they line up with `inputs` in order.
+    const outputs = (preview ? preview[group] : !dirty ? day[group] : []) as unknown as AnyDailyCostLine[]
     return inputs.map((line, index) => {
       const priced = outputs[index]
       let item = '—'
@@ -437,6 +448,15 @@ export default function DailyCostSheet() {
         sourceRate = line.override_rate ?? snapshot?.captured_rate ?? '0'
         sourceCurrency = line.currency || snapshot?.currency || standard
         sourceLabel = line.override_rate !== null ? 'Daily override' : snapshot ? `Rate rev ${snapshot.revision_number || 'baseline'}` : 'Manual rate'
+      } else if (kind === 'other' && 'expense_type' in line) {
+        const pricedOther = priced && 'expense_type' in priced ? priced : undefined
+        const label = pricedOther?.expense_type_label
+          ?? otherExpenseLabel(line.expense_type, reference.other_expense_types ?? [])
+        const detail = (pricedOther?.expense_description ?? line.expense_description).trim()
+        item = detail ? `${label} · ${detail}` : label
+        sourceRate = line.unit_rate || '0'
+        sourceCurrency = line.currency || standard
+        sourceLabel = 'No AFE allowance'
       } else if (kind === 'tangible' && 'tangible_id' in line) {
         const snapshot = baseline.catalogue_rates.find(option => option.id === line.tangible_id && option.item_kind === 'tangible')
         const itemOption = reference.catalogue_items.find(option => option.id === line.tangible_id)
@@ -493,6 +513,8 @@ export default function DailyCostSheet() {
       { headerName: `AFE AMOUNT (${standard})`, field: 'standardAmount', minWidth: 155 },
       { headerName: 'AFE BUDGET MATCH', field: 'budget', minWidth: 185 },
     ]
+    // The remark is what explains an unbudgeted charge, so it gets a column here.
+    if (kind === 'other') columns.splice(1, 0, { headerName: 'REMARKS', field: 'remarks', minWidth: 240, flex: 1 })
     if (editable) columns.push({
       headerName: 'ACTIONS', field: 'id', minWidth: 118, width: 118, sortable: false,
       cellRenderer: (params: ICellRendererParams<GridLine>) => params.data ? <Box display="flex" alignItems="center" height="100%" gap={.2}>
@@ -506,7 +528,10 @@ export default function DailyCostSheet() {
   const services = getGridRows('service')
   const consumables = getGridRows('consumable')
   const tangibles = getGridRows('tangible')
+  const otherExpenses = getGridRows('other')
   const lineCount = payload.services.length + payload.consumables.length + payload.tangibles.length
+    + payload.other_expenses.length
+  const otherLineCount = payload.other_expenses.length
   const canSubmit = can('daily-cost:submit') && entry.status === 'draft'
   const canReopen = can('daily-cost:reopen') && entry.status === 'submitted'
 
@@ -520,7 +545,8 @@ export default function DailyCostSheet() {
   const importHeaders = [
     'line_type', 'activity_code', 'section_code', 'phase_code', 'sub_activity_code',
     'vendor_code', 'party_name', 'service_code', 'baseline_service_rate_id', 'charging_basis', 'charge_category',
-    'quantity_unit', 'category', 'item_kind', 'item_code', 'quantity', 'currency', 'override_rate', 'override_reason', 'remarks',
+    'quantity_unit', 'category', 'item_kind', 'item_code', 'quantity', 'currency', 'override_rate', 'override_reason',
+    'expense_type', 'expense_description', 'unit_rate', 'remarks',
   ]
   const exportTemplate = () => {
     const rate = baseline.service_rates[0]
@@ -530,15 +556,27 @@ export default function DailyCostSheet() {
     const unit = rate?.charging_basis === 'Per Service Rate' ? 'service'
       : rate?.charging_basis === 'Per Section Rate' ? 'section'
         : ['Mobilization', 'Demobilization', 'Fixed Charge'].includes(category) ? 'unit' : 'days'
-    downloadTemplate('daily-cost-import-template.csv', importHeaders, {
-      line_type: 'Service', activity_code: reference.activities[0]?.activity_code || 'DRILL',
-      section_code: section?.section_code ?? '', phase_code: phase?.phase_code ?? '',
-      sub_activity_code: reference.sub_activities.find(item => item.well_id === entry.well_id)?.sub_activity_code ?? '',
-      vendor_code: '', service_code: rate?.service_code ?? 'SERVICE-001',
-      baseline_service_rate_id: rate?.id ?? '', charging_basis: rate?.charging_basis ?? 'Day Rate',
-      charge_category: category, quantity_unit: unit, quantity: '1', currency: rate?.currency ?? standard,
-      override_rate: '', override_reason: '', remarks: '',
-    })
+    const activityCode = reference.activities[0]?.activity_code || 'DRILL'
+    const subActivityCode = reference.sub_activities.find(item => item.well_id === entry.well_id)?.sub_activity_code ?? ''
+    downloadTemplate('daily-cost-import-template.csv', importHeaders, [
+      {
+        line_type: 'Service', activity_code: activityCode,
+        section_code: section?.section_code ?? '', phase_code: phase?.phase_code ?? '',
+        sub_activity_code: subActivityCode,
+        vendor_code: '', service_code: rate?.service_code ?? 'SERVICE-001',
+        baseline_service_rate_id: rate?.id ?? '', charging_basis: rate?.charging_basis ?? 'Day Rate',
+        charge_category: category, quantity_unit: unit, quantity: '1', currency: rate?.currency ?? standard,
+        override_rate: '', override_reason: '', remarks: '',
+      },
+      {
+        // An unexpected charge: no AFE allowance, mandatory remark, own unit rate.
+        line_type: 'Other', activity_code: reference.activities.find(item => /npt|non.?productive/i.test(`${item.activity_code} ${item.activity_name}`))?.activity_code ?? activityCode,
+        section_code: section?.section_code ?? '', phase_code: phase?.phase_code ?? '',
+        sub_activity_code: subActivityCode, vendor_code: '', party_name: 'Operator',
+        expense_type: 'LIH', expense_description: '6 5/8 in BHA left in hole', unit_rate: '250000',
+        quantity: '1', quantity_unit: 'unit', currency: standard, remarks: 'Tools lost in hole during tripping',
+      },
+    ])
   }
   const openStatus = (action: StatusAction) => {
     setStatusRemarks('')
@@ -546,12 +584,15 @@ export default function DailyCostSheet() {
     setStatusAction(action)
   }
 
-  const currentGroupActual = (group: 'Services' | 'Consumables' | 'Tangibles') => {
-    const lineGroup = group === 'Services' ? preview?.services : group === 'Consumables' ? preview?.consumables : preview?.tangibles
+  const currentGroupActual = (group: DailyCostGroup) => {
+    const lineGroup = group === 'Services' ? preview?.services
+      : group === 'Consumables' ? preview?.consumables
+        : group === 'Tangibles' ? preview?.tangibles : preview?.other_expenses
     if (!hasPreviewForEdits || !lineGroup) {
       return day.comparison.groups.find(item => item.cost_group === group)?.actual_to_date ?? '0'
     }
-    const savedGroup = group === 'Services' ? day.services : group === 'Consumables' ? day.consumables : day.tangibles
+    const savedGroup = group === 'Services' ? day.services : group === 'Consumables' ? day.consumables
+      : group === 'Tangibles' ? day.tangibles : day.other_expenses
     const previous = savedGroup.reduce((sum, line) => sum + Number(line.standard_amount), 0)
     const current = lineGroup.reduce((sum, line) => sum + Number(line.standard_amount), 0)
     const initial = Number(day.comparison.groups.find(item => item.cost_group === group)?.actual_to_date ?? 0)
@@ -619,7 +660,8 @@ export default function DailyCostSheet() {
         <Button color="inherit" size="small" disabled={copyBusy} onClick={() => void copyPreviousDay('append')}>Add to current</Button>
       </Box>}>
       {previousDay.entry.daily_cost_code} · {displayDate(previousDay.entry.cost_date)} carried {previousDay.services.length} service,{' '}
-      {previousDay.consumables.length} consumable and {previousDay.tangibles.length} tangible line(s) totalling{' '}
+      {previousDay.consumables.length} consumable, {previousDay.tangibles.length} tangible and{' '}
+      {previousDay.other_expenses.length} other-expense line(s) totalling{' '}
       {dailyMoney(previousDay.entry.total_cost, standard)}. Copied lines keep the activity, section, vendor and locked AFE rate, and are saved as new lines on this sheet.
     </Alert>}
     {entry.status === 'draft' && editable && previousError && <Alert severity="info" sx={{ mb: 1.5 }}>{previousError}</Alert>}
@@ -628,10 +670,11 @@ export default function DailyCostSheet() {
       Unsaved changes{previewing ? ' · recalculating against the locked AFE baseline…' : hasPreviewForEdits ? ' · preview is current' : ' · save to update the register'}.
     </Alert>}
 
-    <Box display="grid" gap={1.2} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(5, 1fr)' } }}>
+    <Box display="grid" gap={1.2} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(6, 1fr)' } }}>
       <StatCard label="AFE planned" value={dailyMoney(day.comparison.planned_total, standard)} hint="Locked standard-currency budget"/>
-      <StatCard label="Actual to date" value={dailyMoney(actualToDate, standard)} hint={hasPreviewForEdits ? 'Includes the current unsaved preview' : 'All active sheets through this day'}/>
-      <StatCard label="Remaining balance" value={dailyMoney(remaining, standard)} hint={remaining < 0 ? 'AFE budget is exceeded' : 'Planned less actual to date'} tone={remaining < 0 ? 'bad' : 'good'}/>
+      <StatCard label="Actual to date" value={dailyMoney(actualToDate, standard)} hint={hasPreviewForEdits ? 'Includes the current unsaved preview' : 'All four cost groups through this day'}/>
+      <StatCard label="Other expenses deducted" value={dailyMoney(otherToDate, standard)} hint={otherItemSummary || 'LIH, hole problems and similar charges'} tone={otherToDate ? 'bad' : undefined}/>
+      <StatCard label="Remaining balance" value={dailyMoney(remaining, standard)} hint={remaining < 0 ? 'AFE budget is exceeded' : 'Planned less actual, other expenses included'} tone={remaining < 0 ? 'bad' : 'good'}/>
       <StatCard label="UPA to date" value={dailyMoney(upaToDate, standard)} hint="Unplanned Activity charges" tone={upaToDate ? 'bad' : undefined}/>
       <StatCard label="NPT to date" value={dailyMoney(nptToDate, standard)} hint="Non-Productive Time charges" tone={nptToDate ? 'bad' : undefined}/>
     </Box>
@@ -650,16 +693,21 @@ export default function DailyCostSheet() {
           {previewing && <Tag tone="warning">Repricing…</Tag>}
         </Box>
       </Box>
-      <Box display="grid" gap={1.1} mt={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' } }}>
-        {day.comparison.groups.map(group => <Box key={group.cost_group} sx={{ p: 1.15, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
-          <Typography fontSize={11} fontWeight={800}>{group.cost_group}</Typography>
-          <Typography fontSize={10.5} color="text.secondary" mt={.3}>
-            Planned {dailyMoney(group.planned, standard)} · Actual to date {dailyMoney(currentGroupActual(group.cost_group), standard)}
-          </Typography>
-          <Typography fontSize={11.5} fontWeight={700} color={Number(group.planned) - Number(currentGroupActual(group.cost_group)) < 0 ? 'error.main' : 'success.main'} mt={.3}>
-            Remaining {dailyMoney(Number(group.planned) - Number(currentGroupActual(group.cost_group)), standard)}
-          </Typography>
-        </Box>)}
+      <Box display="grid" gap={1.1} mt={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' } }}>
+        {day.comparison.groups.map(group => {
+          const actual = currentGroupActual(group.cost_group)
+          const balance = Number(group.planned) - Number(actual)
+          const isOtherGroup = group.cost_group === 'Other Expenses'
+          return <Box key={group.cost_group} sx={{ p: 1.15, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+            <Typography fontSize={11} fontWeight={800}>{group.cost_group}</Typography>
+            <Typography fontSize={10.5} color="text.secondary" mt={.3}>
+              {isOtherGroup ? 'No AFE allowance' : `Planned ${dailyMoney(group.planned, standard)}`} · Actual to date {dailyMoney(actual, standard)}
+            </Typography>
+            <Typography fontSize={11.5} fontWeight={700} color={balance < 0 ? 'error.main' : 'success.main'} mt={.3}>
+              {isOtherGroup ? `Deducted from AFE ${dailyMoney(Number(actual), standard)}` : `Remaining ${dailyMoney(balance, standard)}`}
+            </Typography>
+          </Box>
+        })}
       </Box>
     </Paper>
 
@@ -667,6 +715,13 @@ export default function DailyCostSheet() {
       <LineGroup title="Services" subtitle="AFE Day Rate, Per Service Rate and Per Section Rate charges. Hours convert to a portion of the locked day rate." count={payload.services.length} rows={services} columns={makeColumns('service')} editable={editable} canExport={canExport} onExport={recordExport} onAdd={() => setLineEditor({ kind: 'service', index: null })} onImport={openImport}/>
       <LineGroup title="Consumables" subtitle="Itemized chemical, additive, fuel and drill-bit usage, reconciled to either item or category-level AFE allowances." count={payload.consumables.length} rows={consumables} columns={makeColumns('consumable')} editable={editable} canExport={canExport} onExport={recordExport} onAdd={() => setLineEditor({ kind: 'consumable', index: null })} onImport={openImport}/>
       <LineGroup title="Tangibles" subtitle="Actual tangible usage priced from the locked catalogue or a justified daily override." count={payload.tangibles.length} rows={tangibles} columns={makeColumns('tangible')} editable={editable} canExport={canExport} onExport={recordExport} onAdd={() => setLineEditor({ kind: 'tangible', index: null })} onImport={openImport}/>
+      <LineGroup
+        title="Other Expenses"
+        subtitle="Unexpected charges — Lost In Hole, hole problems, fishing, claims. No AFE allowance: the amount is deducted from the AFE total and every line needs a remark."
+        count={otherLineCount} rows={otherExpenses} columns={makeColumns('other')} addLabel="other expense"
+        editable={editable} canExport={canExport} onExport={recordExport}
+        onAdd={() => setLineEditor({ kind: 'other', index: null })} onImport={openImport}
+      />
     </Box>
 
     <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, mt: 1.8 }}>
@@ -674,6 +729,17 @@ export default function DailyCostSheet() {
         <Box><Typography fontWeight={800} fontSize={15}>AFE budget reconciliation</Typography><Typography color="text.secondary" fontSize={11.5} mt={.3}>Category-level bulk allowances are intentionally matched against itemized actuals; balances update as the cost date advances.</Typography></Box>
         {editable && <Button size="small" startIcon={<DownloadOutlined/>} onClick={exportTemplate}>Import template</Button>}
       </Box>
+      <Box display="grid" gap={1} mb={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(4, auto)' }, justifyContent: { sm: 'flex-end' }, alignItems: 'center' }}>
+        <Typography fontSize={11.5} color="text.secondary">Total AFE {dailyMoney(day.comparison.planned_total, standard)}</Typography>
+        <Typography fontSize={11.5} color="text.secondary">Less services, consumables &amp; tangibles {dailyMoney(trackedActualToDate, standard)}</Typography>
+        <Typography fontSize={11.5} fontWeight={700} color={otherToDate ? 'error.main' : 'text.secondary'}>Less other expenses {dailyMoney(otherToDate, standard)}</Typography>
+        <Typography fontSize={12} fontWeight={800} color={remaining < 0 ? 'error.main' : 'success.main'}>AFE available {dailyMoney(remaining, standard)}</Typography>
+      </Box>
+      {Boolean(otherLineCount || day.other_expenses.length) && <Alert severity="warning" sx={{ mb: 1.4 }}>
+        Other expenses on this sheet: {otherLineCount} line(s) totalling {dailyMoney(workingOther, standard)}
+        {otherItemSummary ? ` (${otherItemSummary})` : ''}. They are not part of the AFE estimate, so the amount is
+        deducted from the AFE total rather than reconciled against a budget line.
+      </Alert>}
       <Box sx={{ overflowX: 'auto' }}>
         <Table size="small" sx={{ minWidth: 700 }}>
           <TableHead><TableRow><TableCell>AFE budget line</TableCell><TableCell>Group</TableCell><TableCell align="right">Planned</TableCell><TableCell align="right">Actual to date</TableCell><TableCell align="right">Balance</TableCell></TableRow></TableHead>
@@ -707,9 +773,10 @@ export default function DailyCostSheet() {
 
     <DailyCostLineDialog
       open={Boolean(lineEditor)} kind={lineEditor?.kind ?? null}
-      initialLine={lineEditor?.index === null || !lineEditor ? null : lineEditor.kind === 'service'
-        ? payload.services[lineEditor.index] : lineEditor.kind === 'consumable'
-          ? payload.consumables[lineEditor.index] : payload.tangibles[lineEditor.index]}
+      initialLine={(() => {
+        if (!lineEditor || lineEditor.index === null) return null
+        return payload[GROUP_KEY[lineEditor.kind]][lineEditor.index] as EditableDailyCostLine | undefined ?? null
+      })()}
       serviceLines={payload.services}
       lineIndex={lineEditor?.kind === 'service' ? lineEditor.index : null}
       baseline={baseline} reference={reference} wellId={entry.well_id}
@@ -729,7 +796,7 @@ export default function DailyCostSheet() {
 
     <FormDialog open={importOpen} title="Import daily actuals" subtitle="Upload one CSV or Excel file. Rows are validated as a batch; invalid files make no changes and existing lines are retained." onClose={() => { if (!importBusy) setImportOpen(false) }} onSubmit={() => void importDailyCosts()} busy={importBusy} submitLabel={`Validate and import${importRows.length ? ` (${importRows.length})` : ''}`} submitDisabled={!importRows.length || !editable} maxWidth="md">
       <Box display="grid" gap={1.4}>
-        <Alert severity="info">Use the template for line_type (Service, Consumable or Tangible), activity_code, sub_activity_code and the item/service code. The Activity classifies the line (Planned / UPA / NPT); planned services must include their baseline_service_rate_id, while UPA/NPT manual rates require an override reason. The same service can appear again only under a different sub_activity_code.</Alert>
+        <Alert severity="info">Use the template for line_type (Service, Consumable, Tangible or Other), activity_code, sub_activity_code and the item/service code. The Activity classifies the line (Planned / UPA / NPT); planned services must include their baseline_service_rate_id, while UPA/NPT manual rates require an override reason. An Other row also needs expense_type, unit_rate and a remark, and is deducted from the AFE total. The same service can appear again only under a different sub_activity_code.</Alert>
         <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
           <Button variant="outlined" startIcon={<CloudUploadOutlined/>} onClick={() => fileInput.current?.click()}>Choose CSV / XLSX</Button>
           <Button variant="text" startIcon={<DownloadOutlined/>} onClick={exportTemplate}>Download CSV template</Button>
@@ -748,17 +815,17 @@ export default function DailyCostSheet() {
   </>
 }
 
-function LineGroup({ title, subtitle, count, rows, columns, editable, canExport, onExport, onAdd, onImport }: {
+function LineGroup({ title, subtitle, count, rows, columns, editable, canExport, onExport, onAdd, onImport, addLabel }: {
   title: string; subtitle: string; count: number; rows: GridLine[]; columns: ColDef<GridLine>[]; editable: boolean
   canExport: boolean; onExport: (format: 'csv' | 'xlsx' | 'pdf', count: number) => Promise<void>
-  onAdd: () => void; onImport: () => void
+  onAdd: () => void; onImport: () => void; addLabel?: string
 }) {
   return <Paper variant="outlined" sx={{ borderRadius: 2, overflow: 'hidden' }}>
     <Box display="flex" justifyContent="space-between" alignItems="center" gap={1.5} flexWrap="wrap" p={1.8}>
       <Box><Typography fontWeight={800} fontSize={14}>{title} <Typography component="span" fontSize={12} color="text.secondary" fontWeight={600}>({count})</Typography></Typography><Typography color="text.secondary" fontSize={11.2} mt={.25}>{subtitle}</Typography></Box>
       {editable && <Box display="flex" gap={.7}>
         <Button size="small" onClick={onImport} startIcon={<CloudUploadOutlined sx={{ fontSize: 17 }}/>}>Import</Button>
-        <Button size="small" variant="contained" onClick={onAdd} startIcon={<AddRounded sx={{ fontSize: 17 }}/>}>Add {title === 'Services' ? 'service' : title === 'Consumables' ? 'usage' : 'tangible'}</Button>
+        <Button size="small" variant="contained" onClick={onAdd} startIcon={<AddRounded sx={{ fontSize: 17 }}/>}>Add {addLabel ?? (title === 'Services' ? 'service' : title === 'Consumables' ? 'usage' : 'tangible')}</Button>
       </Box>}
     </Box>
     <DataTable rows={rows} columns={columns} rowKey="id" searchPlaceholder={`Search ${title.toLowerCase()} by item, activity, vendor or status…`} exportName={`daily-cost-${title.toLowerCase()}`} canExport={canExport} onExport={canExport ? onExport : undefined}/>
