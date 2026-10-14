@@ -14,6 +14,10 @@ services:
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
     healthCheckPath: /api/health
     envVars:
+      # Do not inherit Render's changing default Python runtime. Keep this in
+      # sync with the version used for local development and CI.
+      - key: PYTHON_VERSION
+        value: "3.12.11"
       # Supabase Connect -> Session pooler: preserve generated host/user, use port 5432.
       - key: DATABASE_URL
         sync: false

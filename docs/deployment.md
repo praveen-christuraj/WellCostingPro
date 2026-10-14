@@ -26,7 +26,8 @@ Estimated setup time: 30–60 minutes, excluding time spent troubleshooting prov
 
 - Render must run from `backend/`; it contains `requirements.txt`, `alembic.ini`, `alembic/`, and `app/`.
 - Vercel must build from `frontend/`; its frontend calls relative `/api/v1` URLs and requires no `VITE_API_URL`.
-- `frontend/vercel.json` currently contains an intentional Render-hostname placeholder. Until it is replaced and redeployed, Vercel API requests will fail.
+- `frontend/vercel.json` must contain the actual Render hostname. If the Render
+  service is renamed, update every external rewrite and redeploy Vercel.
 - `GET /api/health` **is not a database-readiness check**: the application catches database errors and can still return HTTP 200 with `{"status":"ok","admin_seeded":false}`. Use migration logs and `admin_seeded:true` to verify first-run setup.
 - Render's current default Python runtime may differ from the one used during development. **Pin Python 3.12** as shown below rather than relying on Render's default.
 
@@ -218,19 +219,23 @@ Notes:
      "rewrites": [
        { "source": "/api/:path*", "destination": "https://wellcosting-api.onrender.com/api/:path*" },
        { "source": "/docs", "destination": "https://wellcosting-api.onrender.com/docs" },
-       { "source": "/openapi.json", "destination": "https://wellcosting-api.onrender.com/openapi.json" }
+       { "source": "/openapi.json", "destination": "https://wellcosting-api.onrender.com/openapi.json" },
+       { "source": "/(.*)", "destination": "/index.html" }
      ]
    }
    ```
 
-   Keep all three rewrites: `/api/...` for the application, `/docs` for API
-   documentation, and `/openapi.json` for the schema. Vercel reads this file
+   Keep the three backend rewrites—`/api/...` for the application, `/docs` for
+   API documentation, and `/openapi.json` for the schema—before the final
+   `/(.*)` → `/index.html` SPA fallback. The fallback lets React Router serve
+   direct visits and browser refreshes such as `/login`; without it Vercel
+   returns 404 for client-side routes. Vercel reads this file
    from the project root directory (`frontend/`). See
    [Vercel project configuration](https://vercel.com/docs/project-configuration)
    for details about `vercel.json`.
 5. Commit and push this `vercel.json` change to the production branch. Vercel
    auto-deploys when that branch receives a push. A deployment made before this
-   change will still contain the placeholder and its API routes will not work.
+   change will still contain the previous proxy/fallback configuration.
 6. In Vercel, open the project's **Deployments** page and wait for the latest
    deployment to finish. Open the assigned production domain (not a preview
    deployment URL) and record its origin, e.g.
@@ -302,6 +307,12 @@ e-mail and the password you chose.
 3. **Service live but `admin_seeded:false`:** inspect logs for `Administrator setup failed`, `No administrator account exists`, or database exceptions. Verify that all five `SEED_*` variables are set, and that migrations finished. Do not treat HTTP 200 from `/api/health` as proof of a working database.
 4. **Render API works, Vercel API fails:** check `frontend/vercel.json` for the actual Render hostname, commit the change, and verify a new production Vercel deployment. Test `https://YOUR-VERCEL-DOMAIN/api/health` before testing login.
 5. **Login fails:** first verify `admin_seeded:true`; then use the exact workspace slug, email and password configured in Render. Check Render logs for validation errors. Never reset the database simply to fix login.
+
+`ERR_HTTP2_PROTOCOL_ERROR` on both `/api/health` and `/api/v1/auth/login` is
+normally an upstream availability failure, not invalid login credentials. Test
+the Render health URL directly first. If it is unavailable, inspect the first
+Render startup error after `alembic upgrade head`; if it works directly but not
+through Vercel, verify the external rewrite hostname and redeploy Vercel.
 
 ### Safe database URL validation
 

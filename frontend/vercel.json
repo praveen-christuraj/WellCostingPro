@@ -13,6 +13,10 @@
     {
       "source": "/openapi.json",
       "destination": "https://wellcosting-api.onrender.com/openapi.json"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
