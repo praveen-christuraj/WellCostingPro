@@ -190,35 +190,59 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   }
 }
 
-/* AFE print sheet: hidden on screen. When printing, the app is hidden and the full AFE
-   (well configuration, cost summary, services, consumables, tangibles) is shown in order. */
+/* AFE print sheet: hidden on screen. When printing, the app is hidden and the AFE report is
+   shown in its fixed two-page format - summary and sign-off on page 1, the consumable and
+   tangible line detail on page 2. Daily Cost printing reuses these rules and the .ps-* classes. */
 .afe-print-sheet { display: none; }
 @media print {
-  @page { size: A4; margin: 12mm 10mm; }
+  @page {
+    size: A4 portrait;
+    margin: 9mm 10mm 11mm;
+    /* Page numbers live in the margin box, so they stay correct on any number of pages. */
+    @bottom-right { content: "Page " counter(page) " of " counter(pages); font-family: Arial, Helvetica, sans-serif; font-size: 7.5pt; color: #4A6F96; }
+  }
   body > #root { display: none !important; }
   body { background: #fff !important; overflow: visible !important; }
   /* Report preparation dialogs are body portals too; never print their overlay. */
   .MuiModal-root { display: none !important; }
-  .afe-print-sheet { display: block !important; color: #000; background: #fff; font-family: Arial, Helvetica, sans-serif; font-size: 9.5pt; line-height: 1.35; }
-  .afe-print-sheet h1 { font-size: 15pt; margin: 2mm 0 3mm; }
-  .afe-print-sheet h2 { font-size: 11.5pt; margin: 5mm 0 2mm; border-bottom: 1px solid #000; padding-bottom: 1mm; page-break-after: avoid; }
-  .afe-print-sheet h3 { font-size: 10pt; margin: 3mm 0 1mm; page-break-after: avoid; }
-  .afe-print-sheet table { width: 100%; border-collapse: collapse; margin-bottom: 2mm; }
-  .afe-print-sheet th, .afe-print-sheet td { border: 1px solid #777; padding: 1.2mm 1.6mm; text-align: left; vertical-align: top; }
-  .afe-print-sheet th { background: #E6ECF3 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-weight: 700; }
+  .afe-print-sheet { display: block !important; color: #16283F; background: #fff; font-family: Arial, Helvetica, sans-serif; font-size: 8.8pt; line-height: 1.3; }
+  .afe-print-sheet h1 { font-size: 15pt; margin: 0; color: #0B2A47; }
+  .afe-print-sheet h2 { font-size: 10.5pt; margin: 4mm 0 1.5mm; color: #0B2A47; border-bottom: .6pt solid #123A63; padding-bottom: .8mm; page-break-after: avoid; }
+  .afe-print-sheet h3 { font-size: 9.5pt; margin: 3mm 0 1mm; color: #123A63; page-break-after: avoid; }
+  .afe-print-sheet p { margin: 0 0 1.5mm; }
+  .afe-print-sheet table { width: 100%; border-collapse: collapse; margin: 0 0 1.5mm; }
+  /* Fixed layout with the colgroup widths keeps every column of the report aligned. */
+  .afe-print-sheet .ps-table { table-layout: fixed; }
+  .afe-print-sheet th, .afe-print-sheet td { border: .5pt solid #B9CCE0; padding: 1mm 1.4mm; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
   .afe-print-sheet thead { display: table-header-group; }
+  .afe-print-sheet thead th { background: #E8EEF6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; color: #0B2A47; font-size: 8pt; }
+  .afe-print-sheet tbody th, .afe-print-sheet tfoot th { background: #F3F6FA !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; font-weight: 700; }
   .afe-print-sheet tr { page-break-inside: avoid; }
   .afe-print-sheet .num { text-align: right; white-space: nowrap; }
-  .afe-print-sheet .ps-eyebrow { font-size: 8pt; letter-spacing: 1px; text-transform: uppercase; color: #333; }
-  .afe-print-sheet .ps-meta th { width: 14%; background: #F3F6FA !important; }
+  .afe-print-sheet .ps-eyebrow { font-size: 8pt; letter-spacing: 1px; text-transform: uppercase; color: #4A6F96; }
+  .afe-print-sheet .ps-sub { font-size: 8pt; color: #4A6F96; margin-top: .5mm; }
   .afe-print-sheet .ps-line td { background: #FBFCFE; }
   .afe-print-sheet .ps-component td { font-size: 8.5pt; color: #333; }
   .afe-print-sheet .ps-notes { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .afe-print-sheet .ps-sub { font-size: 8.5pt; color: #444; margin-top: .6mm; }
-  .afe-print-sheet .ps-total th, .afe-print-sheet .ps-total td { font-weight: 800; background: #E6ECF3 !important; }
-  .afe-print-sheet .ps-empty { font-style: italic; color: #444; }
-  .afe-print-sheet .ps-warnings { margin-top: 2mm; font-size: 9pt; }
-  .afe-print-sheet .ps-footer { margin-top: 5mm; font-size: 9pt; }
+  .afe-print-sheet .ps-empty { font-style: italic; color: #4A6F96; }
+  .afe-print-sheet .ps-note { font-size: 8pt; color: #4A6F96; }
+  .afe-print-sheet .ps-warnings { margin-top: 2mm; font-size: 8.5pt; }
+  .afe-print-sheet .ps-total th, .afe-print-sheet .ps-total td { font-weight: 800; background: #E8EEF6 !important; }
+  /* The grand total stays readable even when a printer drops background graphics. */
+  .afe-print-sheet .ps-grand th, .afe-print-sheet .ps-grand td { font-size: 10pt; font-weight: 800; color: #0B2A47; background: #E8EEF6 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; border-top: 1.2pt solid #123A63; border-bottom: 1.2pt solid #123A63; }
+  .afe-print-sheet .ps-meta { table-layout: fixed; }
+  .afe-print-sheet .ps-meta th { width: 17%; background: #F3F6FA !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* Two fixed pages: the second one always starts on a new sheet. */
+  .afe-print-sheet .ps-page + .ps-page { break-before: page; }
+  .afe-print-sheet .ps-titlebar { display: flex; justify-content: space-between; align-items: flex-end; gap: 6mm; border-bottom: 1.2pt solid #123A63; padding-bottom: 1.5mm; margin-bottom: 3mm; }
+  .afe-print-sheet .ps-titlemeta { text-align: right; font-size: 8.5pt; line-height: 1.45; }
+  .afe-print-sheet .ps-titlecode { display: block; font-size: 11pt; font-weight: 700; color: #0B2A47; }
+  .afe-print-sheet .ps-printed { display: block; color: #4A6F96; }
+  .afe-print-sheet .ps-pagefoot { display: flex; justify-content: space-between; margin-top: 4mm; padding-top: 1mm; border-top: .5pt solid #B9CCE0; font-size: 7.5pt; color: #4A6F96; }
+  /* The sign-off row is left empty for a wet signature, and the block never splits. */
+  .afe-print-sheet .ps-sign td { height: 16mm; }
+  .afe-print-sheet .ps-keep { break-inside: avoid; }
 }
 
 /* AG Grid empty state (DataTable sets this as the no-rows overlay). */

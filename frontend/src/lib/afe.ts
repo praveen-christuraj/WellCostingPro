@@ -257,6 +257,15 @@ export type WellScope = {
   }[]
 }
 
+// One recorded workflow move. The print sheet uses these to name who submitted,
+// reviewed and approved the AFE; only the latest move per action is returned.
+export type AfeStatusEvent = {
+  action: 'submit' | 'review' | 'approve' | 'reopen'
+  actor_name: string
+  actor_email: string
+  created_at: string
+}
+
 export type AfeEstimate = {
   afe: Afe
   well: WellScope
@@ -264,6 +273,7 @@ export type AfeEstimate = {
   consumables: ConsumableLineOut[]
   tangibles: TangibleLineOut[]
   summary: EstimateSummary
+  status_history: AfeStatusEvent[]
   persisted: boolean
   saved_at: string | null
   saved_by: string

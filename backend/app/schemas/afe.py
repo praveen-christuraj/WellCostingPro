@@ -508,6 +508,15 @@ class WellScopeOut(BaseModel):
     sections: list[ScopeSectionOut]
 
 
+class AfeStatusEventOut(BaseModel):
+    """One recorded workflow move (submit, review, approve, reopen) with its actor."""
+
+    action: str
+    actor_name: str
+    actor_email: str
+    created_at: datetime
+
+
 class AfeEstimateOut(BaseModel):
     afe: AfeOut
     well: WellScopeOut
@@ -515,6 +524,9 @@ class AfeEstimateOut(BaseModel):
     consumables: list[ConsumableLineOut]
     tangibles: list[TangibleLineOut]
     summary: EstimateSummaryOut
+    # Latest recorded move per workflow action, so a printed AFE can name who submitted,
+    # reviewed and approved it instead of only the last status change.
+    status_history: list[AfeStatusEventOut] = Field(default_factory=list)
     persisted: bool
     saved_at: datetime | None
     saved_by: str
