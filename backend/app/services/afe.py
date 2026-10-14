@@ -64,6 +64,7 @@ from app.schemas.afe import (
     AfeReferenceWell,
     AfeCreate,
     AfeUpdate,
+    AfeStatusEventOut,
     ComponentOut,
     ConsumableLineOut,
     CurrencyTotalOut,
@@ -105,7 +106,11 @@ ACTION_PERMISSION = {
     "reopen": "afe:reopen",
 }
 ACTION_LABELS = {"submit": "submitted", "review": "moved to review", "approve": "approved", "reopen": "reopened as draft"}
+
 REMARKS_REQUIRED_FOR = {"approve", "reopen"}
+
+# Workflow moves recorded in the audit trail, in workflow order.
+STATUS_ACTIONS = ("submit", "review", "approve", "reopen")
 
 # A process-level lock serialises estimate saves. Combined with the row lock below it
 # also protects single-process SQLite deployments where row locks do not exist.
@@ -1045,6 +1050,37 @@ def _stored_priced(afe: Afe, well: Well | None, lookups: Lookups) -> Priced:
     return _price(scope, _stored_resolved(afe, lookups), lookups, afe.standard_currency, _stored_rates(afe))
 
 
+def _status_history(db: Session, organization_id: str, afe: Afe) -> list[AfeStatusEventOut]:
+    """The latest recorded move per workflow action, ordered submit, review, approve, reopen.
+
+    A printed AFE names who submitted, reviewed and approved it. Only the audit trail keeps
+    every move; the AFE row itself stores the last status change alone.
+    """
+    rows = db.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.organization_id == organization_id,
+            AuditLog.entity_type == "afe",
+            AuditLog.entity_id == afe.id,
+            AuditLog.action.in_(STATUS_ACTIONS),
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(4 * len(STATUS_ACTIONS))
+    ).all()
+    latest: dict[str, AfeStatusEventOut] = {}
+    for row in rows:  # newest first, so the first row seen per action is the latest move
+        if row.action in latest:
+            continue
+        latest[row.action] = AfeStatusEventOut(
+            action=row.action,
+            actor_name=row.actor_name,
+            actor_email=row.actor_email,
+            created_at=row.created_at,
+        )
+    order = {action: index for index, action in enumerate(STATUS_ACTIONS)}
+    return sorted(latest.values(), key=lambda event: order.get(event.action, len(order)))
+
+
 def _estimate_view(db: Session, organization_id: str, afe: Afe, *, persisted: bool) -> AfeEstimateOut:
     well = _wells_by_id(db, organization_id, [afe.well_id]).get(afe.well_id)
     lookups = _lookups_for_afes(db, organization_id, [afe])
@@ -1056,6 +1092,7 @@ def _estimate_view(db: Session, organization_id: str, afe: Afe, *, persisted: bo
         consumables=priced.consumables,
         tangibles=priced.tangibles,
         summary=priced.summary,
+        status_history=_status_history(db, organization_id, afe),
         persisted=persisted,
         saved_at=afe.estimate_saved_at,
         saved_by=afe.estimate_saved_by,
@@ -1472,6 +1509,7 @@ def preview_estimate(db: Session, organization_id: str, afe_id: str, payload: Es
         consumables=priced.consumables,
         tangibles=priced.tangibles,
         summary=priced.summary,
+        status_history=_status_history(db, organization_id, afe),
         persisted=False,
         saved_at=afe.estimate_saved_at,
         saved_by=afe.estimate_saved_by,

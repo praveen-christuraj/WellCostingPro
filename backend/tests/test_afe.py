@@ -556,6 +556,31 @@ def test_status_moves_are_controlled_from_estimate_and_gated_by_permission():
         assert reopened.status_code == 200 and reopened.json()["status"] == "draft"
 
 
+def test_estimate_carries_the_status_history_the_printed_signoff_block_needs():
+    with TestClient(app) as client:
+        headers = login(client)
+        master, _, _, afe = _setup(client, headers)
+        base = f"/api/v1/afe/afes/{afe['id']}"
+
+        assert client.get(f"{base}/estimate", headers=headers).json()["status_history"] == []
+
+        client.put(f"{base}/estimate", headers=headers, json=_estimate_payload(master))
+        client.post(f"{base}/status", headers=headers, json={"action": "submit", "remarks": "Ready for review"})
+        submitted = client.get(f"{base}/estimate", headers=headers).json()["status_history"]
+        assert [event["action"] for event in submitted] == ["submit"]
+        assert submitted[0]["actor_name"] == "Test Owner" and submitted[0]["created_at"]
+
+        client.post(f"{base}/status", headers=headers, json={"action": "review", "remarks": ""})
+        client.post(f"{base}/status", headers=headers, json={"action": "approve", "remarks": "Approved by management"})
+        history = client.get(f"{base}/estimate", headers=headers).json()["status_history"]
+        assert [event["action"] for event in history] == ["submit", "review", "approve"]
+
+        # A reopen is recorded as well; the print sheet uses it to drop a stale approval.
+        client.post(f"{base}/status", headers=headers, json={"action": "reopen", "remarks": "Scope change"})
+        reopened = client.get(f"{base}/estimate", headers=headers).json()["status_history"]
+        assert [event["action"] for event in reopened] == ["submit", "review", "approve", "reopen"]
+
+
 def test_soft_delete_restore_permanent_delete_and_bulk_actions_are_audited():
     with TestClient(app) as client:
         headers = login(client)

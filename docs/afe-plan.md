@@ -13,7 +13,8 @@ redesigned for this app's structure and models; the reference tab layout is not 
 - **Deleted entries** (same page, tab `Deleted entries`): restore or permanently delete soft-deleted AFEs.
 - **Overview dashboard** (`/afe`): totals, approval progress, highest-cost wells, recent activity.
 - **Estimate workspace** (`/afe/estimate/:afeId`): line-item estimate, bulk estimate by section (available from
-  both the Services and Consumables cards), currency and conversion panel, section rollup, print.
+  both the Services and Consumables cards), currency and conversion panel, section rollup, print
+  (two-page AFE report, see *Print format*).
 
 ## Data model
 
@@ -73,6 +74,37 @@ lock, so a double click cannot duplicate lines.
 - Preview prices live master data and the well plan, writes nothing, and reports every problem at once.
   The UI previews only valid lines, so one incomplete row does not block the rest.
 
+## Print format
+
+The printed AFE is a fixed two-page A4 portrait report with 9 mm / 10 mm / 11 mm margins, a navy
+heading rule, no repeated page furniture (the page number sits in the `@page` margin box) and the
+app itself hidden while printing.
+
+**Page 1 — the AFE.**
+
+1. Title block: "AFE Cost Estimate" with the AFE code, AFE name and the print timestamp.
+2. Metadata: rig, well, AFE number, AFE name, objective of the well, location / block, well plan
+   status, total depth, planned days, AFE type and plan scope, AFE status, and who saved the
+   estimate when.
+3. Sections and depths: one row per hole section with from / to depth, section days and the phase
+   breakdown with phase days, plus a well-plan footer row (sections, total depth, total days, phases).
+4. Services and cost: one row per service line — code, name, provider / vendor, charging basis with
+   its rate detail (unit rate × charged quantity, fixed amount, or section-rate count), scope, phase,
+   currency, amount and **remarks** — with a services subtotal in the standard currency.
+5. Consumables and tangibles: lump sums for **Mud Chemicals, Cement Additives, Fuel and Drill Bits**,
+   the consumables total, the tangibles total and the **total AFE amount**.
+6. Authorisation: **Submitted by / Reviewed by / Approved by**, each with name, email, date and an
+   empty signature row. Names come from the latest recorded move per workflow action in the audit
+   trail; a reopen clears the stages recorded before it.
+
+**Page 2 — line detail.** Every consumable line (lump sums show their section and phase; drill bits
+show the bit, make, type, size and description) and every tangible line (manufacturer, UOM, quantity,
+rate, amount, remarks), each table closing with its standard-currency total and the total AFE amount.
+
+Amounts stay in each line's currency; subtotals and totals are converted to the estimate's standard
+currency at the rates saved with it, and an incomplete conversion prints "Pending conversion" rather
+than a wrong figure.
+
 ## Permissions and audit
 
 - Permission keys: `afe:read`, `create`, `update`, `delete`, `restore`, `permanent-delete`, `import`,
@@ -112,6 +144,11 @@ UI says that daily consumption is not deducted automatically.
 
 - Backend: `cd backend && ../.venv/bin/python -m pytest -q` passes (84 tests in the full suite, including
   22 AFE tests). Pyflakes is clean on the AFE modules.
+- Print: the two-page AFE report renders from `AfePrintSheet.tsx` with the `@media print` rules in
+  `styles.css`; the estimate response carries `status_history` for the sign-off block. Verified by
+  rendering the real component against sample estimates (structure, lump sums, currency conversion,
+  reopen handling) plus the backend suite and `npm run build`; no browser was available in this
+  environment for a print-dialog pass.
 - Migration: upgrade, downgrade and re-upgrade on a fresh SQLite database; `alembic check` clean.
 - Frontend: `npm run build` passes (type check and Vite build).
 - `make graph` runs cleanly and refreshes `.agent/memory/architecture.dot`.
@@ -122,6 +159,11 @@ UI says that daily consumption is not deducted automatically.
 
 - The estimate tables are AG Grid instances. The print sheet and the section rollup are plain tables,
   so they print in full.
+- The printed AFE is a fixed two-page portrait report (see *Print format* below): page 1 carries the
+  metadata, the service schedule with remarks, the consumable and tangible lump sums, the total AFE
+  amount and the submitted / reviewed / approved sign-off; page 2 lists every consumable and tangible
+  line. Line detail is therefore not repeated on page 1, and the sign-off block names the actors recorded
+  in the audit trail for each workflow move.
 - Conversion rates are typed in by the user for each save. They are not fetched from a rate source, and the
   rate history is not kept beyond the saved estimate.
 - Line-level amounts stay in the entered currency. Converted figures appear at estimate, section and AFE level.
