@@ -243,6 +243,45 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   /* The sign-off row is left empty for a wet signature, and the block never splits. */
   .afe-print-sheet .ps-sign td { height: 16mm; }
   .afe-print-sheet .ps-keep { break-inside: avoid; }
+
+  /* AFE-only density and wrapping. Daily Cost shares the base .ps-* rules above, so these
+     overrides must stay under .afe-cost-print-sheet. */
+  .afe-cost-print-sheet { font-size: 8pt; line-height: 1.18; }
+  .afe-cost-print-sheet h1 { font-size: 13.5pt; line-height: 1.12; overflow-wrap: anywhere; }
+  .afe-cost-print-sheet h2 { font-size: 9.5pt; margin: 2.2mm 0 1mm; padding-bottom: .5mm; }
+  .afe-cost-print-sheet table { margin-bottom: .9mm; }
+  .afe-cost-print-sheet th,
+  .afe-cost-print-sheet td {
+    padding: .65mm .85mm;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: normal;
+    hyphens: auto;
+  }
+  .afe-cost-print-sheet .num { white-space: normal; font-variant-numeric: tabular-nums; }
+  .afe-cost-print-sheet .ps-sub,
+  .afe-cost-print-sheet .ps-note,
+  .afe-cost-print-sheet thead th { font-size: 7.3pt; }
+  .afe-cost-print-sheet .ps-titlebar { gap: 3mm; padding-bottom: 1mm; margin-bottom: 1.8mm; }
+  .afe-cost-print-sheet .ps-title { min-width: 0; }
+  .afe-cost-print-sheet .ps-titlemeta { max-width: 46%; min-width: 0; font-size: 7.8pt; line-height: 1.25; overflow-wrap: anywhere; }
+  .afe-cost-print-sheet .ps-titlecode { font-size: 10pt; }
+  .afe-cost-print-sheet .ps-meta th { width: 15%; }
+  .afe-cost-print-sheet .ps-pagefoot { margin-top: 2mm; }
+  .afe-cost-print-sheet .ps-sign td { height: 10mm; }
+  .afe-cost-print-sheet .ps-warnings { margin-top: 1mm; font-size: 7.6pt; }
+  .afe-cost-print-sheet .ps-warnings ul { margin: .8mm 0 1mm; padding-left: 5mm; }
+
+  /* Larger service schedules get one further density step so the required page-one summary
+     remains together without removing rate, scope, amount or remark content. */
+  .afe-cost-print-sheet .ps-afe-dense { font-size: 7.1pt; line-height: 1.1; }
+  .afe-cost-print-sheet .ps-afe-dense h1 { font-size: 12.5pt; }
+  .afe-cost-print-sheet .ps-afe-dense h2 { margin-top: 1.4mm; }
+  .afe-cost-print-sheet .ps-afe-dense th,
+  .afe-cost-print-sheet .ps-afe-dense td { padding: .45mm .65mm; }
+  .afe-cost-print-sheet .ps-afe-dense .ps-sub,
+  .afe-cost-print-sheet .ps-afe-dense .ps-note,
+  .afe-cost-print-sheet .ps-afe-dense thead th { font-size: 6.6pt; }
 }
 
 /* AG Grid empty state (DataTable sets this as the no-rows overlay). */

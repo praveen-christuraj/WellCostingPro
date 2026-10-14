@@ -1,24 +1,12 @@
 import { createPortal } from 'react-dom'
-import { CONSUMABLE_CATEGORIES, amountText, daysText, STATUS_LABEL, type AfeEstimate, type AfeStatusEvent, type EstimateSummary, type ServiceLineOut } from '../../lib/afe'
+import { amountText, daysText, STATUS_LABEL, type AfeEstimate, type AfeStatusEvent, type ServiceLineOut } from '../../lib/afe'
 
 // Print layout for a saved AFE, in the fixed two-page AFE format:
-//   page 1 - title, well and AFE metadata, sections with depths and days, the service
-//            schedule with remarks, consumable and tangible lump sums, the total AFE
-//            amount and the submitted / reviewed / approved sign-off block;
-//   page 2 - the detailed consumable and tangible line lists.
+//   page 1 - title, well and AFE metadata, the service schedule with remarks,
+//            consumable and tangible lump sums, and the total AFE amount;
+//   page 2 - sections, detailed consumable and tangible line lists, and sign-off.
 // Plain HTML tables (not the grid), so every line prints. Hidden on screen, shown only by the
 // @media print rules in styles.css, which Daily Cost printing reuses through .ps-* classes.
-
-/** A line's amount restated in the estimate's standard currency, at the saved rates. */
-function standardAmount(line: { amount: string; currency: string }, summary: EstimateSummary): number | null {
-  const standard = summary.currency.standard_currency
-  const amount = Number(line.amount)
-  if (!standard || !Number.isFinite(amount)) return null
-  if (!line.currency || line.currency === standard) return amount
-  const rate = summary.currency.exchange_rates.find(item => item.currency_code === line.currency)
-  const value = rate ? Number(rate.rate) : 0
-  return value > 0 ? amount * value : null
-}
 
 const quantityText = (value: string): string =>
   Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 })
@@ -44,21 +32,6 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
   const multiCurrency = summary.currency.multi_currency
   const pending = 'Pending conversion'
 
-  // Consumable lump sums per category, restated in the standard currency.
-  const categoryTotals = CONSUMABLE_CATEGORIES.map(category => {
-    const lines = consumables.filter(line => line.category === category)
-    let amount: number | null = 0
-    for (const line of lines) {
-      const value = standardAmount(line, summary)
-      if (value === null) {
-        amount = null
-        break
-      }
-      amount += value
-    }
-    return { category, lines: lines.length, amount }
-  })
-
   // Latest recorded move per workflow action. A reopen cancels the stages before it, so a
   // reopened AFE never prints a stale review or approval.
   const history = estimate.status_history ?? []
@@ -80,9 +53,9 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
 
   const lineCount = (count: number): string => (count ? `${count} line(s)` : 'no lines')
 
-  return createPortal(<div className="afe-print-sheet" aria-hidden="true">
-    {/* Page 1 - the AFE itself: metadata, sections, services, lump sums, total and sign-off. */}
-    <div className="ps-page">
+  return createPortal(<div className="afe-print-sheet afe-cost-print-sheet" aria-hidden="true">
+    {/* Page 1 - compact summary: metadata, services, group lump sums and total. */}
+    <div className={`ps-page ps-afe-summary${services.length > 14 ? ' ps-afe-dense' : ''}`}>
       <header className="ps-titlebar">
         <div className="ps-title">
           <div className="ps-eyebrow">Authorization for expenditure · cost estimate</div>
@@ -127,6 +100,84 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
         </tbody>
       </table>
 
+      <h2>Services and cost</h2>
+      {services.length === 0 ? <p className="ps-empty">No service lines.</p> : (
+        <table className="ps-table">
+          <colgroup>
+            <col style={{ width: '4%' }}/><col style={{ width: '24%' }}/><col style={{ width: '18%' }}/><col style={{ width: '14%' }}/><col style={{ width: '7%' }}/><col style={{ width: '16%' }}/><col style={{ width: '17%' }}/>
+          </colgroup>
+          <thead>
+            <tr>
+              <th>#</th><th>Service</th><th>Basis</th><th>Scope</th><th>Ccy</th><th className="num">Amount</th><th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            {services.map((line, index) => (
+              <tr className="ps-line" key={line.client_key ?? line.id ?? line.service_id}>
+                <td>{index + 1}</td>
+                <td><strong>{line.service_name}</strong><div className="ps-sub">{[line.provider_type, line.vendor_name || 'No vendor'].join(' · ')}</div></td>
+                <td>{line.charging_basis}<div className="ps-sub">{basisDetail(line)}</div></td>
+                <td>{line.section_label || (line.charging_basis === 'Per Section Rate' ? 'Per section' : 'All sections')}{line.phase_label ? <div className="ps-sub">{line.phase_label}</div> : null}</td>
+                <td>{line.currency}</td>
+                <td className="num">{amountText(line.amount, line.currency)}</td>
+                <td className="ps-notes">{line.remarks || '—'}</td>
+              </tr>
+            ))}
+            <tr className="ps-subtotal">
+              <td colSpan={5}>Services total{standard ? ` (${standard})` : ''}</td>
+              <td className="num">{summary.services_total === null ? pending : amountText(summary.services_total, standard)}</td>
+              <td>{multiCurrency ? 'converted at saved rates' : ''}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+
+      <div className="ps-keep">
+        <h2>Consumables and tangibles</h2>
+        <table className="ps-table">
+          <colgroup><col style={{ width: '55%' }}/><col style={{ width: '29%' }}/><col style={{ width: '16%' }}/></colgroup>
+          <thead>
+            <tr><th>Cost group</th><th>Basis</th><th className="num">Amount{standard ? ` (${standard})` : ''}</th></tr>
+          </thead>
+          <tbody>
+            <tr className="ps-subtotal">
+              <td>Consumables lump sum</td>
+              <td>{lineCount(consumables.length)}</td>
+              <td className="num">{summary.consumables_total === null ? pending : amountText(summary.consumables_total, standard)}</td>
+            </tr>
+            <tr className="ps-subtotal">
+              <td>Tangibles lump sum</td>
+              <td>{lineCount(tangibles.length)}</td>
+              <td className="num">{summary.tangibles_total === null ? pending : amountText(summary.tangibles_total, standard)}</td>
+            </tr>
+            <tr className="ps-total ps-grand">
+              <td colSpan={2}>Total AFE amount</td>
+              <td className="num">{summary.total === null ? pending : amountText(summary.total, standard)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {multiCurrency && <p className="ps-note">Line amounts stay in each line's currency. Every subtotal and total above is converted to {standard} at the rates saved with this estimate.</p>}
+
+      <footer className="ps-pagefoot">
+        <span>WellCosting Pro · AFE cost estimate · {afe.afe_code}</span>
+      </footer>
+    </div>
+
+    {/* Page 2 - well plan, line detail behind page 1's lump sums, warnings and sign-off. */}
+    <div className="ps-page">
+      <header className="ps-titlebar">
+        <div className="ps-title">
+          <div className="ps-eyebrow">Authorization for expenditure · cost estimate</div>
+          <h1>AFE supporting detail</h1>
+        </div>
+        <div className="ps-titlemeta">
+          <span className="ps-titlecode">{afe.afe_code}</span>
+          <span>{afe.well_code} · {afe.well_name}</span>
+          <span className="ps-printed">{afe.afe_type} AFE · {STATUS_LABEL[afe.status]}</span>
+        </div>
+      </header>
+
       <div className="ps-keep">
         <h2>Sections and depths</h2>
         {well.sections.length === 0 ? <p className="ps-empty">The well has no configured sections.</p> : (
@@ -165,127 +216,6 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
           </table>
         )}
       </div>
-
-      <h2>Services and cost</h2>
-      {services.length === 0 ? <p className="ps-empty">No service lines.</p> : (
-        <table className="ps-table">
-          <colgroup>
-            <col style={{ width: '4%' }}/><col style={{ width: '25%' }}/><col style={{ width: '16%' }}/><col style={{ width: '13%' }}/><col style={{ width: '6%' }}/><col style={{ width: '16%' }}/><col style={{ width: '20%' }}/>
-          </colgroup>
-          <thead>
-            <tr>
-              <th>#</th><th>Service</th><th>Basis</th><th>Scope</th><th>Ccy</th><th className="num">Amount</th><th>Remarks</th>
-            </tr>
-          </thead>
-          <tbody>
-            {services.map((line, index) => (
-              <tr className="ps-line" key={line.client_key ?? line.id ?? line.service_id}>
-                <td>{index + 1}</td>
-                <td><strong>{line.service_code}</strong> · {line.service_name}<div className="ps-sub">{[line.provider_type, line.vendor_name || 'No vendor'].join(' · ')}</div></td>
-                <td>{line.charging_basis}<div className="ps-sub">{basisDetail(line)}</div></td>
-                <td>{line.section_label || (line.charging_basis === 'Per Section Rate' ? 'Per section' : 'All sections')}{line.phase_label ? <div className="ps-sub">{line.phase_label}</div> : null}</td>
-                <td>{line.currency}</td>
-                <td className="num">{amountText(line.amount, line.currency)}</td>
-                <td className="ps-notes">{line.remarks || '—'}</td>
-              </tr>
-            ))}
-            <tr className="ps-subtotal">
-              <td colSpan={5}>Services total{standard ? ` (${standard})` : ''}</td>
-              <td className="num">{summary.services_total === null ? pending : amountText(summary.services_total, standard)}</td>
-              <td>{multiCurrency ? 'converted at saved rates' : ''}</td>
-            </tr>
-          </tbody>
-        </table>
-      )}
-
-      <div className="ps-keep">
-        <h2>Consumables and tangibles</h2>
-        <table className="ps-table">
-          <colgroup><col style={{ width: '55%' }}/><col style={{ width: '29%' }}/><col style={{ width: '16%' }}/></colgroup>
-          <thead>
-            <tr><th>Cost group</th><th>Basis</th><th className="num">Amount{standard ? ` (${standard})` : ''}</th></tr>
-          </thead>
-          <tbody>
-            {categoryTotals.map(row => (
-              <tr key={row.category}>
-                <td>{row.category}</td>
-                <td>{row.category === 'Drill Bits' ? 'Quantity × rate' : 'Lump sum'} · {lineCount(row.lines)}</td>
-                <td className="num">{row.lines === 0 ? '—' : row.amount === null ? pending : amountText(row.amount, standard)}</td>
-              </tr>
-            ))}
-            <tr className="ps-subtotal">
-              <td>Consumables total</td>
-              <td>{lineCount(consumables.length)}</td>
-              <td className="num">{summary.consumables_total === null ? pending : amountText(summary.consumables_total, standard)}</td>
-            </tr>
-            <tr className="ps-subtotal">
-              <td>Tangibles total</td>
-              <td>{lineCount(tangibles.length)}</td>
-              <td className="num">{summary.tangibles_total === null ? pending : amountText(summary.tangibles_total, standard)}</td>
-            </tr>
-            <tr className="ps-total ps-grand">
-              <td colSpan={2}>Total AFE amount</td>
-              <td className="num">{summary.total === null ? pending : amountText(summary.total, standard)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      {multiCurrency && <p className="ps-note">Line amounts stay in each line's currency. Every subtotal and total above is converted to {standard} at the rates saved with this estimate.</p>}
-      {summary.warnings.length > 0 && <div className="ps-warnings">
-        <strong>Estimate warnings</strong>
-        <ul>{summary.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
-      </div>}
-
-      <div className="ps-keep">
-        <h2>Authorisation</h2>
-        <table className="ps-table ps-signoff">
-          <colgroup><col style={{ width: '13%' }}/><col/><col/><col/></colgroup>
-          <thead>
-            <tr><th>Stage</th>{stages.map(stage => <th key={stage.action}>{stage.label}</th>)}</tr>
-          </thead>
-          <tbody>
-            <tr>
-              <th>Name</th>
-              {stages.map(stage => <td key={stage.action}>{stageEvent(stage.action)?.actor_name || '—'}</td>)}
-            </tr>
-            <tr>
-              <th>Email</th>
-              {stages.map(stage => <td key={stage.action}>{stageEvent(stage.action)?.actor_email || '—'}</td>)}
-            </tr>
-            <tr>
-              <th>Date</th>
-              {stages.map(stage => {
-                const event = stageEvent(stage.action)
-                return <td key={stage.action}>{event ? new Date(event.created_at).toLocaleString() : '—'}</td>
-              })}
-            </tr>
-            <tr className="ps-sign">
-              <th>Signature</th>
-              {stages.map(stage => <td key={stage.action}>&nbsp;</td>)}
-            </tr>
-          </tbody>
-        </table>
-        {afe.status_remarks && <p className="ps-note"><strong>Status remarks:</strong> {afe.status_remarks}</p>}
-      </div>
-
-      <footer className="ps-pagefoot">
-        <span>WellCosting Pro · AFE cost estimate · {afe.afe_code}</span>
-      </footer>
-    </div>
-
-    {/* Page 2 - the line detail behind the lump sums on page 1. */}
-    <div className="ps-page">
-      <header className="ps-titlebar">
-        <div className="ps-title">
-          <div className="ps-eyebrow">Authorization for expenditure · cost estimate</div>
-          <h1>Consumables and tangibles — detail</h1>
-        </div>
-        <div className="ps-titlemeta">
-          <span className="ps-titlecode">{afe.afe_code}</span>
-          <span>{afe.well_code} · {afe.well_name}</span>
-          <span className="ps-printed">{afe.afe_type} AFE · {STATUS_LABEL[afe.status]}</span>
-        </div>
-      </header>
 
       <h2>Consumables ({lineCount(consumables.length)})</h2>
       {consumables.length === 0 ? <p className="ps-empty">No consumable lines.</p> : (
@@ -369,6 +299,43 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
       <div className="ps-notes">
         {afe.remarks && <p><strong>AFE remarks:</strong> {afe.remarks}</p>}
         <p>Prepared from the saved cost estimate. Page 1 shows the lump sums; this page lists every consumable and tangible line behind them, in each line's currency.</p>
+      </div>
+
+      {summary.warnings.length > 0 && <div className="ps-warnings">
+        <strong>Estimate warnings</strong>
+        <ul>{summary.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
+      </div>}
+
+      <div className="ps-keep">
+        <h2>Authorisation</h2>
+        <table className="ps-table ps-signoff">
+          <colgroup><col style={{ width: '13%' }}/><col/><col/><col/></colgroup>
+          <thead>
+            <tr><th>Stage</th>{stages.map(stage => <th key={stage.action}>{stage.label}</th>)}</tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>Name</th>
+              {stages.map(stage => <td key={stage.action}>{stageEvent(stage.action)?.actor_name || '—'}</td>)}
+            </tr>
+            <tr>
+              <th>Email</th>
+              {stages.map(stage => <td key={stage.action}>{stageEvent(stage.action)?.actor_email || '—'}</td>)}
+            </tr>
+            <tr>
+              <th>Date</th>
+              {stages.map(stage => {
+                const event = stageEvent(stage.action)
+                return <td key={stage.action}>{event ? new Date(event.created_at).toLocaleString() : '—'}</td>
+              })}
+            </tr>
+            <tr className="ps-sign">
+              <th>Signature</th>
+              {stages.map(stage => <td key={stage.action}>&nbsp;</td>)}
+            </tr>
+          </tbody>
+        </table>
+        {afe.status_remarks && <p className="ps-note"><strong>Status remarks:</strong> {afe.status_remarks}</p>}
       </div>
 
       <footer className="ps-pagefoot">
