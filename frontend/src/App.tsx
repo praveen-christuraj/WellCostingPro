@@ -34,6 +34,7 @@ const AfeEstimate = lazy(() => import('./pages/AfeEstimate'))
 const DailyCostManagement = lazy(() => import('./pages/DailyCostManagement'))
 const DailyCostSheet = lazy(() => import('./pages/DailyCostSheet'))
 const DailyCostAnalysis = lazy(() => import('./pages/DailyCostAnalysis'))
+const MudCostAnalysis = lazy(() => import('./pages/MudCostAnalysis'))
 const CostingSets = lazy(() => import('./pages/CostingSets'))
 
 // Every listed permission is required (AND).
@@ -93,6 +94,7 @@ export default function App() {
           <Route path="daily-cost/entries/:entryId" element={<Guard permission="daily-cost:read"><DailyCostSheet/></Guard>}/>
           <Route path="daily-cost/analysis" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
           <Route path="daily-cost/analysis/:wellId" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
+          <Route path="daily-cost/mud-cost-analysis" element={<Guard permission="daily-cost:read"><MudCostAnalysis/></Guard>}/>
           <Route path="*" element={<Navigate to="/" replace/>}/>
         </Route>
       </>}
