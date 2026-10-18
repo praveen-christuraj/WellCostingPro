@@ -282,6 +282,16 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .afe-cost-print-sheet .ps-afe-dense .ps-sub,
   .afe-cost-print-sheet .ps-afe-dense .ps-note,
   .afe-cost-print-sheet .ps-afe-dense thead th { font-size: 6.6pt; }
+
+  /* Mud Cost reports are wider, so the print hook opts into A4 landscape. */
+  .mud-cost-print-sheet { font-size: 7.3pt; line-height: 1.16; }
+  .mud-cost-print-sheet h1 { font-size: 13pt; line-height: 1.15; }
+  .mud-cost-print-sheet table { margin-bottom: 1mm; }
+  .mud-cost-print-sheet th,
+  .mud-cost-print-sheet td { padding: .7mm .9mm; }
+  .mud-cost-print-sheet thead th,
+  .mud-cost-print-sheet .ps-sub,
+  .mud-cost-print-sheet .ps-note { font-size: 7pt; }
 }
 
 /* AG Grid empty state (DataTable sets this as the no-rows overlay). */

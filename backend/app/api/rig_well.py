@@ -29,6 +29,7 @@ from app.models import (
     DailyCostServiceLine,
     DailyCostTangibleLine,
     DailyCostWellRateBaseline,
+    MudCostEntry,
     HoleSection,
     Phase,
     Rig,
@@ -739,6 +740,7 @@ def soft_delete_rig(rig_id: str, request: Request, db: Db, user: Current) -> Rig
     active_wells = _count_children(db, Well, user.organization_id, rig_id=rig.id, is_deleted=False)
     active_afes = _count_children(db, Afe, user.organization_id, rig_id=rig.id, is_deleted=False)
     active_daily_sheets = _count_children(db, DailyCostEntry, user.organization_id, rig_id=rig.id, is_deleted=False)
+    active_mud_entries = _count_children(db, MudCostEntry, user.organization_id, rig_id=rig.id, is_deleted=False)
     dependencies = []
     if active_wells:
         dependencies.append(f"{active_wells} active well(s)")
@@ -746,6 +748,8 @@ def soft_delete_rig(rig_id: str, request: Request, db: Db, user: Current) -> Rig
         dependencies.append(f"{active_afes} active AFE(s)")
     if active_daily_sheets:
         dependencies.append(f"{active_daily_sheets} active daily-cost sheet(s)")
+    if active_mud_entries:
+        dependencies.append(f"{active_mud_entries} active Mud Cost entry/entries")
     if dependencies:
         raise HTTPException(
             status_code=409,
@@ -801,7 +805,8 @@ def permanently_delete_rig(rig_id: str, request: Request, db: Db, user: Current)
     wells = _count_children(db, Well, user.organization_id, rig_id=rig.id)
     afes = _count_children(db, Afe, user.organization_id, rig_id=rig.id)
     daily_sheets = _count_children(db, DailyCostEntry, user.organization_id, rig_id=rig.id)
-    if wells or afes or daily_sheets:
+    mud_entries = _count_children(db, MudCostEntry, user.organization_id, rig_id=rig.id)
+    if wells or afes or daily_sheets or mud_entries:
         dependencies = []
         if wells:
             dependencies.append(f"{wells} well record(s)")
@@ -809,6 +814,8 @@ def permanently_delete_rig(rig_id: str, request: Request, db: Db, user: Current)
             dependencies.append(f"{afes} AFE record(s)")
         if daily_sheets:
             dependencies.append(f"{daily_sheets} daily-cost sheet(s)")
+        if mud_entries:
+            dependencies.append(f"{mud_entries} Mud Cost entry/entries")
         raise HTTPException(
             status_code=409,
             detail=(
@@ -837,14 +844,16 @@ def bulk_delete_rigs(data: RigWellIDs, request: Request, db: Db, user: Current) 
     well_counts = _counts_by_parent(db, Well, Well.rig_id, user.organization_id, rig_ids, active_only=True)
     afe_counts = _counts_by_parent(db, Afe, Afe.rig_id, user.organization_id, rig_ids, active_only=True)
     daily_counts = _counts_by_parent(db, DailyCostEntry, DailyCostEntry.rig_id, user.organization_id, rig_ids, active_only=True)
+    mud_counts = _counts_by_parent(db, MudCostEntry, MudCostEntry.rig_id, user.organization_id, rig_ids, active_only=True)
     blocked = [
         (rig, [
             *( [f"{well_counts[rig.id]} active well(s)"] if well_counts.get(rig.id) else [] ),
             *( [f"{afe_counts[rig.id]} active AFE(s)"] if afe_counts.get(rig.id) else [] ),
             *( [f"{daily_counts[rig.id]} active daily-cost sheet(s)"] if daily_counts.get(rig.id) else [] ),
+            *( [f"{mud_counts[rig.id]} active Mud Cost entry/entries"] if mud_counts.get(rig.id) else [] ),
         ])
         for rig in rigs
-        if well_counts.get(rig.id) or afe_counts.get(rig.id) or daily_counts.get(rig.id)
+        if well_counts.get(rig.id) or afe_counts.get(rig.id) or daily_counts.get(rig.id) or mud_counts.get(rig.id)
     ]
     if blocked:
         rig, dependencies = blocked[0]
@@ -1080,6 +1089,12 @@ def update_well(well_id: str, data: WellUpdate, request: Request, db: Db, user: 
         if getattr(well, field) == value:
             continue
         if field == "rig_id":
+            retained_mud_entries = _count_children(db, MudCostEntry, user.organization_id, well_id=well.id)
+            if retained_mud_entries:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This well has retained Mud Cost Analysis history. Permanently delete those entries before changing its rig.",
+                )
             well.rig = _rig_or_404(db, value, user.organization_id, include_deleted=False)
             changed.append(field)
             continue
@@ -1122,6 +1137,7 @@ def soft_delete_well(well_id: str, request: Request, db: Db, user: Current) -> W
     )
     active_afes = _count_children(db, Afe, user.organization_id, well_id=well.id, is_deleted=False)
     active_daily_sheets = _count_children(db, DailyCostEntry, user.organization_id, well_id=well.id, is_deleted=False)
+    active_mud_entries = _count_children(db, MudCostEntry, user.organization_id, well_id=well.id, is_deleted=False)
     dependencies = []
     if active_children:
         dependencies.append(f"{active_children} active sub activity record(s)")
@@ -1129,6 +1145,8 @@ def soft_delete_well(well_id: str, request: Request, db: Db, user: Current) -> W
         dependencies.append(f"{active_afes} active AFE(s)")
     if active_daily_sheets:
         dependencies.append(f"{active_daily_sheets} active daily-cost sheet(s)")
+    if active_mud_entries:
+        dependencies.append(f"{active_mud_entries} active Mud Cost entry/entries")
     if dependencies:
         raise HTTPException(
             status_code=409,
@@ -1185,9 +1203,10 @@ def permanently_delete_well(well_id: str, request: Request, db: Db, user: Curren
     sub_activities = _count_children(db, WellSubActivity, user.organization_id, well_id=well.id)
     afes = _count_children(db, Afe, user.organization_id, well_id=well.id)
     daily_sheets = _count_children(db, DailyCostEntry, user.organization_id, well_id=well.id)
+    mud_entries = _count_children(db, MudCostEntry, user.organization_id, well_id=well.id)
     afe_baselines = _count_children(db, DailyCostBaseline, user.organization_id, well_id=well.id)
     rate_baselines = _count_children(db, DailyCostWellRateBaseline, user.organization_id, well_id=well.id)
-    if sub_activities or afes or daily_sheets or afe_baselines or rate_baselines:
+    if sub_activities or afes or daily_sheets or mud_entries or afe_baselines or rate_baselines:
         dependencies = []
         if sub_activities:
             dependencies.append(f"{sub_activities} sub activity record(s)")
@@ -1195,6 +1214,8 @@ def permanently_delete_well(well_id: str, request: Request, db: Db, user: Curren
             dependencies.append(f"{afes} AFE record(s)")
         if daily_sheets:
             dependencies.append(f"{daily_sheets} daily-cost sheet(s)")
+        if mud_entries:
+            dependencies.append(f"{mud_entries} Mud Cost entry/entries")
         if afe_baselines or rate_baselines:
             dependencies.append("retained daily-cost baseline history")
         raise HTTPException(
@@ -1230,6 +1251,9 @@ def bulk_delete_wells(data: RigWellIDs, request: Request, db: Db, user: Current)
     daily_counts = _counts_by_parent(
         db, DailyCostEntry, DailyCostEntry.well_id, user.organization_id, well_ids, active_only=True
     )
+    mud_counts = _counts_by_parent(
+        db, MudCostEntry, MudCostEntry.well_id, user.organization_id, well_ids, active_only=True
+    )
     blocked = []
     for well in wells:
         dependencies = []
@@ -1239,6 +1263,8 @@ def bulk_delete_wells(data: RigWellIDs, request: Request, db: Db, user: Current)
             dependencies.append(f"{afe_counts[well.id]} active AFE(s)")
         if daily_counts.get(well.id):
             dependencies.append(f"{daily_counts[well.id]} active daily-cost sheet(s)")
+        if mud_counts.get(well.id):
+            dependencies.append(f"{mud_counts[well.id]} active Mud Cost entry/entries")
         if dependencies:
             blocked.append((well, dependencies))
     if blocked:
@@ -2166,9 +2192,15 @@ def bulk_permanently_delete(
     rig_daily_counts = _counts_by_parent(
         db, DailyCostEntry, DailyCostEntry.rig_id, user.organization_id, selected_rig_ids
     )
+    rig_mud_counts = _counts_by_parent(
+        db, MudCostEntry, MudCostEntry.rig_id, user.organization_id, selected_rig_ids
+    )
     well_afe_counts = _counts_by_parent(db, Afe, Afe.well_id, user.organization_id, selected_well_ids)
     well_daily_counts = _counts_by_parent(
         db, DailyCostEntry, DailyCostEntry.well_id, user.organization_id, selected_well_ids
+    )
+    well_mud_counts = _counts_by_parent(
+        db, MudCostEntry, MudCostEntry.well_id, user.organization_id, selected_well_ids
     )
     well_baseline_counts = _counts_by_parent(
         db, DailyCostBaseline, DailyCostBaseline.well_id, user.organization_id, selected_well_ids
@@ -2199,12 +2231,14 @@ def bulk_permanently_delete(
         )
 
     for rig in records.get("rig", []):
-        if rig_afe_counts.get(rig.id) or rig_daily_counts.get(rig.id):
+        if rig_afe_counts.get(rig.id) or rig_daily_counts.get(rig.id) or rig_mud_counts.get(rig.id):
             dependencies = []
             if rig_afe_counts.get(rig.id):
                 dependencies.append(f"{rig_afe_counts[rig.id]} AFE record(s)")
             if rig_daily_counts.get(rig.id):
                 dependencies.append(f"{rig_daily_counts[rig.id]} daily-cost sheet(s)")
+            if rig_mud_counts.get(rig.id):
+                dependencies.append(f"{rig_mud_counts[rig.id]} Mud Cost entry/entries")
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -2226,6 +2260,7 @@ def bulk_permanently_delete(
         if (
             well_afe_counts.get(well.id)
             or well_daily_counts.get(well.id)
+            or well_mud_counts.get(well.id)
             or well_baseline_counts.get(well.id)
             or well_rate_baseline_counts.get(well.id)
         ):
@@ -2234,6 +2269,8 @@ def bulk_permanently_delete(
                 dependencies.append(f"{well_afe_counts[well.id]} AFE record(s)")
             if well_daily_counts.get(well.id):
                 dependencies.append(f"{well_daily_counts[well.id]} daily-cost sheet(s)")
+            if well_mud_counts.get(well.id):
+                dependencies.append(f"{well_mud_counts[well.id]} Mud Cost entry/entries")
             if well_baseline_counts.get(well.id) or well_rate_baseline_counts.get(well.id):
                 dependencies.append("retained daily-cost baseline history")
             raise HTTPException(
