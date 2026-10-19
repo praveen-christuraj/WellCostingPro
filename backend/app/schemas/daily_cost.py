@@ -552,6 +552,10 @@ class DailyCostComparison(BaseModel):
     such as Lost In Hole are deducted from the AFE amount rather than reconciled
     against a budget line. ``tracked_actual_to_date`` and ``other_expenses_to_date``
     keep the two halves visible.
+
+    When an approved SOW adjustment exists, ``adjusted_planned_total`` carries
+    the revised AFE amount and ``adjusted_balance`` is that amount less actuals.
+    ``planned_total`` always stays the locked (original) AFE total.
     """
 
     effective_on: date
@@ -567,6 +571,9 @@ class DailyCostComparison(BaseModel):
     npt_to_date: Decimal
     groups: list[DailyCostComparisonGroup]
     budget_lines: list[DailyCostBudgetComparison]
+    adjusted_planned_total: Decimal | None = None
+    adjusted_balance: Decimal | None = None
+    has_adjustment: bool = False
 
 
 class DailyCostEntryOut(BaseModel):
@@ -706,7 +713,12 @@ class DailyCostWellHeader(BaseModel):
 
 
 class DailyCostAfePosition(BaseModel):
-    """One AFE's locked budget against the actuals recorded under it."""
+    """One AFE's locked budget against the actuals recorded under it.
+
+    ``planned_total`` is the locked (original) AFE amount. When an approved
+    SOW adjustment exists, ``adjusted_planned_total`` is the revised amount
+    and ``adjusted_balance`` is that amount less actuals.
+    """
 
     afe_id: str
     afe_code: str
@@ -722,6 +734,9 @@ class DailyCostAfePosition(BaseModel):
     days_recorded: int
     first_day: date | None
     last_day: date | None
+    adjusted_planned_total: Decimal | None = None
+    adjusted_balance: Decimal | None = None
+    has_adjustment: bool = False
 
 
 class DailyCostDailyRow(BaseModel):
@@ -739,6 +754,7 @@ class DailyCostDailyRow(BaseModel):
     budget_balance: Decimal
     sheets: int
     status: Literal["draft", "submitted", "mixed"]
+    adjusted_budget_balance: Decimal | None = None
 
 
 class DailyCostFactorRow(BaseModel):
@@ -795,6 +811,13 @@ class DailyCostWellTotals(BaseModel):
     draft_sheets: int
     submitted_sheets: int
     lines: int
+    # Revised plan when approved SOW adjustments exist. Nulls mean no approved
+    # adjustment, so callers use planned / planned_days above.
+    adjusted_planned: Decimal | None = None
+    adjusted_balance: Decimal | None = None
+    adjusted_used_percent: Decimal | None = None
+    adjusted_planned_days: Decimal | None = None
+    has_adjustment: bool = False
 
 
 class DailyCostWellSummary(BaseModel):

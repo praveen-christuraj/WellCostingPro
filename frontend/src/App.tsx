@@ -46,6 +46,13 @@ function Guard({ permission, children }: { permission: string | string[]; childr
   return allowed ? children : <Navigate to="/" replace/>
 }
 
+// Landing after login: User Management is the home page. Users without
+// users:read fall back to the dashboard (now under User Management).
+function Landing() {
+  const { can } = useAuth()
+  return can('users:read') ? <Navigate to="/users" replace/> : <Navigate to="/dashboard" replace/>
+}
+
 // Any listed permission is enough (OR), used by the module overview.
 function GuardAny({ permissions, children }: { permissions: string[]; children: ReactNode }) {
   const { can } = useAuth()
@@ -64,7 +71,8 @@ export default function App() {
       </> : <>
         <Route path="/login" element={<Navigate to="/" replace/>}/>
         <Route element={<Layout/>}>
-          <Route index element={<Overview/>}/>
+          <Route index element={<Landing/>}/>
+          <Route path="dashboard" element={<Overview/>}/>
           <Route path="users" element={<Guard permission="users:read"><Users/></Guard>}/>
           <Route path="roles" element={<Guard permission="roles:read"><Roles/></Guard>}/>
           <Route path="permissions" element={<Guard permission="permissions:read"><Permissions/></Guard>}/>

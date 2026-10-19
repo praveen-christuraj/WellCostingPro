@@ -167,6 +167,11 @@ class WellOut(BaseModel):
     deleted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # Latest approved drilling-scope plan adjustment, when one exists. Null
+    # means no approved adjustment, so callers use total_days above.
+    adjusted_total_days: Decimal | None = None
+    has_plan_adjustment: bool = False
+    plan_revision: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

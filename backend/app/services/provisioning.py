@@ -33,16 +33,24 @@ CAPABILITIES = {resource: actions for resource, actions in {
     ),
     "rig-well": (
         "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
+        # Well plan SOW adjustments revise planned days without rewriting the
+        # configured plan. Kept separate from ordinary configuration edits.
+        "plan-adjust",
     ),
     # AFE register and cost estimation. Status moves are separately grantable so that
     # estimators, reviewers and approvers can be given different authority.
     "afe": (
         "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
         "estimate", "submit", "review", "approve", "reopen",
+        # SOW adjustments revise approved AFE totals without rewriting the saved
+        # estimate. Recording and approving are separately grantable.
+        "sow-adjust", "sow-approve",
     ),
     "daily-cost": (
         "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
         "submit", "reopen",
+        # Amend allows reopening submitted sheets well after their cost date.
+        "amend",
     ),
     "costing-sets": ("read", "create", "update", "delete", "import", "export"),
 }.items()}

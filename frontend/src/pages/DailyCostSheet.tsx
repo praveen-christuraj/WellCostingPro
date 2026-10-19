@@ -18,6 +18,7 @@ import { useCostPrint } from '../components/daily-cost/DailyCostPrintSheet'
 import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
+import { listEntryAmendments, type DailyCostAmendment } from '../lib/sowAdjustment'
 import { downloadTemplate, parseImportFile, type ImportRow } from '../lib/export'
 import {
   DAILY_COST_STATUSES, DAILY_ONE_TIME_CATEGORIES, dailyMoney, deriveClassification, displayDate, entryQuery, otherExpenseLabel, saveFromDay,
@@ -101,6 +102,7 @@ export default function DailyCostSheet() {
   const [selectedServiceIndices, setSelectedServiceIndices] = useState<number[]>([])
   const [serviceSelectionResetKey, setServiceSelectionResetKey] = useState(0)
   const [bulkScopeOpen, setBulkScopeOpen] = useState(false)
+  const [amendments, setAmendments] = useState<DailyCostAmendment[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
   const clearServiceSelection = () => {
     setSelectedServiceIndices([])
@@ -133,6 +135,14 @@ export default function DailyCostSheet() {
   }, [entryId])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    let active = true
+    listEntryAmendments(entryId)
+      .then(rows => { if (active) setAmendments(rows) })
+      .catch(() => { if (active) setAmendments([]) })
+    return () => { active = false }
+  }, [entryId, day?.entry.status])
 
   useEffect(() => {
     if (!canReadCostingSets) {
@@ -901,14 +911,27 @@ export default function DailyCostSheet() {
       Unsaved changes{previewing ? ' · recalculating against the locked AFE baseline…' : hasPreviewForEdits ? ' · preview is current' : ' · save to update the register'}.
     </Alert>}
 
-    <Box display="grid" gap={1.2} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(6, 1fr)' } }}>
+    <Box display="grid" gap={1.2} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: day.comparison.has_adjustment ? 'repeat(8, 1fr)' : 'repeat(6, 1fr)' } }}>
       <StatCard label="AFE planned" value={dailyMoney(day.comparison.planned_total, standard)} hint="Locked standard-currency budget"/>
+      {day.comparison.has_adjustment && day.comparison.adjusted_planned_total != null && <>
+        <StatCard label="Adjusted AFE" value={dailyMoney(day.comparison.adjusted_planned_total, standard)} hint="Latest approved SOW revision"/>
+        <StatCard
+          label="Adjusted balance"
+          value={dailyMoney(Number(day.comparison.adjusted_planned_total) - actualToDate, standard)}
+          hint={Number(day.comparison.adjusted_planned_total) - actualToDate < 0 ? 'Adjusted budget is exceeded' : 'Adjusted less actual to date'}
+          tone={Number(day.comparison.adjusted_planned_total) - actualToDate < 0 ? 'bad' : 'good'}
+        />
+      </>}
       <StatCard label="Actual to date" value={dailyMoney(actualToDate, standard)} hint={hasPreviewForEdits ? 'Includes the current unsaved preview' : 'All four cost groups through this day'}/>
       <StatCard label="Other expenses deducted" value={dailyMoney(otherToDate, standard)} hint={otherItemSummary || 'LIH, hole problems and similar charges'} tone={otherToDate ? 'bad' : undefined}/>
       <StatCard label="Remaining balance" value={dailyMoney(remaining, standard)} hint={remaining < 0 ? 'AFE budget is exceeded' : 'Planned less actual, other expenses included'} tone={remaining < 0 ? 'bad' : 'good'}/>
       <StatCard label="UPA to date" value={dailyMoney(upaToDate, standard)} hint="Unplanned Activity charges" tone={upaToDate ? 'bad' : undefined}/>
       <StatCard label="NPT to date" value={dailyMoney(nptToDate, standard)} hint="Non-Productive Time charges" tone={nptToDate ? 'bad' : undefined}/>
     </Box>
+    {amendments.length > 0 && <Alert severity="info" sx={{ mb: 1.5 }}>
+      Amended {amendments.length} time{amendments.length === 1 ? '' : 's'} after its cost date
+      {amendments[amendments.length - 1] ? ` — latest by ${amendments[amendments.length - 1].reopened_by || 'workspace user'} on ${new Date(amendments[amendments.length - 1].reopened_at).toLocaleString()}: ${amendments[amendments.length - 1].reason}` : ''}.
+    </Alert>}
 
     <Paper variant="outlined" sx={{ p: 1.8, borderRadius: 2, mb: 1.7 }}>
       <Box display="flex" justifyContent="space-between" gap={1.5} flexWrap="wrap" alignItems="center">
@@ -1060,6 +1083,9 @@ export default function DailyCostSheet() {
 
     <FormDialog open={Boolean(statusAction)} title={statusTitle} subtitle={statusSubtitle} onClose={() => { if (!statusBusy) setStatusAction(null) }} onSubmit={() => void completeStatusAction()} busy={statusBusy} submitLabel={statusAction === 'submit' ? 'Submit daily sheet' : 'Reopen as Draft'} submitDisabled={statusAction === 'reopen' && statusRemarks.trim().length < 3}>
       <Box display="grid" gap={1.5}>
+        {statusAction === 'reopen' && Math.floor((Date.now() - Date.parse(`${entry.cost_date}T00:00:00Z`)) / 86_400_000) > 30 && <Alert severity="warning">
+          This sheet is more than 30 days old, so reopening it is recorded as an amendment and needs the daily-cost amendment permission.
+        </Alert>}
         <TextField label={statusAction === 'reopen' ? 'Reopen reason (required)' : 'Submission remarks (optional)'} value={statusRemarks} onChange={event => setStatusRemarks(event.target.value)} multiline minRows={2} inputProps={{ maxLength: 500 }} helperText={statusAction === 'reopen' ? 'At least 3 characters; recorded in the audit trail.' : 'Optional note recorded with the submission.'}/>
         {statusError && <Alert severity="error">{statusError}</Alert>}
       </Box>

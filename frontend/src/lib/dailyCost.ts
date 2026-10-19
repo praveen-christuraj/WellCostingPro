@@ -161,6 +161,9 @@ export type DailyCostComparison = {
   tracked_actual_to_date: string; other_expenses_to_date: string; balance: string
   over_budget: boolean; includes_draft_entries: boolean; upa_to_date: string; npt_to_date: string
   groups: DailyCostComparisonGroup[]; budget_lines: DailyCostComparisonLine[]
+  // Revised AFE amount when an approved SOW adjustment exists. planned_total
+  // always stays the locked (original) AFE total.
+  adjusted_planned_total: string | null; adjusted_balance: string | null; has_adjustment: boolean
 }
 export type DailyCostWarning = { code: string; severity: 'info' | 'warning' | 'error'; message: string }
 export type DailyCostDay = {
@@ -290,11 +293,13 @@ export type DailyCostAfePosition = {
   afe_id: string; afe_code: string; afe_name: string; afe_status: string; currency: string
   planned_total: string; actual: string; other_expenses: string; balance: string; over_budget: boolean
   sheets: number; days_recorded: number; first_day: string | null; last_day: string | null
+  adjusted_planned_total: string | null; adjusted_balance: string | null; has_adjustment: boolean
 }
 export type DailyCostDailyRow = {
   cost_date: string; services: string; consumables: string; tangibles: string; other_expenses: string
   total: string; upa: string; npt: string; cumulative: string; budget_balance: string; sheets: number
   status: 'draft' | 'submitted' | 'mixed'
+  adjusted_budget_balance: string | null
 }
 export type DailyCostFactorRow = {
   key: string; code: string; name: string; detail: string; amount: string
@@ -312,6 +317,10 @@ export type DailyCostWellTotals = {
   planned_days: string; recorded_days: number; elapsed_days: number; average_per_day: string
   days_to_budget: string | null; first_day: string | null; last_day: string | null
   sheets: number; draft_sheets: number; submitted_sheets: number; lines: number
+  // Revised plan when approved SOW adjustments exist. Nulls mean no approved
+  // adjustment, so callers use planned / planned_days above.
+  adjusted_planned: string | null; adjusted_balance: string | null; adjusted_used_percent: string | null
+  adjusted_planned_days: string | null; has_adjustment: boolean
 }
 export type DailyCostWellSummary = {
   well: {

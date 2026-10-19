@@ -18,10 +18,12 @@ type CostRow = {
   well_code: string
   block: string
   afe_amount: string
+  sow_adjustment: string
   actual_cost: string
   afe_balance: string
   costs_incurred: string
   planned_days: number
+  adjusted_planned_days: number | null
   actual_days: number | null
   first_cost_date: string
 }
@@ -117,23 +119,44 @@ export default function WellCostComparisonReport() {
       const afes = afesByWell.get(well.id) ?? []
       const entries = actualByWell.get(well.id) ?? []
       const afeAmounts: CurrencyAmounts = new Map()
+      const effectiveAmounts: CurrencyAmounts = new Map()
+      const adjustmentAmounts: CurrencyAmounts = new Map()
       const actualAmounts: CurrencyAmounts = new Map()
       let pendingConversion = false
       for (const afe of afes) {
         if (afe.conversion_pending || afe.total_cost == null) pendingConversion = true
-        else addAmount(afeAmounts, afe.standard_currency, afe.total_cost)
+        else {
+          addAmount(afeAmounts, afe.standard_currency, afe.total_cost)
+          // The effective budget is the approved adjusted total where one
+          // exists, otherwise the original AFE total. Balance and % incurred
+          // are measured against it.
+          const effective = afe.has_sow_adjustment && afe.adjusted_total != null ? afe.adjusted_total : afe.total_cost
+          addAmount(effectiveAmounts, afe.standard_currency, effective)
+          if (afe.has_sow_adjustment && afe.adjusted_total != null) {
+            addAmount(adjustmentAmounts, afe.standard_currency, Number(afe.adjusted_total) - Number(afe.total_cost))
+          }
+        }
       }
       for (const entry of entries) addAmount(actualAmounts, entry.standard_currency, entry.total_cost)
 
       const afeAmount = amountText(afeAmounts, afes.length > 0, pendingConversion)
+      const sowAdjustment = adjustmentAmounts.size
+        ? [...adjustmentAmounts.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([currency, value]) => {
+            const sign = value > 0 ? '+' : ''
+            return `${currency} ${sign}${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          })
+          .join(' · ')
+        : '—'
       const actualCost = amountText(actualAmounts, entries.length > 0)
-      const matchingCurrency = afeAmounts.size === 1 && actualAmounts.size <= 1
-        && (actualAmounts.size === 0 || [...afeAmounts.keys()][0] === [...actualAmounts.keys()][0])
+      const matchingCurrency = effectiveAmounts.size === 1 && actualAmounts.size <= 1
+        && (actualAmounts.size === 0 || [...effectiveAmounts.keys()][0] === [...actualAmounts.keys()][0])
       let balance = '—'
       let incurred = '—'
       if (afes.length && !pendingConversion && matchingCurrency) {
-        const currency = [...afeAmounts.keys()][0]
-        const planned = afeAmounts.get(currency) ?? 0
+        const currency = [...effectiveAmounts.keys()][0]
+        const planned = effectiveAmounts.get(currency) ?? 0
         const actual = actualAmounts.get(currency) ?? 0
         balance = `${currency} ${(planned - actual).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
         incurred = planned > 0 ? `${(actual / planned * 100).toFixed(1)}%` : '—'
@@ -149,10 +172,14 @@ export default function WellCostComparisonReport() {
         well_code: well.well_code,
         block: well.block || '—',
         afe_amount: canReadAfe ? afeAmount : 'Not available',
+        sow_adjustment: canReadAfe ? sowAdjustment : 'Not available',
         actual_cost: canReadDaily ? actualCost : 'Not available',
         afe_balance: canReadAfe && canReadDaily ? balance : 'Not available',
         costs_incurred: canReadAfe && canReadDaily ? incurred : 'Not available',
         planned_days: Number(well.total_days ?? 0),
+        adjusted_planned_days: well.has_plan_adjustment && well.adjusted_total_days != null
+          ? Number(well.adjusted_total_days)
+          : null,
         actual_days: firstDate ? daySpan(firstDate, lastDate) : null,
         first_cost_date: firstDate,
       }
@@ -185,11 +212,20 @@ export default function WellCostComparisonReport() {
       },
     },
     { headerName: 'BLOCK', field: 'block', minWidth: 115 },
-    { headerName: 'AFE AMOUNT', field: 'afe_amount', minWidth: 190 },
+    { headerName: 'AFE AMOUNT', field: 'afe_amount', minWidth: 190, headerTooltip: 'Original approved AFE amount' },
+    {
+      headerName: 'SOW ADJ.', field: 'sow_adjustment', minWidth: 165,
+      headerTooltip: 'Approved SOW adjustment (Adjusted AFE − Original AFE). A plus means scope was added.',
+    },
     { headerName: 'ACTUAL COST', field: 'actual_cost', minWidth: 190 },
-    { headerName: 'AFE BALANCE', field: 'afe_balance', minWidth: 190 },
-    { headerName: '% COSTS INCURRED', field: 'costs_incurred', minWidth: 155 },
-    { headerName: 'PLANNED DAYS', field: 'planned_days', minWidth: 135, valueFormatter: params => Number(params.value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) },
+    { headerName: 'AFE BALANCE', field: 'afe_balance', minWidth: 190, headerTooltip: 'Adjusted AFE amount less actual cost' },
+    { headerName: '% COSTS INCURRED', field: 'costs_incurred', minWidth: 155, headerTooltip: 'Actual cost as a share of the adjusted AFE amount' },
+    { headerName: 'PLANNED DAYS', field: 'planned_days', minWidth: 135, headerTooltip: 'Original planned days', valueFormatter: params => Number(params.value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) },
+    {
+      headerName: 'ADJ PLANNED DAYS', field: 'adjusted_planned_days', minWidth: 160,
+      headerTooltip: 'Adjusted planned days from the approved plan adjustment',
+      valueFormatter: params => params.value == null ? '—' : Number(params.value).toLocaleString(undefined, { maximumFractionDigits: 2 }),
+    },
     { headerName: 'ACTUAL DAYS', field: 'actual_days', minWidth: 125, valueFormatter: params => params.value == null ? '—' : Number(params.value).toLocaleString() },
     { headerName: 'FIRST COST DATE', field: 'first_cost_date', minWidth: 155, valueFormatter: params => params.value ? new Date(`${params.value}T00:00:00`).toLocaleDateString() : '—' },
   ], [])
@@ -219,6 +255,7 @@ export default function WellCostComparisonReport() {
     </Box>
     <Alert severity="info" sx={{ mb: 2 }}>
       AFE and actual amounts are grouped by currency. Balance and cost-incurred percentage are calculated only when the well has a single AFE currency that matches its actual-cost currency.
+      Where an approved SOW adjustment exists, the balance is the adjusted AFE amount less actual cost.
     </Alert>
     {loading
       ? <Paper variant="outlined" sx={{ minHeight: 220, display: 'grid', placeItems: 'center', borderRadius: 2 }}><CircularProgress size={28}/></Paper>

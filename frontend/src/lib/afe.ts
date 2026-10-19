@@ -106,6 +106,14 @@ export type Afe = {
   deleted_at: string | null
   created_at: string
   updated_at: string
+  // Latest approved SOW adjustment, when one exists. Nulls mean no approved
+  // adjustment, so callers fall back to the saved estimate totals above.
+  adjusted_services_total: string | null
+  adjusted_consumables_total: string | null
+  adjusted_tangibles_total: string | null
+  adjusted_total: string | null
+  has_sow_adjustment: boolean
+  sow_revision: number | null
 }
 
 export type AfeComponent = {
