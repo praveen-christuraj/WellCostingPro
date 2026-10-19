@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Box, Button, Collapse, Divider, IconButton, InputAdornment, Menu, MenuItem, Paper, TextField, Typography } from '@mui/material'
 import { AddRounded, CloseRounded, DownloadRounded, FilterListRounded, SearchRounded, UploadRounded } from '@mui/icons-material'
 import { AgGridReact } from 'ag-grid-react'
@@ -12,6 +12,27 @@ type FieldDef = { field: string; label: string; kind: 'text' | 'date' | 'boolean
 type Rule = { id: number; field: string; op: string; value: string }
 const TEXT_OPS = ['contains', 'equals', 'starts with', 'ends with', 'is empty', 'is not empty']
 
+/**
+ * Row-action columns follow one convention across every register: the header is
+ * `ACTIONS` (the Database Browser's row link uses `OPEN`). DataTable freezes
+ * that column to the right edge of the grid, so its buttons stay on screen
+ * while the data columns scroll underneath. A page that sets its own `pinned`
+ * (including `pinned: null` to opt out) is left untouched.
+ */
+const ACTION_HEADERS = new Set(['ACTIONS', 'OPEN'])
+function pinActionColumns<T extends object>(columns: ColDef<T>[]): ColDef<T>[] {
+  return columns.map(column => {
+    const header = typeof column.headerName === 'string' ? column.headerName.trim().toUpperCase() : ''
+    if (!ACTION_HEADERS.has(header) || column.pinned !== undefined) return column
+    return { ...column, pinned: 'right' as const, lockPinned: true, suppressMovable: true, flex: 0 }
+  })
+}
+
+/** Space kept free under a full-page grid so its bottom edge clears the fold. */
+const FILL_BOTTOM_GAP = 20
+/** A full-page grid never collapses below this, even on a short viewport. */
+const FILL_MIN_HEIGHT = 288
+
 function fieldDefs<T extends object>(columns: ColDef<T>[]): FieldDef[] {
   return columns
     .filter(c => c.field && c.headerName && c.headerName.toUpperCase() !== 'ACTIONS')
@@ -22,7 +43,7 @@ function fieldDefs<T extends object>(columns: ColDef<T>[]): FieldDef[] {
     })
 }
 
-export function DataTable<T extends object>({ rows, columns, rowKey = 'id', searchPlaceholder = 'Search records...', exportName = 'export', onImport, canExport = true, selectable = false, onSelectionChange, onExport, selectionResetKey }: {
+export function DataTable<T extends object>({ rows, columns, rowKey = 'id', searchPlaceholder = 'Search records...', exportName = 'export', onImport, canExport = true, selectable = false, onSelectionChange, onExport, selectionResetKey, fillHeight = false, fillReserve = 0 }: {
   rows: T[]
   columns: ColDef<T>[]
   // Field that uniquely identifies a row. AG Grid collapses rows that share an id, so this must be unique.
@@ -36,9 +57,21 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
   onExport?: (kind: 'csv' | 'xlsx' | 'pdf', recordCount: number) => Promise<void> | void
   /** Change this value to clear any current row selection in the grid. */
   selectionResetKey?: number | string
+  /**
+   * Stretch the grid so its bottom edge meets the bottom of the page instead of
+   * sizing to the row count. Use on pages whose only (or last) content is this
+   * table — the registers (Rigs, Wells, Vendors, …). Leave it off where several
+   * tables stack on one page (AFE estimate, daily cost sheet), where it would
+   * push the following tables down by a whole screen each.
+   */
+  fillHeight?: boolean
+  /** Extra pixels kept free below a `fillHeight` grid, e.g. for a footnote line under the table. */
+  fillReserve?: number
 }) {
   const { mode } = useColorMode()
   const gridApi = useRef<GridApi<T> | null>(null)
+  const gridWrapRef = useRef<HTMLDivElement | null>(null)
+  const [fillPx, setFillPx] = useState<number | null>(null)
   const [search, setSearch] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [rules, setRules] = useState<Rule[]>([])
@@ -52,6 +85,46 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
   useEffect(() => {
     if (selectable && selectionResetKey !== undefined) gridApi.current?.deselectAll()
   }, [selectable, selectionResetKey])
+
+  // Full-page height: size the grid so its bottom edge (in document space)
+  // lands at the bottom of the first screenful, leaving FILL_BOTTOM_GAP +
+  // fillReserve free. The app root is zoomed (`#root { zoom: 0.875 }`), so
+  // viewport measurements (getBoundingClientRect / innerHeight) are converted
+  // back to layout pixels with the element's own effective zoom — measured,
+  // not hardcoded, so this stays correct if the density zoom ever changes.
+  // Re-measures on window resize, after the filters panel finishes collapsing,
+  // and whenever the page grows or shrinks above the grid (notices, banners).
+  useLayoutEffect(() => {
+    if (!fillHeight) return
+    const wrap = gridWrapRef.current
+    if (!wrap) return
+    let frame = 0
+    const measure = () => {
+      const rect = wrap.getBoundingClientRect()
+      if (!rect.height || !wrap.offsetHeight) return
+      const zoom = rect.height / wrap.offsetHeight || 1
+      const documentTop = rect.top + window.scrollY
+      const available = (window.innerHeight - documentTop) / zoom - FILL_BOTTOM_GAP - fillReserve
+      const next = Math.max(FILL_MIN_HEIGHT, Math.round(available))
+      setFillPx(previous => (previous === next ? previous : next))
+    }
+    const schedule = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(measure)
+    }
+    schedule()
+    // The filters Collapse animates for ~300ms; measure again once it settles.
+    const settle = window.setTimeout(schedule, 350)
+    window.addEventListener('resize', schedule)
+    const observer = typeof ResizeObserver !== 'undefined' && document.body ? new ResizeObserver(schedule) : null
+    if (observer && document.body) observer.observe(document.body)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.clearTimeout(settle)
+      window.removeEventListener('resize', schedule)
+      observer?.disconnect()
+    }
+  }, [fillHeight, fillReserve, filtersOpen])
 
   const fields = useMemo(() => fieldDefs(columns), [columns])
   const dateFields = useMemo(() => fields.filter(f => f.kind === 'date'), [fields])
@@ -87,6 +160,14 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
 
   // Grid skin comes from the shared design tokens, so it always matches the MUI theme.
   const gridTheme = useMemo(() => themeQuartz.withParams(gridThemeParams(mode)), [mode])
+  // Only the grid sees the pinned copy; search/filter/export keep the page's columns.
+  const gridColumns = useMemo(() => pinActionColumns(columns), [columns])
+  // AG Grid draws the header and the pagination bar inside the same box as the
+  // rows, so a content-sized grid needs room for both (the pagination bar is
+  // ~44px at the shared grid spacing) on top of the rows it can show.
+  const gridChrome = control.gridHeader + 44
+  const contentHeight = Math.min(720, Math.max(260, gridChrome + Math.min(visible.length, pageSize) * control.gridRow))
+  const gridHeight = fillHeight ? fillPx ?? contentHeight : contentHeight
 
   const doExport = async (kind: 'csv' | 'xlsx' | 'pdf') => {
     setExportAnchor(null)
@@ -166,12 +247,12 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
         </Box>
       </Box>
     </Collapse>
-    <Box sx={{ height: Math.min(720, Math.max(270, 57 + Math.min(visible.length, pageSize) * control.gridRow)), width: '100%' }}>
+    <Box ref={gridWrapRef} sx={{ height: gridHeight, width: '100%' }}>
       <AgGridReact<T>
         theme={gridTheme}
         onGridReady={event => { gridApi.current = event.api }}
         rowData={visible}
-        columnDefs={columns}
+        columnDefs={gridColumns}
         defaultColDef={{ sortable: true, resizable: true, flex: 1, minWidth: 120 }}
         rowHeight={control.gridRow}
         headerHeight={control.gridHeader}

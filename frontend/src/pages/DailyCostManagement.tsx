@@ -299,6 +299,8 @@ export default function DailyCostManagement() {
         </>}
       </Paper>}
       <DataTable
+        fillHeight
+        fillReserve={!loading && rows.length === 0 ? 40 : 0}
         rows={rows}
         columns={columns}
         rowKey="id"

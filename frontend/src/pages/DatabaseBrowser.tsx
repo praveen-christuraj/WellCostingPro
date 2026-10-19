@@ -93,6 +93,7 @@ export default function DatabaseBrowser() {
         </Typography>
       </Paper>
       <DataTable<CatalogueRow>
+        fillHeight
         rows={rows}
         columns={columns}
         rowKey="name"

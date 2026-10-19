@@ -98,9 +98,12 @@ reserved for eyebrows, table headers and tiny labels.
 displaces every popover. Design at 100% numbers and let the zoom fit the screen; keep
 `html, body { overflow-x: clip }` so wide content scrolls inside its own table instead of the page.
 
-Control heights: compact 30, standard 36, comfortable 44; AG Grid rows 55 with a 48 header
-(`control.*` in `designSystem.ts`). On touch devices (`@media (pointer: coarse)`) nav items and
-menu items grow to a 44px hit area; desktop density is unchanged.
+Control heights: compact 30, standard 36, comfortable 44; AG Grid rows 42 with a 40 header
+(`control.*` in `designSystem.ts`), and plain MUI tables are padded to the same density
+(`MuiTableCell` in `theme.ts`). 42 is the floor, not a taste choice: the tallest cell content in
+the registers is a two-line name/email stack (~36px), and row action buttons are ~30px. On touch
+devices (`@media (pointer: coarse)`) nav items and menu items grow to a 44px hit area; desktop
+density is unchanged.
 
 ## 7. Patterns
 
@@ -111,6 +114,17 @@ menu items grow to a 44px hit area; desktop density is unchanged.
 - **Lists:** `DataTable` is the only list surface — quick search, advanced filters, a separate
   date/date-range group, 20/50/100 pagination, CSV/XLSX/PDF export, checkbox selection, and the
   AG Grid skin from `gridThemeParams()`. Zebra striping comes from `oddRowBackgroundColor`.
+  Register pages whose last (or only) content is the table pass `fillHeight` so the grid's bottom
+  edge meets the bottom of the page (measured in `DataTable`, zoom-compensated); pages that stack
+  several tables (AFE estimate, daily cost sheet) leave it off and size to content. A footnote
+  under a filled grid is kept on screen with `fillReserve`. The `ACTIONS` column (Database
+  Browser: `OPEN`) is pinned to the right edge by `DataTable`, so row buttons stay visible while
+  data columns scroll; plain MUI tables freeze the same column with `.sticky-action-cell`.
+- **Tabs:** the selected tab's underline is drawn by the tab itself (`MuiTab` `::after` in
+  `theme.ts`), and MUI's sliding indicator is hidden. MUI positions that indicator from
+  `getBoundingClientRect()`, which the `#root` zoom makes wrong by exactly the zoom factor —
+  further out the further right the tab sits — so never re-enable it while the zoom exists.
+  Segmented-control tabs (consumable category picker) opt out of the underline locally.
 - **Dialogs:** `FormDialog` (submit forms) and `PanelDialog` (everything else) from
   `components/Common.tsx`. They close only via **Cancel**, have no close icon, ignore Escape and
   the backdrop, and expose `aria-labelledby` (the title `<h2>`) plus `aria-describedby` (the

@@ -285,6 +285,7 @@ export default function Wells() {
       </Box>
     </Paper>
     {loading ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <DataTable
+      fillHeight
       rows={rows}
       columns={columns}
       searchPlaceholder="Search wells by code, rig, location, block, objective..."

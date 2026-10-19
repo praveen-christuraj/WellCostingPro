@@ -44,8 +44,14 @@ export const space = { 0: 0, 1: 4, 2: 8, 3: 12, 4: 16, 5: 20, 6: 24, 7: 28, 8: 3
 
 export const radius = { xs: 4, sm: 6, md: 8, lg: 10, xl: 14, pill: 999 } as const
 
-/** Control heights. The app is zoomed to 87.5%, so these are deliberate. */
-export const control = { compact: 30, standard: 36, comfortable: 44, gridRow: 55, gridHeader: 48 } as const
+/**
+ * Control heights. The app is zoomed to 87.5%, so these are deliberate.
+ * Grid rows are compact (42) so a register shows more records per screen: the
+ * tallest cell content is a two-line name/email stack (~36px) or a 31px avatar,
+ * and row action buttons are ~30px, so 42 keeps everything untouchable-tight
+ * without clipping. Do not go below 40 without re-checking those cells.
+ */
+export const control = { compact: 30, standard: 36, comfortable: 44, gridRow: 42, gridHeader: 40 } as const
 
 /**
  * Motion is limited to state feedback (hover, focus, press, open/close) and is
@@ -201,6 +207,8 @@ export const gridThemeParams = (mode: Mode) => {
     rowHoverColor: s.hover,
     oddRowBackgroundColor: dark ? '#17293D' : '#FAFBFD',
     chromeBackgroundColor: s.raised,
-    spacing: 10,
+    // 8 (not the quartz default 10) tightens cell padding and the pagination
+    // bar to match the compact row height above.
+    spacing: 8,
   }
 }

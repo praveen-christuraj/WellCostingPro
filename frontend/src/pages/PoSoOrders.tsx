@@ -258,6 +258,7 @@ export default function PoSoOrders() {
         {notice && <Alert severity="success" onClose={() => setNotice('')} sx={{ mb: 1.5 }}>{notice}</Alert>}
         <ErrorMessage message={error}/>
         {loading ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <DataTable
+          fillHeight
           rows={filtered}
           columns={columns}
           searchPlaceholder="Search by order number, vendor, scope..."

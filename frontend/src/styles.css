@@ -8,6 +8,7 @@
   --wcp-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 
   --wcp-canvas: #F4F6F9;
+  --wcp-paper: #FFFFFF;
   --wcp-hover: #EDF2F8;
   --wcp-line: #E3E9F0;
   --wcp-line-strong: #D2DCE7;
@@ -52,6 +53,7 @@
 html[data-theme='dark'] {
   color-scheme: dark;
   --wcp-canvas: #0E1B29;
+  --wcp-paper: #15273B;
   --wcp-hover: #1E3450;
   --wcp-line: #27405C;
   --wcp-line-strong: #33506F;
@@ -296,3 +298,16 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
 
 /* AG Grid empty state (DataTable sets this as the no-rows overlay). */
 .grid-empty { color: var(--wcp-text-muted); font: 600 12.5px var(--wcp-font-ui); }
+
+/* Frozen right-hand action column for plain MUI tables inside a horizontal
+   scroller (the AG Grid registers get this from a pinned column instead — see
+   DataTable). The header and body cells of the actions column both carry the
+   class; the opaque paper background stops scrolled content showing through,
+   and the inset hairline marks the freeze edge. */
+.sticky-action-cell {
+  position: sticky; right: 0; z-index: 1;
+  background: var(--wcp-paper);
+  box-shadow: -1px 0 0 var(--wcp-line);
+}
+thead .sticky-action-cell { z-index: 2; }
+.MuiTableRow-root:hover .sticky-action-cell { background: var(--wcp-hover); }

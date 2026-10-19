@@ -176,6 +176,7 @@ export function AfeRegisterTab({ reference, onReferenceChanged }: {
     {loading
       ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box>
       : <DataTable
+        fillHeight
         rows={rows}
         columns={columns}
         searchPlaceholder="Search AFEs by code, name, rig, well, type or status..."

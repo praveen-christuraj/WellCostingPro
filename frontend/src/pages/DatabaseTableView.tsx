@@ -159,6 +159,7 @@ export default function DatabaseTableView() {
           </Alert>}
           {rows.total === 0 && <Typography color="text.secondary" fontSize={12.5} mb={1.5}>This table has no rows in this workspace yet.</Typography>}
           <DataTable<GridRow>
+            fillHeight
             rows={gridRows}
             columns={gridColumns}
             rowKey={ROW_KEY}

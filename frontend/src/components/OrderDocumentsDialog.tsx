@@ -266,9 +266,12 @@ export function OrderDocumentsDialog({ open, order, onClose, onChanged }: {
           {loading ? <Box py={4} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={22}/></Box>
             : active.length === 0 ? <Typography fontSize={12.5} color="text.secondary" py={2}>No files attached to this revision yet.</Typography>
             : <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
-              <Table size="small">
+              {/* The table scrolls sideways inside this box on narrow screens; the
+                  Actions column stays frozen at the right (see .sticky-action-cell). */}
+              <Box sx={{ overflowX: 'auto' }}>
+              <Table size="small" sx={{ minWidth: 640 }}>
                 <TableHead><TableRow>
-                  {['File', 'Type', 'Size', 'Uploaded', 'Actions'].map(header => <TableCell key={header} sx={{ fontWeight: 800, fontSize: 11 }}>{header}</TableCell>)}
+                  {['File', 'Type', 'Size', 'Uploaded', 'Actions'].map(header => <TableCell key={header} className={header === 'Actions' ? 'sticky-action-cell' : undefined} sx={{ fontWeight: 800, fontSize: 11 }}>{header}</TableCell>)}
                 </TableRow></TableHead>
                 <TableBody>{paged.map(document => <TableRow key={document.id} hover>
                   <TableCell sx={{ fontSize: 12 }}>
@@ -281,7 +284,7 @@ export function OrderDocumentsDialog({ open, order, onClose, onChanged }: {
                     {document.uploaded_by_name || '—'}
                     <Typography fontSize={11} color="text.secondary">{new Date(document.created_at).toLocaleString()}</Typography>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="sticky-action-cell">
                     <Box display="flex" gap={.2}>
                       {canDownload && <Tooltip title="Preview"><span><IconButton size="small" disabled={!canPreview(document.content_type, document.file_name)} onClick={() => void preview(document)} aria-label={`Preview ${document.file_name}`}><VisibilityOutlined sx={{ fontSize: 17 }}/></IconButton></span></Tooltip>}
                       {canDownload && <Tooltip title="Download"><IconButton size="small" onClick={() => void download(document)} aria-label={`Download ${document.file_name}`}><DownloadRounded sx={{ fontSize: 17 }}/></IconButton></Tooltip>}
@@ -291,6 +294,7 @@ export function OrderDocumentsDialog({ open, order, onClose, onChanged }: {
                   </TableCell>
                 </TableRow>)}</TableBody>
               </Table>
+              </Box>
               <TablePagination
                 component="div"
                 count={active.length}
