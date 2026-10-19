@@ -36,6 +36,8 @@ const DailyCostSheet = lazy(() => import('./pages/DailyCostSheet'))
 const DailyCostAnalysis = lazy(() => import('./pages/DailyCostAnalysis'))
 const MudCostAnalysis = lazy(() => import('./pages/MudCostAnalysis'))
 const CostingSets = lazy(() => import('./pages/CostingSets'))
+const Reports = lazy(() => import('./pages/Reports'))
+const WellCostComparisonReport = lazy(() => import('./pages/WellCostComparisonReport'))
 
 // Every listed permission is required (AND).
 function Guard({ permission, children }: { permission: string | string[]; children: ReactNode }) {
@@ -95,6 +97,8 @@ export default function App() {
           <Route path="daily-cost/analysis" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
           <Route path="daily-cost/analysis/:wellId" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
           <Route path="daily-cost/mud-cost-analysis" element={<Guard permission="daily-cost:read"><MudCostAnalysis/></Guard>}/>
+          <Route path="reports" element={<Guard permission="rig-well:read"><GuardAny permissions={['afe:read', 'daily-cost:read']}><Reports/></GuardAny></Guard>}/>
+          <Route path="reports/well-cost-comparison" element={<Guard permission="rig-well:read"><GuardAny permissions={['afe:read', 'daily-cost:read']}><WellCostComparisonReport/></GuardAny></Guard>}/>
           <Route path="*" element={<Navigate to="/" replace/>}/>
         </Route>
       </>}
