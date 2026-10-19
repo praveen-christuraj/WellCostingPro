@@ -1,136 +1,91 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
-import { Alert, Box, Button, Divider, MenuItem, TextField, Typography } from '@mui/material'
-import { FormDialog } from '../Common'
 import {
-  DAILY_CHARGE_CATEGORIES, DAILY_CHARGING_BASES, DAILY_CONSUMABLE_CATEGORIES,
-  DAILY_ONE_TIME_CATEGORIES, OTHER_EXPENSE_MIN_REMARKS, OTHER_EXPENSE_TYPES, dailyMoney,
-  deriveClassification, type ChargingBasis, type ChargeCategory,
-  type ConsumableCategory, type ConsumableKind, type DailyCostBaseline, type DailyCostCatalogueOption,
-  type DailyCostConsumableInput, type DailyCostLineBase, type DailyCostOtherExpenseInput,
-  type DailyCostReference, type DailyCostServiceInput, type DailyCostTangibleInput, type DailyQuantityUnit,
-  type OtherExpenseType, type OtherExpenseUnit,
+  Alert,
+  Box,
+  Button,
+  Collapse,
+  Divider,
+  MenuItem,
+  Paper,
+  TextField,
+  Typography,
+} from '@mui/material'
+import { AddRounded, DeleteOutlineRounded, TuneRounded } from '@mui/icons-material'
+import { FormDialog, Tag } from '../Common'
+import {
+  OTHER_EXPENSE_MIN_REMARKS,
+  OTHER_EXPENSE_TYPES,
+  dailyMoney,
+  deriveClassification,
+  type ChargeCategory,
+  type ChargingBasis,
+  type ConsumableCategory,
+  type ConsumableKind,
+  type DailyCostBaseline,
+  type DailyCostCatalogueOption,
+  type DailyCostConsumableInput,
+  type DailyCostOtherExpenseInput,
+  type DailyCostReference,
+  type DailyCostServiceInput,
+  type DailyCostTangibleInput,
+  type DailyQuantityUnit,
+  type OtherExpenseType,
 } from '../../lib/dailyCost'
 
-/**
- * The four line kinds of a daily sheet. `other` is the separately accounted group:
- * Lost In Hole, hole problems, fishing and similar unbudgeted charges.
- */
 export type DailyCostLineKind = 'service' | 'consumable' | 'tangible' | 'other'
 export type EditableDailyCostLine =
-  | DailyCostServiceInput | DailyCostConsumableInput | DailyCostTangibleInput | DailyCostOtherExpenseInput
+  | DailyCostServiceInput
+  | DailyCostConsumableInput
+  | DailyCostTangibleInput
+  | DailyCostOtherExpenseInput
 
 type Props = {
   open: boolean
   kind: DailyCostLineKind | null
   initialLine: EditableDailyCostLine | null
-  /** Current service lines of the sheet, so a service can repeat only under a different sub activity. */
   serviceLines: DailyCostServiceInput[]
-  /** Index of the edited line inside `serviceLines` (null when adding). */
   lineIndex: number | null
   baseline: DailyCostBaseline
   reference: DailyCostReference
   wellId: string
   onClose: () => void
-  onSave: (line: EditableDailyCostLine) => void
+  onSave: (lines: EditableDailyCostLine | EditableDailyCostLine[]) => void
 }
 
 const KIND_BY_CATEGORY: Record<ConsumableCategory, ConsumableKind> = {
-  'Mud Chemicals': 'mud_chemical', 'Cement Additives': 'cement_additive', Fuel: 'fuel', 'Drill Bits': 'drill_bit',
+  'Mud Chemicals': 'mud_chemical',
+  'Cement Additives': 'cement_additive',
+  Fuel: 'fuel',
+  'Drill Bits': 'drill_bit',
 }
 const CATEGORY_BY_KIND: Record<ConsumableKind, ConsumableCategory> = {
-  mud_chemical: 'Mud Chemicals', cement_additive: 'Cement Additives', fuel: 'Fuel', drill_bit: 'Drill Bits',
+  mud_chemical: 'Mud Chemicals',
+  cement_additive: 'Cement Additives',
+  fuel: 'Fuel',
+  drill_bit: 'Drill Bits',
 }
+
 const isService = (line: EditableDailyCostLine): line is DailyCostServiceInput => 'service_id' in line
 const isConsumable = (line: EditableDailyCostLine): line is DailyCostConsumableInput => 'item_kind' in line
 const isOther = (line: EditableDailyCostLine): line is DailyCostOtherExpenseInput => 'expense_type' in line
 
-function baseDefaults(reference: DailyCostReference, baseline: DailyCostBaseline): DailyCostLineBase {
-  const section = baseline.sections[0]
-  return {
-    id: null,
-    activity_id: reference.activities[0]?.id ?? '',
-    hole_section_id: section?.hole_section_id ?? null,
-    phase_id: section?.phases[0]?.phase_id ?? null,
-    sub_activity_id: null,
-    vendor_id: null,
-    party_name: '',
-    quantity: '1',
-    currency: baseline.standard_currency,
-    override_rate: null,
-    override_reason: '',
-    remarks: '',
-  }
-}
-
-function expenseTypeDefault(reference: DailyCostReference): OtherExpenseType {
-  return (reference.other_expense_types?.[0]?.code ?? OTHER_EXPENSE_TYPES[0].code) as OtherExpenseType
-}
-
-function initialFor(
-  kind: DailyCostLineKind,
-  reference: DailyCostReference,
-  baseline: DailyCostBaseline,
-  wellId: string,
-): EditableDailyCostLine {
-  const base = baseDefaults(reference, baseline)
-  // The well sub activity is mandatory, so preselect the first one configured
-  // for the well and the defaulted Master Data Activity.
-  base.sub_activity_id = reference.sub_activities.find(
-    item => item.well_id === wellId && item.activity_id === base.activity_id,
-  )?.id ?? null
-  if (kind === 'service') {
-    const rate = baseline.service_rates[0]
-    const service = reference.services.find(item => item.id === rate?.service_id) ?? reference.services[0]
-    const basis = rate?.charging_basis ?? 'Day Rate'
-    const category = (rate?.charge_category || 'Operation') as ChargeCategory
-    const unit: DailyQuantityUnit = basis === 'Per Service Rate' ? 'service'
-      : basis === 'Per Section Rate' ? 'section' : DAILY_ONE_TIME_CATEGORIES.includes(category) ? 'unit' : 'days'
-    return {
-      ...base,
-      service_id: service?.id ?? rate?.service_id ?? '',
-      baseline_service_rate_id: rate?.id ?? null,
-      charging_basis: basis,
-      charge_category: category,
-      quantity_unit: unit,
-      vendor_id: service?.vendor_id ?? null,
-      party_name: service?.vendor_name ?? '',
-      currency: rate?.currency ?? baseline.standard_currency,
-      hole_section_id: rate?.hole_section_id ?? base.hole_section_id,
-      phase_id: rate?.phase_id ?? base.phase_id,
-    }
-  }
-  if (kind === 'other') {
-    return {
-      ...base,
-      expense_type: expenseTypeDefault(reference),
-      expense_description: '',
-      quantity_unit: 'unit',
-      unit_rate: '',
-      // There is no locked rate to override on an unbudgeted charge.
-      override_rate: null,
-      override_reason: '',
-    }
-  }
-  if (kind === 'tangible') {
-    const item = reference.catalogue_items.find(option => option.item_kind === 'tangible')
-    const snapshot = baseline.catalogue_rates.find(option => option.item_kind === 'tangible' && option.id === item?.id)
-    return {
-      ...base,
-      tangible_id: item?.id ?? '',
-      currency: snapshot?.currency || item?.currency || baseline.standard_currency,
-    }
-  }
-  const category: ConsumableCategory = 'Mud Chemicals'
-  const item = reference.catalogue_items.find(option => option.item_kind === KIND_BY_CATEGORY[category])
-  const snapshot = baseline.catalogue_rates.find(option => option.item_kind === item?.item_kind && option.id === item?.id)
-  return {
-    ...base,
-    category,
-    item_kind: KIND_BY_CATEGORY[category],
-    item_id: item?.id ?? '',
-    currency: snapshot?.currency || item?.currency || baseline.standard_currency,
-  }
+type ServiceEntryRow = {
+  id: string
+  service_id: string
+  baseline_service_rate_id: string | null
+  charging_basis: ChargingBasis | null
+  charge_category: ChargeCategory | null
+  currency: string
+  override_rate: string | null
+  override_reason: string
+  remarks: string
+  customScope: boolean
+  custom_hole_section_id: string | null
+  custom_phase_id: string | null
+  customQuantity: boolean
+  custom_quantity: string
+  custom_quantity_unit: DailyQuantityUnit
 }
 
 function optionsForKind(
@@ -146,9 +101,18 @@ function optionsForKind(
   for (const item of active) if (!merged.has(item.id)) merged.set(item.id, item)
   if (initialId && !merged.has(initialId)) {
     merged.set(initialId, {
-      id: initialId, item_kind: kind, category: kind === 'tangible' ? 'Tangibles' : CATEGORY_BY_KIND[kind],
-      item_code: 'Existing item', item_name: 'Existing saved item', description: '', uom: 'unit',
-      captured_rate: '0', currency: '', revision_number: 0, effective_date: null, display_name: 'Existing saved item',
+      id: initialId,
+      item_kind: kind,
+      category: kind === 'tangible' ? 'Tangibles' : CATEGORY_BY_KIND[kind],
+      item_code: 'Existing item',
+      item_name: 'Existing saved item',
+      description: '',
+      uom: 'unit',
+      captured_rate: '0',
+      currency: '',
+      revision_number: 0,
+      effective_date: null,
+      display_name: 'Existing saved item',
     })
   }
   return [...merged.values()].sort((a, b) => a.item_code.localeCompare(b.item_code))
@@ -163,359 +127,1064 @@ function itemSnapshot(
 }
 
 export function DailyCostLineDialog({
-  open, kind, initialLine, serviceLines, lineIndex, baseline, reference, wellId, onClose, onSave,
+  open,
+  kind,
+  initialLine,
+  serviceLines,
+  lineIndex,
+  baseline,
+  reference,
+  wellId,
+  onClose,
+  onSave,
 }: Props) {
-  const [form, setForm] = useState<EditableDailyCostLine | null>(null)
-  const [baselineForm, setBaselineForm] = useState<EditableDailyCostLine | null>(null)
+  // Common Criteria State for Services
+  const [commonActivityId, setCommonActivityId] = useState('')
+  const [commonSubActivityId, setCommonSubActivityId] = useState<string | null>(null)
+  const [commonHoleSectionId, setCommonHoleSectionId] = useState<string | null>(null)
+  const [commonPhaseId, setCommonPhaseId] = useState<string | null>(null)
+  const [commonQuantity, setCommonQuantity] = useState('24')
+  const [commonQuantityUnit, setCommonQuantityUnit] = useState<DailyQuantityUnit>('hours')
+  const [commonVendorId, setCommonVendorId] = useState<string | null>(null)
+  const [commonPartyName, setCommonPartyName] = useState('')
+
+  // Service Rows under criteria
+  const [serviceRows, setServiceRows] = useState<ServiceEntryRow[]>([])
+
+  // Non-service line state (consumables, tangibles, other expenses)
+  const [nonServiceForm, setNonServiceForm] = useState<EditableDailyCostLine | null>(null)
+
+  const [baselineState, setBaselineState] = useState<string>('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
 
+  // Initialization
   useEffect(() => {
     if (!open || !kind) return
-    const next = initialLine ?? initialFor(kind, reference, baseline, wellId)
-    setForm(next)
-    setBaselineForm(next)
+
+    const defaultSection = baseline.sections[0]
+    const initialActivity = initialLine?.activity_id || reference.activities[0]?.id || ''
+    const initialClassification = deriveClassification(reference.activities.find(a => a.id === initialActivity))
+    const eligibleSubs = reference.sub_activities.filter(
+      item => item.well_id === wellId && item.activity_id === initialActivity,
+    )
+    const initialSubId = initialLine?.sub_activity_id || eligibleSubs[0]?.id || null
+    const initialSub = reference.sub_activities.find(s => s.id === initialSubId)
+
+    // Set common criteria
+    setCommonActivityId(initialActivity)
+    setCommonSubActivityId(initialSubId)
+    setCommonHoleSectionId(initialLine ? initialLine.hole_section_id : defaultSection?.hole_section_id ?? null)
+    setCommonPhaseId(initialLine ? initialLine.phase_id : defaultSection?.phases[0]?.phase_id ?? null)
+
+    if (initialClassification === 'Planned') {
+      setCommonPartyName('Not Applicable')
+      setCommonVendorId(null)
+    } else {
+      setCommonPartyName(initialLine?.party_name || initialSub?.responsible_party || '')
+      setCommonVendorId(initialLine?.vendor_id || null)
+    }
+
+    if (kind === 'service') {
+      if (initialLine && isService(initialLine)) {
+        setCommonQuantity(initialLine.quantity)
+        setCommonQuantityUnit(initialLine.quantity_unit)
+        setServiceRows([
+          {
+            id: initialLine.id || 'service-0',
+            service_id: initialLine.service_id,
+            baseline_service_rate_id: initialLine.baseline_service_rate_id,
+            charging_basis: initialLine.charging_basis,
+            charge_category: initialLine.charge_category,
+            currency: initialLine.currency,
+            override_rate: initialLine.override_rate,
+            override_reason: initialLine.override_reason,
+            remarks: initialLine.remarks,
+            customScope: false,
+            custom_hole_section_id: initialLine.hole_section_id,
+            custom_phase_id: initialLine.phase_id,
+            customQuantity: false,
+            custom_quantity: initialLine.quantity,
+            custom_quantity_unit: initialLine.quantity_unit,
+          },
+        ])
+      } else {
+        setCommonQuantity('24')
+        setCommonQuantityUnit('hours')
+        const firstRate = baseline.service_rates[0]
+        const firstService = reference.services.find(s => s.id === firstRate?.service_id) || reference.services[0]
+        const basis = (firstRate?.charging_basis || 'Day Rate') as ChargingBasis
+        const category = (firstRate?.charge_category || 'Operation') as ChargeCategory
+        setServiceRows([
+          {
+            id: 'service-0',
+            service_id: firstService?.id || '',
+            baseline_service_rate_id: firstRate?.id || null,
+            charging_basis: basis,
+            charge_category: category,
+            currency: firstRate?.currency || baseline.standard_currency,
+            override_rate: null,
+            override_reason: '',
+            remarks: '',
+            customScope: false,
+            custom_hole_section_id: defaultSection?.hole_section_id ?? null,
+            custom_phase_id: defaultSection?.phases[0]?.phase_id ?? null,
+            customQuantity: false,
+            custom_quantity: '24',
+            custom_quantity_unit: 'hours',
+          },
+        ])
+      }
+      setNonServiceForm(null)
+    } else {
+      // Non-service line setup
+      if (initialLine) {
+        setNonServiceForm(initialLine)
+      } else if (kind === 'other') {
+        const expType = (reference.other_expense_types?.[0]?.code ?? OTHER_EXPENSE_TYPES[0].code) as OtherExpenseType
+        setNonServiceForm({
+          id: null,
+          activity_id: initialActivity,
+          sub_activity_id: initialSubId,
+          hole_section_id: defaultSection?.hole_section_id ?? null,
+          phase_id: defaultSection?.phases[0]?.phase_id ?? null,
+          vendor_id: initialClassification === 'Planned' ? null : null,
+          party_name: initialClassification === 'Planned' ? 'Not Applicable' : initialSub?.responsible_party || '',
+          quantity: '1',
+          quantity_unit: 'unit',
+          unit_rate: '',
+          currency: baseline.standard_currency,
+          override_rate: null,
+          override_reason: '',
+          remarks: '',
+          expense_type: expType,
+          expense_description: '',
+        })
+      } else if (kind === 'tangible') {
+        const item = reference.catalogue_items.find(option => option.item_kind === 'tangible')
+        const snapshot = baseline.catalogue_rates.find(option => option.item_kind === 'tangible' && option.id === item?.id)
+        setNonServiceForm({
+          id: null,
+          activity_id: initialActivity,
+          sub_activity_id: initialSubId,
+          hole_section_id: defaultSection?.hole_section_id ?? null,
+          phase_id: defaultSection?.phases[0]?.phase_id ?? null,
+          vendor_id: initialClassification === 'Planned' ? null : null,
+          party_name: initialClassification === 'Planned' ? 'Not Applicable' : initialSub?.responsible_party || '',
+          quantity: '1',
+          currency: snapshot?.currency || item?.currency || baseline.standard_currency,
+          override_rate: null,
+          override_reason: '',
+          remarks: '',
+          tangible_id: item?.id ?? '',
+        })
+      } else {
+        const cat: ConsumableCategory = 'Mud Chemicals'
+        const item = reference.catalogue_items.find(option => option.item_kind === KIND_BY_CATEGORY[cat])
+        const snapshot = baseline.catalogue_rates.find(option => option.item_kind === item?.item_kind && option.id === item?.id)
+        setNonServiceForm({
+          id: null,
+          activity_id: initialActivity,
+          sub_activity_id: initialSubId,
+          hole_section_id: defaultSection?.hole_section_id ?? null,
+          phase_id: defaultSection?.phases[0]?.phase_id ?? null,
+          vendor_id: initialClassification === 'Planned' ? null : null,
+          party_name: initialClassification === 'Planned' ? 'Not Applicable' : initialSub?.responsible_party || '',
+          quantity: '1',
+          currency: snapshot?.currency || item?.currency || baseline.standard_currency,
+          override_rate: null,
+          override_reason: '',
+          remarks: '',
+          category: cat,
+          item_kind: KIND_BY_CATEGORY[cat],
+          item_id: item?.id ?? '',
+        })
+      }
+    }
+
     setError('')
+    setSubmitted(false)
     setSaving(false)
   }, [open, kind, initialLine, reference, baseline, wellId])
 
-  // Unsaved-changes guard: anything typed or picked in the line editor is protected.
-  const dirty = baselineForm !== null && form !== null && JSON.stringify(form) !== JSON.stringify(baselineForm)
+  useEffect(() => {
+    if (open && baselineState === '') {
+      setBaselineState(
+        JSON.stringify({
+          commonActivityId,
+          commonSubActivityId,
+          commonHoleSectionId,
+          commonPhaseId,
+          commonQuantity,
+          commonQuantityUnit,
+          commonVendorId,
+          commonPartyName,
+          serviceRows,
+          nonServiceForm,
+        }),
+      )
+    }
+  }, [
+    open,
+    baselineState,
+    commonActivityId,
+    commonSubActivityId,
+    commonHoleSectionId,
+    commonPhaseId,
+    commonQuantity,
+    commonQuantityUnit,
+    commonVendorId,
+    commonPartyName,
+    serviceRows,
+    nonServiceForm,
+  ])
 
-  const selectedRate = useMemo(() => {
-    if (!form || !isService(form) || !form.baseline_service_rate_id) return undefined
-    return baseline.service_rates.find(rate => rate.id === form.baseline_service_rate_id)
-  }, [form, baseline.service_rates])
+  const currentState = JSON.stringify({
+    commonActivityId,
+    commonSubActivityId,
+    commonHoleSectionId,
+    commonPhaseId,
+    commonQuantity,
+    commonQuantityUnit,
+    commonVendorId,
+    commonPartyName,
+    serviceRows,
+    nonServiceForm,
+  })
+  const dirty = baselineState !== '' && currentState !== baselineState
+
   const sections = baseline.sections
-  const selectedSection = sections.find(section => section.hole_section_id === form?.hole_section_id)
-  const eligibleSubActivities = reference.sub_activities.filter(item => item.well_id === wellId && item.activity_id === form?.activity_id)
-  // Classification (Planned / UPA / NPT) is not entered: it follows the Master Data Activity.
-  const derivedClassification = deriveClassification(reference.activities.find(item => item.id === form?.activity_id))
+  const selectedCommonSection = sections.find(section => section.hole_section_id === commonHoleSectionId)
+  const eligibleSubActivities = useMemo(
+    () => reference.sub_activities.filter(item => item.well_id === wellId && item.activity_id === commonActivityId),
+    [reference.sub_activities, wellId, commonActivityId],
+  )
+  const derivedClassification = deriveClassification(reference.activities.find(item => item.id === commonActivityId))
 
-  const catalogKind = form && isConsumable(form) ? form.item_kind : 'tangible'
-  const initialCatalogId = form && !isService(form) && !isOther(form)
-    ? (isConsumable(form) ? form.item_id : form.tangible_id)
-    : null
-  // An other expense has no catalogue item and no locked rate, so no picker applies.
-  const catalogueOptions = kind === 'service' || kind === 'other' || !form
-    ? [] : optionsForKind(catalogKind, reference, baseline, initialCatalogId)
-  const selectedCatalog = catalogueOptions.find(item => item.id === initialCatalogId)
-  const selectedSnapshot = itemSnapshot(selectedCatalog, baseline)
-  const expenseTypeOptions = reference.other_expense_types?.length ? reference.other_expense_types : OTHER_EXPENSE_TYPES
-  const catalogHasSnapshot = Boolean(selectedSnapshot && baseline.catalogue_rates.some(
-    item => item.item_kind === selectedSnapshot.item_kind && item.id === selectedSnapshot.id,
-  ))
+  if (!open || !kind) return null
 
-  if (!open || !kind || !form) return null
-
-  const update = (patch: Record<string, unknown>) => {
-    setForm(current => current ? { ...current, ...patch } as EditableDailyCostLine : current)
-    setError('')
-  }
-  const updateActivity = (activityId: string) => {
-    const nextSub = reference.sub_activities.some(item => item.well_id === wellId && item.id === form.sub_activity_id && item.activity_id === activityId)
-      ? form.sub_activity_id : null
-    const patch: Record<string, unknown> = { activity_id: activityId, sub_activity_id: nextSub }
-    // Planned activities price from the locked AFE rate; keep that rule attached
-    // to the Activity instead of a separate classification field.
+  // Activity change handler (common)
+  const handleActivityChange = (activityId: string) => {
+    setCommonActivityId(activityId)
     const nextClassification = deriveClassification(reference.activities.find(item => item.id === activityId))
-    if (isService(form) && nextClassification === 'Planned' && !form.baseline_service_rate_id) {
-      const first = baseline.service_rates.find(rate => rate.service_id === form.service_id)
-      if (first) {
-        const category = (first.charge_category || 'Operation') as ChargeCategory
-        patch.baseline_service_rate_id = first.id
-        patch.charging_basis = first.charging_basis
-        patch.charge_category = category
-        patch.currency = first.currency
-      }
+    const eligible = reference.sub_activities.filter(
+      item => item.well_id === wellId && item.activity_id === activityId,
+    )
+    const nextSubId = eligible.some(item => item.id === commonSubActivityId) ? commonSubActivityId : eligible[0]?.id || null
+    const nextSub = reference.sub_activities.find(item => item.id === nextSubId)
+    setCommonSubActivityId(nextSubId)
+
+    if (nextClassification === 'Planned') {
+      setCommonPartyName('Not Applicable')
+      setCommonVendorId(null)
+    } else {
+      setCommonPartyName(nextSub?.responsible_party || '')
     }
-    update(patch)
-  }
-  const updateService = (serviceId: string) => {
-    if (!isService(form)) return
-    const candidates = baseline.service_rates.filter(rate => rate.service_id === serviceId)
-    const rate = candidates[0]
-    const service = reference.services.find(item => item.id === serviceId)
-    const basis = rate?.charging_basis ?? form.charging_basis ?? 'Day Rate'
-    const category = (rate?.charge_category || form.charge_category || 'Operation') as ChargeCategory
-    const quantityUnit: DailyQuantityUnit = basis === 'Per Service Rate' ? 'service'
-      : basis === 'Per Section Rate' ? 'section'
-        : DAILY_ONE_TIME_CATEGORIES.includes(category) ? 'unit' : 'days'
-    update({
-      service_id: serviceId, baseline_service_rate_id: rate?.id ?? null, charging_basis: basis,
-      charge_category: category, quantity_unit: quantityUnit,
-      vendor_id: service?.vendor_id ?? form.vendor_id, party_name: service?.vendor_name ?? form.party_name,
-      currency: rate?.currency || form.currency || baseline.standard_currency,
-      hole_section_id: rate?.hole_section_id ?? form.hole_section_id,
-      phase_id: rate?.phase_id ?? form.phase_id,
-    })
-  }
-  const updateRate = (rateId: string) => {
-    if (!isService(form)) return
-    if (!rateId) {
-      update({ baseline_service_rate_id: null })
-      return
+
+    if (nonServiceForm) {
+      setNonServiceForm(prev => (prev ? {
+        ...prev,
+        activity_id: activityId,
+        sub_activity_id: nextSubId,
+        party_name: nextClassification === 'Planned' ? 'Not Applicable' : nextSub?.responsible_party || '',
+        vendor_id: nextClassification === 'Planned' ? null : prev.vendor_id,
+      } : null))
     }
-    const rate = baseline.service_rates.find(item => item.id === rateId)
-    if (!rate) return
-    const category = (rate.charge_category || 'Operation') as ChargeCategory
-    const quantityUnit: DailyQuantityUnit = rate.charging_basis === 'Per Service Rate' ? 'service'
-      : rate.charging_basis === 'Per Section Rate' ? 'section'
-        : DAILY_ONE_TIME_CATEGORIES.includes(category) ? 'unit' : 'days'
-    update({
-      service_id: rate.service_id, baseline_service_rate_id: rate.id, charging_basis: rate.charging_basis,
-      charge_category: category, quantity_unit: quantityUnit, currency: rate.currency,
-      hole_section_id: rate.hole_section_id ?? form.hole_section_id,
-      phase_id: rate.phase_id ?? form.phase_id,
-    })
   }
 
-  const validate = (): string => {
-    if (!form.activity_id) return 'Select a Master Data Activity.'
-    if (!form.sub_activity_id) return 'Select the well sub activity configured in Rig & Well Management.'
-    if (!form.quantity || Number(form.quantity) <= 0) return 'Quantity must be greater than zero.'
-    if (derivedClassification !== 'Planned' && !form.vendor_id && !form.party_name.trim()) return 'UPA and NPT lines need a responsible vendor or party.'
-    if (form.override_rate !== null && (!form.override_rate || Number(form.override_rate) < 0)) return 'Enter a valid daily override rate.'
-    if (form.override_rate !== null && form.override_reason.trim().length < 3) return 'Explain the rate override (at least 3 characters).'
-    if (isService(form)) {
-      if (!form.service_id) return 'Select a service.'
-      const duplicate = serviceLines.some((row, index) => index !== lineIndex
-        && row.service_id === form.service_id
-        && (row.sub_activity_id ?? '') === (form.sub_activity_id ?? ''))
-      if (duplicate) return 'This service is already entered for the selected sub activity on this date. Enter the service again only with a different sub activity.'
-      if (derivedClassification === 'Planned' && !form.baseline_service_rate_id) return 'Choose a saved AFE service rate for planned work.'
-      if (derivedClassification !== 'Planned' && !form.baseline_service_rate_id && form.override_rate === null) return 'Enter a manual rate for an unplanned service.'
-      if (!form.charging_basis) return 'Choose the service charging basis.'
-      if (!form.currency) return 'The rate needs a currency included in the locked AFE currency setup.'
-      if (form.quantity_unit === 'hours' && Number(form.quantity) > 24) return 'For a daily line, hours cannot exceed 24; enter days instead.'
-      if (form.charging_basis !== 'Day Rate' && !form.hole_section_id) return 'Choose a hole section for this charging basis.'
-    } else if (isOther(form)) {
-      if (!form.expense_type) return 'Choose what kind of unexpected cost this is (LIH, hole problem, claim …).'
-      if (!form.unit_rate || Number(form.unit_rate) <= 0) return 'Enter the unit rate charged for this other expense.'
-      if (!form.currency) return 'Choose the currency the charge is billed in.'
-      if (form.remarks.trim().length < OTHER_EXPENSE_MIN_REMARKS) {
-        return `Remarks are mandatory on an other expense: describe what was lost in hole, the incident or the claim (at least ${OTHER_EXPENSE_MIN_REMARKS} characters).`
-      }
-    } else if (isConsumable(form)) {
-      if (!form.item_id) return 'Select a consumable item.'
-      if (!form.hole_section_id) return 'Choose a hole section for actual consumable use.'
-      if (!form.currency) return 'The item rate needs a currency included in the locked AFE currency setup.'
-      if (!catalogHasSnapshot && form.override_rate === null) return 'This item was added after tracking began. Enter and justify its daily rate.'
-    } else {
-      if (!form.tangible_id) return 'Select a tangible.'
-      if (!form.currency) return 'The item rate needs a currency included in the locked AFE currency setup.'
-      if (!catalogHasSnapshot && form.override_rate === null) return 'This item was added after tracking began. Enter and justify its daily rate.'
+  // Sub Activity change handler (common)
+  const handleSubActivityChange = (subId: string | null) => {
+    setCommonSubActivityId(subId)
+    const sub = reference.sub_activities.find(item => item.id === subId)
+    if (derivedClassification !== 'Planned' && sub) {
+      setCommonPartyName(sub.responsible_party || '')
     }
-    if (!baseline.exchange_rates[form.currency]) return `${form.currency || 'This item'} has no conversion factor in the locked AFE currency setup. Select a supported currency or ask an AFE administrator to correct the estimate before tracking.`
-    return ''
+    if (nonServiceForm) {
+      setNonServiceForm(prev => (prev ? {
+        ...prev,
+        sub_activity_id: subId,
+        party_name: derivedClassification === 'Planned' ? 'Not Applicable' : sub?.responsible_party || prev.party_name,
+      } : null))
+    }
   }
-  const submit = () => {
-    const problem = validate()
-    if (problem) {
-      setError(problem)
+
+  // Service row manipulation
+  const addServiceRow = () => {
+    const defaultSection = baseline.sections[0]
+    setServiceRows(prev => [
+      ...prev,
+      {
+        id: `service-${Date.now()}-${prev.length}`,
+        service_id: '',
+        baseline_service_rate_id: null,
+        charging_basis: 'Day Rate',
+        charge_category: 'Operation',
+        currency: baseline.standard_currency,
+        override_rate: null,
+        override_reason: '',
+        remarks: '',
+        customScope: false,
+        custom_hole_section_id: defaultSection?.hole_section_id ?? null,
+        custom_phase_id: defaultSection?.phases[0]?.phase_id ?? null,
+        customQuantity: false,
+        custom_quantity: commonQuantity,
+        custom_quantity_unit: commonQuantityUnit,
+      },
+    ])
+  }
+
+  const updateServiceRow = (rowId: string, patch: Partial<ServiceEntryRow>) => {
+    setServiceRows(prev => prev.map(row => {
+      if (row.id !== rowId) return row
+      const updated = { ...row, ...patch }
+      if (patch.service_id && patch.service_id !== row.service_id) {
+        const rate = baseline.service_rates.find(r => r.service_id === patch.service_id)
+        if (rate) {
+          updated.baseline_service_rate_id = rate.id
+          updated.charging_basis = rate.charging_basis
+          updated.charge_category = (rate.charge_category || 'Operation') as ChargeCategory
+          updated.currency = rate.currency
+        } else {
+          updated.baseline_service_rate_id = null
+        }
+      }
+      return updated
+    }))
+  }
+
+  const removeServiceRow = (rowId: string) => {
+    if (serviceRows.length <= 1) return
+    setServiceRows(prev => prev.filter(r => r.id !== rowId))
+  }
+
+  // Validation
+  const validate = (): string[] => {
+    const problems: string[] = []
+
+    if (!commonActivityId) problems.push('Select a Master Data Activity.')
+    if (!commonSubActivityId) problems.push('Select a well sub activity configured for this well.')
+
+    if (derivedClassification !== 'Planned' && !commonVendorId && !commonPartyName.trim()) {
+      problems.push('UPA and NPT lines require a responsible vendor or party.')
+    }
+
+    if (kind === 'service') {
+      if (!serviceRows.length) problems.push('Add at least one service.')
+
+      const commonQtyNum = Number(commonQuantity)
+      if (!commonQuantity || isNaN(commonQtyNum) || commonQtyNum <= 0) {
+        problems.push('Common quantity must be greater than zero.')
+      }
+      if (commonQuantityUnit === 'hours' && commonQtyNum > 24) {
+        problems.push('Hours cannot exceed 24 for a daily line; enter days instead.')
+      }
+
+      const duplicateCheck = new Set<string>()
+      serviceRows.forEach((row, idx) => {
+        const rowLabel = `Service #${idx + 1}`
+        if (!row.service_id) {
+          problems.push(`${rowLabel}: Select a service from Master Data.`)
+          return
+        }
+
+        // Duplicate service on same sub activity
+        const subId = commonSubActivityId || ''
+        const dupKey = `${row.service_id}:${subId}`
+        if (duplicateCheck.has(dupKey)) {
+          const sName = reference.services.find(s => s.id === row.service_id)?.service_code || row.service_id
+          problems.push(`${rowLabel} (${sName}): Cannot add the same service twice under the same sub activity.`)
+        }
+        duplicateCheck.add(dupKey)
+
+        // Existing services duplicate check
+        const existingDup = serviceLines.some(
+          (sLine, sIdx) => sIdx !== lineIndex && sLine.service_id === row.service_id && (sLine.sub_activity_id || '') === subId,
+        )
+        if (existingDup) {
+          const sName = reference.services.find(s => s.id === row.service_id)?.service_code || row.service_id
+          problems.push(`${rowLabel} (${sName}): This service is already entered for this sub activity on this sheet.`)
+        }
+
+        if (derivedClassification === 'Planned' && !row.baseline_service_rate_id) {
+          const sName = reference.services.find(s => s.id === row.service_id)?.service_code || row.service_id
+          problems.push(`${rowLabel} (${sName}): Planned work requires a saved AFE rate. Select an AFE rate or use UPA/NPT Activity.`)
+        }
+
+        if (derivedClassification !== 'Planned' && !row.baseline_service_rate_id && row.override_rate === null) {
+          const sName = reference.services.find(s => s.id === row.service_id)?.service_code || row.service_id
+          problems.push(`${rowLabel} (${sName}): Unplanned service requires a manual override rate and reason.`)
+        }
+
+        if (row.override_rate !== null) {
+          const ovNum = Number(row.override_rate)
+          if (isNaN(ovNum) || ovNum < 0) problems.push(`${rowLabel}: Enter a valid daily override rate.`)
+          if (row.override_reason.trim().length < 3) problems.push(`${rowLabel}: Explain the rate override (at least 3 characters).`)
+        }
+
+        if (row.customQuantity) {
+          const custQtyNum = Number(row.custom_quantity)
+          if (!row.custom_quantity || isNaN(custQtyNum) || custQtyNum <= 0) {
+            problems.push(`${rowLabel}: Custom quantity must be greater than zero.`)
+          }
+          if (row.custom_quantity_unit === 'hours' && custQtyNum > 24) {
+            problems.push(`${rowLabel}: Custom hours cannot exceed 24; enter days instead.`)
+          }
+        }
+
+        if (!baseline.exchange_rates[row.currency]) {
+          problems.push(`${rowLabel}: Currency ${row.currency} has no conversion factor in the locked AFE.`)
+        }
+      })
+    } else if (nonServiceForm) {
+      if (isOther(nonServiceForm)) {
+        if (!nonServiceForm.expense_type) problems.push('Choose the type of other expense.')
+        if (!nonServiceForm.unit_rate || Number(nonServiceForm.unit_rate) <= 0) problems.push('Enter a valid unit rate.')
+        if (nonServiceForm.remarks.trim().length < OTHER_EXPENSE_MIN_REMARKS) {
+          problems.push(`Remarks are mandatory on other expense (at least ${OTHER_EXPENSE_MIN_REMARKS} characters).`)
+        }
+      } else if (isConsumable(nonServiceForm)) {
+        if (!nonServiceForm.item_id) problems.push('Select a consumable item.')
+      } else {
+        if (!('tangible_id' in nonServiceForm) || !nonServiceForm.tangible_id) problems.push('Select a tangible item.')
+      }
+    }
+
+    return problems
+  }
+
+  const handleSave = () => {
+    setSubmitted(true)
+    const problems = validate()
+    if (problems.length > 0) {
+      setError(problems[0])
       return
     }
+
     setSaving(true)
     try {
-      const prepared = {
-        ...form, id: form.id || null,
-        hole_section_id: form.hole_section_id || null, phase_id: form.phase_id || null,
-        sub_activity_id: form.sub_activity_id || null, vendor_id: form.vendor_id || null,
-        party_name: form.party_name.trim(),
-        remarks: form.remarks.trim(),
-        override_reason: form.override_rate === null ? '' : form.override_reason.trim(),
-        // An other expense is priced from its own unit rate, never from an override.
-        ...(isOther(form) ? { override_rate: null, override_reason: '' } : {}),
-      } as EditableDailyCostLine
-      onSave(prepared)
+      if (kind === 'service') {
+        const results: DailyCostServiceInput[] = serviceRows.map(row => {
+          const secId = row.customScope ? row.custom_hole_section_id : commonHoleSectionId
+          const phId = row.customScope ? row.custom_phase_id : commonPhaseId
+          const qty = row.customQuantity ? row.custom_quantity : commonQuantity
+          const unit = row.customQuantity ? row.custom_quantity_unit : commonQuantityUnit
+          return {
+            id: initialLine && serviceRows.length === 1 ? initialLine.id : null,
+            activity_id: commonActivityId,
+            sub_activity_id: commonSubActivityId,
+            vendor_id: derivedClassification === 'Planned' ? null : commonVendorId,
+            party_name: derivedClassification === 'Planned' ? 'Not Applicable' : commonPartyName.trim(),
+            hole_section_id: secId,
+            phase_id: secId ? phId : null,
+            quantity: qty,
+            quantity_unit: unit,
+            service_id: row.service_id,
+            baseline_service_rate_id: row.baseline_service_rate_id,
+            charging_basis: row.charging_basis,
+            charge_category: (row.charge_category || 'Operation') as ChargeCategory,
+            currency: row.currency || baseline.standard_currency,
+            override_rate: row.override_rate || null,
+            override_reason: row.override_rate ? row.override_reason.trim() : '',
+            remarks: row.remarks.trim(),
+          }
+        })
+        onSave(results)
+      } else if (nonServiceForm) {
+        const prepared: EditableDailyCostLine = {
+          ...nonServiceForm,
+          activity_id: commonActivityId,
+          sub_activity_id: commonSubActivityId,
+          hole_section_id: commonHoleSectionId,
+          phase_id: commonHoleSectionId ? commonPhaseId : null,
+          vendor_id: derivedClassification === 'Planned' ? null : commonVendorId,
+          party_name: derivedClassification === 'Planned' ? 'Not Applicable' : commonPartyName.trim(),
+          remarks: nonServiceForm.remarks.trim(),
+          override_reason: nonServiceForm.override_rate === null ? '' : nonServiceForm.override_reason.trim(),
+        }
+        onSave(prepared)
+      }
     } finally {
       setSaving(false)
     }
   }
 
-  const title = `${form.id ? 'Edit' : 'Add'} ${
-    kind === 'service' ? 'service' : kind === 'consumable' ? 'consumable usage' : kind === 'other' ? 'other expense' : 'tangible'
-  }`
-  const sectionLabel = (section: typeof sections[number]) => `${section.section_code} · ${section.section_name}`
+  const dialogTitle = initialLine
+    ? `Edit ${kind === 'service' ? 'service' : kind === 'consumable' ? 'consumable' : kind === 'other' ? 'other expense' : 'tangible'} line`
+    : `Add ${kind === 'service' ? 'services' : kind === 'consumable' ? 'consumable usage' : kind === 'other' ? 'other expense' : 'tangible'}`
 
-  return <FormDialog open title={title} subtitle="Daily actuals are priced from the AFE and rate snapshots locked when tracking began. Overrides are recorded with their reason." onClose={onClose} onSubmit={submit} busy={saving} dirty={dirty} submitLabel={form.id ? 'Save line' : 'Add line'} maxWidth="md">
-    <Box display="grid" gap={1.8}>
-      <TextField select required label="Master Data Activity" value={form.activity_id} onChange={event => updateActivity(event.target.value)}
-        helperText="Classifies the line (Planned / UPA / NPT) and drives its sub activity list.">
-        {reference.activities.map(item => <MenuItem key={item.id} value={item.id}>{item.display_name}</MenuItem>)}
-      </TextField>
+  const submitLabel = initialLine
+    ? 'Save line'
+    : kind === 'service'
+      ? serviceRows.length > 1
+        ? `Add ${serviceRows.length} services`
+        : 'Add service'
+      : 'Add line'
 
-      {kind === 'other' && isOther(form) && <>
-        <Divider/>
-        <Typography fontSize={12} fontWeight={800} letterSpacing={.5} color="text.secondary">OTHER EXPENSE / UNEXPECTED COST</Typography>
-        <Alert severity="warning" sx={{ py: 0 }}>
-          An unexpected charge has no AFE allowance: it is accounted in its own group and deducted from the
-          AFE total, so the remaining balance falls by the same amount. Remarks are mandatory.
-        </Alert>
-        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
-          <TextField select required label="Type of other expense" value={form.expense_type} onChange={event => update({ expense_type: event.target.value as OtherExpenseType })}
-            helperText="Groups the deduction on the sheet, the well analysis and the print sheet.">
-            {expenseTypeOptions.map(option => <MenuItem key={option.code} value={option.code}>{option.label}</MenuItem>)}
-          </TextField>
-          <TextField label="What was lost or charged (optional)" value={form.expense_description} onChange={event => update({ expense_description: event.target.value })}
-            inputProps={{ maxLength: 300 }} helperText="E.g. 6 5/8 in BHA, 3 joints of drill pipe, third-party claim note."/>
-        </Box>
-      </>}
+  const sectionLabel = (sec: typeof sections[number]) => `${sec.section_code} · ${sec.section_name}`
 
-      {kind === 'service' && isService(form) && <>
-        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1.2fr .8fr' } }}>
-          <TextField select required label="Service" value={form.service_id} onChange={event => updateService(event.target.value)}>
-            {reference.services.map(item => <MenuItem key={item.id} value={item.id}>{item.display_name}</MenuItem>)}
-          </TextField>
-          <TextField select label="Locked AFE rate" value={form.baseline_service_rate_id ?? ''} onChange={event => updateRate(event.target.value)}>
-            {derivedClassification !== 'Planned' && <MenuItem value="">Manual UPA / NPT rate</MenuItem>}
-            {baseline.service_rates.filter(rate => rate.service_id === form.service_id).map(rate => <MenuItem key={rate.id} value={rate.id}>{rate.display_name}</MenuItem>)}
-          </TextField>
-        </Box>
-        {form.baseline_service_rate_id && selectedRate
-          ? <Alert severity="info" sx={{ py: 0 }}>
-              Locked AFE rate: {selectedRate.charging_basis}{selectedRate.charge_category ? ` · ${selectedRate.charge_category}` : ''} · {dailyMoney(selectedRate.unit_rate, selectedRate.currency)}. Later Master Data changes do not affect this value.
-            </Alert>
-          : derivedClassification !== 'Planned' && <Alert severity="warning" sx={{ py: 0 }}>Manual UPA/NPT pricing requires a daily rate and a written reason.</Alert>}
-        {!form.baseline_service_rate_id && derivedClassification !== 'Planned' && <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
-          <TextField select label="Charging basis" value={form.charging_basis ?? 'Day Rate'} onChange={event => update({ charging_basis: event.target.value as ChargingBasis })}>
-            {DAILY_CHARGING_BASES.map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
-          </TextField>
-          {form.charging_basis === 'Day Rate' && <TextField select label="Charge category" value={form.charge_category} onChange={event => {
-            const category = event.target.value as ChargeCategory
-            update({ charge_category: category, quantity_unit: DAILY_ONE_TIME_CATEGORIES.includes(category) ? 'unit' : 'days' })
-          }}>
-            {DAILY_CHARGE_CATEGORIES.map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
-          </TextField>}
-        </Box>}
-      </>}
+  return (
+    <FormDialog
+      open={open}
+      title={dialogTitle}
+      subtitle="Dropdowns and charged quantity apply commonly across services. Individual services can be added under these criteria with service-scoped overrides."
+      onClose={onClose}
+      onSubmit={handleSave}
+      busy={saving}
+      dirty={dirty}
+      submitLabel={submitLabel}
+      maxWidth="md"
+    >
+      <Box display="grid" gap={2}>
+        {/* COMMON CRITERIA SECTION */}
+        <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: 'background.paper' }}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.2}>
+            <Typography fontSize={11} fontWeight={800} letterSpacing={0.6} color="text.secondary" textTransform="uppercase">
+              Common Activity &amp; Operational Criteria
+            </Typography>
+            <Tag tone={derivedClassification === 'Planned' ? 'info' : derivedClassification === 'UPA' ? 'warning' : 'error'}>
+              {derivedClassification}
+            </Tag>
+          </Box>
 
-      {kind === 'consumable' && isConsumable(form) && <>
-        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
-          <TextField select required label="Consumable category" value={form.category} onChange={event => {
-            const category = event.target.value as ConsumableCategory
-            const nextKind = KIND_BY_CATEGORY[category]
-            const first = optionsForKind(nextKind, reference, baseline, null)[0]
-            const snapshot = itemSnapshot(first, baseline)
-            update({ category, item_kind: nextKind, item_id: first?.id ?? '', currency: snapshot?.currency || baseline.standard_currency })
-          }}>
-            {DAILY_CONSUMABLE_CATEGORIES.map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
-          </TextField>
-          <TextField select required label="Catalogue item" value={form.item_id} onChange={event => {
-            const item = catalogueOptions.find(option => option.id === event.target.value)
-            const snapshot = itemSnapshot(item, baseline)
-            update({ item_id: event.target.value, currency: snapshot?.currency || baseline.standard_currency })
-          }}>
-            {catalogueOptions.map(item => <MenuItem key={item.id} value={item.id}>{item.display_name} · {item.uom || 'unit'}</MenuItem>)}
-          </TextField>
-        </Box>
-        {selectedSnapshot && catalogHasSnapshot
-          ? <Alert severity="info" sx={{ py: 0 }}>
-              Locked catalogue rate: {dailyMoney(selectedSnapshot.captured_rate, selectedSnapshot.currency)} / {selectedSnapshot.uom || 'unit'} · revision {selectedSnapshot.revision_number || 'baseline'}{selectedSnapshot.effective_date ? ` · effective ${selectedSnapshot.effective_date}` : ''}. Actuals still reconcile to the {form.category} AFE allowance.
-            </Alert>
-          : <Alert severity="warning" sx={{ py: 0 }}>No rate was present in the well snapshot. Enter a daily override with a reason; the actual will still reconcile against any AFE category allowance.</Alert>}
-      </>}
+          <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+            <TextField
+              select
+              required
+              label="Master Data Activity"
+              value={commonActivityId}
+              onChange={e => handleActivityChange(e.target.value)}
+              helperText="Drives classification (Planned / UPA / NPT) and available sub activities."
+            >
+              {reference.activities.map(item => (
+                <MenuItem key={item.id} value={item.id}>
+                  {item.display_name}
+                </MenuItem>
+              ))}
+            </TextField>
 
-      {kind === 'tangible' && !isService(form) && !isConsumable(form) && !isOther(form) && <>
-        <TextField select required label="Tangible" value={form.tangible_id} onChange={event => {
-          const item = catalogueOptions.find(option => option.id === event.target.value)
-          const snapshot = itemSnapshot(item, baseline)
-          update({ tangible_id: event.target.value, currency: snapshot?.currency || baseline.standard_currency })
-        }}>
-          {catalogueOptions.map(item => <MenuItem key={item.id} value={item.id}>{item.display_name} · {item.uom || 'unit'}</MenuItem>)}
-        </TextField>
-        {selectedSnapshot && catalogHasSnapshot
-          ? <Alert severity="info" sx={{ py: 0 }}>Locked catalogue rate: {dailyMoney(selectedSnapshot.captured_rate, selectedSnapshot.currency)} / {selectedSnapshot.uom || 'unit'} · revision {selectedSnapshot.revision_number || 'baseline'}.</Alert>
-          : <Alert severity="warning" sx={{ py: 0 }}>No rate was present in the well snapshot. Enter a daily override with a reason.</Alert>}
-      </>}
+            <TextField
+              select
+              required
+              label="Well sub activity"
+              value={commonSubActivityId ?? ''}
+              onChange={e => handleSubActivityChange(e.target.value || null)}
+              helperText="Mandatory. Links this daily cost to the well's planned or operational step."
+            >
+              {!eligibleSubActivities.length && <MenuItem value="">No sub activity configured</MenuItem>}
+              {eligibleSubActivities.map(item => (
+                <MenuItem key={item.id} value={item.id}>
+                  {item.sub_activity_code} · {item.sub_activity_name}
+                </MenuItem>
+              ))}
+            </TextField>
 
-      <Divider/>
-      <Typography fontSize={12} fontWeight={800} letterSpacing={.5} color="text.secondary">ACTIVITY, SCOPE &amp; RESPONSIBILITY</Typography>
-      {eligibleSubActivities.length === 0 && <Alert severity="warning" sx={{ py: 0 }}
-        action={<Button component={RouterLink} to="/rig-well/sub-activities" size="small" color="inherit" onClick={onClose}>Open well sub activities</Button>}>
-        No sub activity is configured for this well and the selected Activity. Configuring the well sub activity in Rig &amp; Well Management is mandatory before entering daily costs.
-      </Alert>}
-      <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
-        <TextField select label="Hole section" value={form.hole_section_id ?? ''} disabled={Boolean(selectedRate?.hole_section_id)} onChange={event => {
-          const sectionId = event.target.value || null
-          const section = sections.find(item => item.hole_section_id === sectionId)
-          const phaseId = section?.phases.some(phase => phase.phase_id === form.phase_id) ? form.phase_id : section?.phases[0]?.phase_id ?? null
-          update({ hole_section_id: sectionId, phase_id: phaseId })
-        }}>
-          <MenuItem value="">No hole section</MenuItem>
-          {sections.map(section => <MenuItem key={section.hole_section_id} value={section.hole_section_id}>{sectionLabel(section)}</MenuItem>)}
-        </TextField>
-        <TextField select label="Phase" value={form.phase_id ?? ''} disabled={!selectedSection || Boolean(selectedRate?.phase_id)} onChange={event => update({ phase_id: event.target.value || null })}>
-          <MenuItem value="">No phase</MenuItem>
-          {selectedSection?.phases.map(phase => <MenuItem key={phase.phase_id} value={phase.phase_id}>{phase.phase_code} · {phase.phase_name}</MenuItem>)}
-        </TextField>
-        <TextField select required label="Well sub activity" value={form.sub_activity_id ?? ''} onChange={event => {
-          const sub = eligibleSubActivities.find(item => item.id === event.target.value)
-          update({ sub_activity_id: event.target.value || null, party_name: !form.party_name && sub ? sub.responsible_party : form.party_name })
-        }} helperText="Mandatory. The same service can repeat on a date only under a different sub activity.">
-          {!eligibleSubActivities.length && <MenuItem value="">No sub activity configured</MenuItem>}
-          {eligibleSubActivities.map(item => <MenuItem key={item.id} value={item.id}>{item.sub_activity_code} · {item.sub_activity_name}</MenuItem>)}
-        </TextField>
-        <TextField select label="Responsible vendor" value={form.vendor_id ?? ''} onChange={event => {
-          const vendor = reference.vendors.find(item => item.id === event.target.value)
-          update({ vendor_id: event.target.value || null, party_name: vendor?.vendor_name ?? form.party_name })
-        }}>
-          <MenuItem value="">No vendor selected</MenuItem>
-          {reference.vendors.map(item => <MenuItem key={item.id} value={item.id}>{item.display_name}</MenuItem>)}
-        </TextField>
-        <TextField label="Party / responsible team" value={form.party_name} onChange={event => update({ party_name: event.target.value })} inputProps={{ maxLength: 200 }} helperText={derivedClassification === 'Planned' ? 'Optional unless no vendor is assigned.' : 'Required for UPA/NPT if no vendor is selected.'}/>
-        <TextField select required label="Currency" value={form.currency} disabled={isService(form) ? Boolean(form.baseline_service_rate_id) : catalogHasSnapshot} onChange={event => update({ currency: event.target.value })}>
-          {Object.keys(baseline.exchange_rates).sort().map(currency => <MenuItem key={currency} value={currency}>{currency}{currency === baseline.standard_currency ? ' · AFE standard' : ''}</MenuItem>)}
-        </TextField>
-      {form.currency && !baseline.exchange_rates[form.currency] && <Alert severity="error">{form.currency} has no exchange rate in this locked AFE. The daily cost cannot be converted for comparison.</Alert>}
+            {eligibleSubActivities.length === 0 && (
+              <Box sx={{ gridColumn: '1 / -1' }}>
+                <Alert
+                  severity="warning"
+                  sx={{ py: 0 }}
+                  action={
+                    <Button component={RouterLink} to="/rig-well/sub-activities" size="small" color="inherit" onClick={onClose}>
+                      Configure sub activities
+                    </Button>
+                  }
+                >
+                  No sub activity configured for this well and Activity. Configuring sub activities in Rig &amp; Well Management is mandatory.
+                </Alert>
+              </Box>
+            )}
+
+            {/* Scope (Section & Phase) */}
+            <TextField
+              select
+              label="Hole section"
+              value={commonHoleSectionId ?? ''}
+              onChange={e => {
+                const sId = e.target.value || null
+                const sec = sections.find(s => s.hole_section_id === sId)
+                setCommonHoleSectionId(sId)
+                setCommonPhaseId(sec?.phases[0]?.phase_id ?? null)
+              }}
+            >
+              <MenuItem value="">No hole section</MenuItem>
+              {sections.map(sec => (
+                <MenuItem key={sec.hole_section_id} value={sec.hole_section_id}>
+                  {sectionLabel(sec)}
+                </MenuItem>
+              ))}
+            </TextField>
+
+            <TextField
+              select
+              label="Phase (optional)"
+              value={commonPhaseId ?? ''}
+              disabled={!selectedCommonSection}
+              onChange={e => setCommonPhaseId(e.target.value || null)}
+            >
+              <MenuItem value="">No phase</MenuItem>
+              {selectedCommonSection?.phases.map(p => (
+                <MenuItem key={p.phase_id} value={p.phase_id}>
+                  {p.phase_code} · {p.phase_name}
+                </MenuItem>
+              ))}
+            </TextField>
+
+            {/* Charged Quantity & Unit (Common) */}
+            {kind === 'service' && (
+              <>
+                <TextField
+                  label="Charged quantity"
+                  type="number"
+                  required
+                  value={commonQuantity}
+                  onChange={e => setCommonQuantity(e.target.value)}
+                  inputProps={{ min: 0.0001, step: 'any' }}
+                  helperText="Applies to all services added below."
+                />
+                <TextField
+                  select
+                  label="Quantity unit"
+                  value={commonQuantityUnit}
+                  onChange={e => setCommonQuantityUnit(e.target.value as DailyQuantityUnit)}
+                  helperText="Common charging unit."
+                >
+                  {['hours', 'days', 'unit', 'service', 'section'].map(u => (
+                    <MenuItem key={u} value={u}>
+                      {u}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              </>
+            )}
+
+            {/* Responsibility (Sub Activity Scoped - Requirement 5) */}
+            {derivedClassification === 'Planned' ? (
+              <Box sx={{ gridColumn: '1 / -1' }}>
+                <TextField
+                  label="Responsible vendor / party"
+                  value="Not Applicable"
+                  disabled
+                  fullWidth
+                  helperText="Planned activities do not require a responsible party/vendor."
+                />
+              </Box>
+            ) : (
+              <>
+                <TextField
+                  label="Responsible party / team"
+                  required
+                  value={commonPartyName}
+                  onChange={e => setCommonPartyName(e.target.value)}
+                  inputProps={{ maxLength: 200 }}
+                  helperText="Captured automatically from sub activity for UPA/NPT."
+                />
+                <TextField
+                  select
+                  label="Responsible vendor (optional)"
+                  value={commonVendorId ?? ''}
+                  onChange={e => {
+                    const v = reference.vendors.find(item => item.id === e.target.value)
+                    setCommonVendorId(e.target.value || null)
+                    if (v?.vendor_name) setCommonPartyName(v.vendor_name)
+                  }}
+                >
+                  <MenuItem value="">No vendor selected</MenuItem>
+                  {reference.vendors.map(v => (
+                    <MenuItem key={v.id} value={v.id}>
+                      {v.display_name}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              </>
+            )}
+          </Box>
+        </Paper>
+
+        {/* SERVICES LIST (Criteria based - Requirement 3 & 4) */}
+        {kind === 'service' && (
+          <Box>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+              <Typography fontSize={12} fontWeight={800} color="text.secondary" textTransform="uppercase" letterSpacing={0.5}>
+                Services under this criteria ({serviceRows.length})
+              </Typography>
+              {!initialLine && (
+                <Button size="small" startIcon={<AddRounded sx={{ fontSize: 16 }} />} onClick={addServiceRow} variant="outlined">
+                  Add another service
+                </Button>
+              )}
+            </Box>
+
+            <Box display="grid" gap={1.8}>
+              {serviceRows.map((row, index) => {
+                const sObj = reference.services.find(s => s.id === row.service_id)
+                const rate = baseline.service_rates.find(r => r.id === row.baseline_service_rate_id)
+                const rateMatches = baseline.service_rates.filter(r => r.service_id === row.service_id)
+                return (
+                  <Paper key={row.id} variant="outlined" sx={{ p: 1.8, borderRadius: 1.5 }}>
+                    <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.2}>
+                      <Typography fontSize={12} fontWeight={800} color="primary">
+                        Service line #{index + 1}
+                      </Typography>
+                      {!initialLine && serviceRows.length > 1 && (
+                        <Button
+                          size="small"
+                          color="error"
+                          startIcon={<DeleteOutlineRounded sx={{ fontSize: 16 }} />}
+                          onClick={() => removeServiceRow(row.id)}
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </Box>
+
+                    <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+                      {/* Service Picker */}
+                      <TextField
+                        select
+                        size="small"
+                        label="Service"
+                        required
+                        value={row.service_id}
+                        onChange={e => updateServiceRow(row.id, { service_id: e.target.value })}
+                        error={submitted && !row.service_id}
+                        helperText="From Master Data → Services."
+                        sx={{ gridColumn: { sm: '1 / -1' } }}
+                      >
+                        <MenuItem value="">Select a service</MenuItem>
+                        {reference.services.map(s => (
+                          <MenuItem key={s.id} value={s.id}>
+                            {s.service_code} · {s.service_name}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+
+                      {/* Baseline Rate Info / Selector if multiple */}
+                      {row.service_id && (
+                        <Box sx={{ gridColumn: '1 / -1' }}>
+                          {rateMatches.length > 1 ? (
+                            <TextField
+                              select
+                              size="small"
+                              label="Matched AFE rate"
+                              value={row.baseline_service_rate_id ?? ''}
+                              onChange={e => {
+                                const pickedRate = baseline.service_rates.find(r => r.id === e.target.value)
+                                updateServiceRow(row.id, {
+                                  baseline_service_rate_id: e.target.value || null,
+                                  charging_basis: pickedRate?.charging_basis || row.charging_basis,
+                                  charge_category: (pickedRate?.charge_category || row.charge_category) as ChargeCategory,
+                                  currency: pickedRate?.currency || row.currency,
+                                })
+                              }}
+                              fullWidth
+                            >
+                              {rateMatches.map(r => (
+                                <MenuItem key={r.id} value={r.id}>
+                                  {dailyMoney(r.unit_rate, r.currency)} / {r.charging_basis} ({r.charge_category || 'Operation'})
+                                  {r.section_label ? ` · ${r.section_label}` : ''}
+                                </MenuItem>
+                              ))}
+                            </TextField>
+                          ) : rate ? (
+                            <Alert severity="info" sx={{ py: 0.2 }}>
+                              Locked AFE rate: {dailyMoney(rate.unit_rate, rate.currency)} / {rate.charging_basis} ({rate.charge_category || 'Operation'})
+                            </Alert>
+                          ) : derivedClassification === 'Planned' ? (
+                            <Alert severity="error" sx={{ py: 0.2 }}>
+                              No locked AFE rate found for {sObj?.service_code || 'this service'} under this scope.
+                            </Alert>
+                          ) : (
+                            <Alert severity="warning" sx={{ py: 0.2 }}>
+                              No locked AFE rate for this unplanned service. Enter a daily rate override below.
+                            </Alert>
+                          )}
+                        </Box>
+                      )}
+
+                      {/* Service Scoped Override (Requirement 4) */}
+                      <TextField
+                        size="small"
+                        label="Daily rate override (optional)"
+                        type="number"
+                        value={row.override_rate ?? ''}
+                        onChange={e => updateServiceRow(row.id, { override_rate: e.target.value === '' ? null : e.target.value })}
+                        inputProps={{ min: 0, step: 'any' }}
+                        helperText="Service-scoped override; locked baseline rate remains unchanged."
+                      />
+
+                      <TextField
+                        size="small"
+                        label="Override reason"
+                        value={row.override_reason}
+                        onChange={e => updateServiceRow(row.id, { override_reason: e.target.value })}
+                        disabled={row.override_rate === null}
+                        inputProps={{ maxLength: 500 }}
+                        helperText={row.override_rate !== null ? 'Required when override is entered.' : 'Leave empty if no override.'}
+                      />
+
+                      {/* Customize scope/quantity toggle for this service (Requirement 3) */}
+                      <Box sx={{ gridColumn: '1 / -1' }}>
+                        <Button
+                          size="small"
+                          startIcon={<TuneRounded sx={{ fontSize: 16 }} />}
+                          onClick={() => updateServiceRow(row.id, { customScope: !row.customScope, customQuantity: !row.customQuantity })}
+                          sx={{ textTransform: 'none' }}
+                        >
+                          {row.customScope || row.customQuantity ? 'Hide custom scope/quantity' : 'Customize scope or quantity for this service'}
+                        </Button>
+
+                        <Collapse in={row.customScope || row.customQuantity}>
+                          <Box mt={1} p={1.5} bgcolor="action.hover" borderRadius={1} display="grid" gap={1.2} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+                            <Typography fontSize={11} fontWeight={700} color="text.secondary" sx={{ gridColumn: '1 / -1' }}>
+                              Individual Scope &amp; Quantity Override
+                            </Typography>
+                            <TextField
+                              select
+                              size="small"
+                              label="Custom hole section"
+                              value={row.custom_hole_section_id ?? ''}
+                              onChange={e => updateServiceRow(row.id, { custom_hole_section_id: e.target.value || null, custom_phase_id: null })}
+                            >
+                              <MenuItem value="">No hole section</MenuItem>
+                              {sections.map(sec => (
+                                <MenuItem key={sec.hole_section_id} value={sec.hole_section_id}>
+                                  {sectionLabel(sec)}
+                                </MenuItem>
+                              ))}
+                            </TextField>
+
+                            <TextField
+                              select
+                              size="small"
+                              label="Custom phase"
+                              value={row.custom_phase_id ?? ''}
+                              onChange={e => updateServiceRow(row.id, { custom_phase_id: e.target.value || null })}
+                            >
+                              <MenuItem value="">No phase</MenuItem>
+                              {sections
+                                .find(s => s.hole_section_id === row.custom_hole_section_id)
+                                ?.phases.map(p => (
+                                  <MenuItem key={p.phase_id} value={p.phase_id}>
+                                    {p.phase_code} · {p.phase_name}
+                                  </MenuItem>
+                                ))}
+                            </TextField>
+
+                            <TextField
+                              size="small"
+                              label="Custom quantity"
+                              type="number"
+                              value={row.custom_quantity}
+                              onChange={e => updateServiceRow(row.id, { custom_quantity: e.target.value })}
+                            />
+
+                            <TextField
+                              select
+                              size="small"
+                              label="Custom quantity unit"
+                              value={row.custom_quantity_unit}
+                              onChange={e => updateServiceRow(row.id, { custom_quantity_unit: e.target.value as DailyQuantityUnit })}
+                            >
+                              {['hours', 'days', 'unit', 'service', 'section'].map(u => (
+                                <MenuItem key={u} value={u}>
+                                  {u}
+                                </MenuItem>
+                              ))}
+                            </TextField>
+                          </Box>
+                        </Collapse>
+                      </Box>
+
+                      <TextField
+                        size="small"
+                        label="Remarks (optional)"
+                        value={row.remarks}
+                        onChange={e => updateServiceRow(row.id, { remarks: e.target.value })}
+                        inputProps={{ maxLength: 500 }}
+                        sx={{ gridColumn: '1 / -1' }}
+                      />
+                    </Box>
+                  </Paper>
+                )
+              })}
+            </Box>
+          </Box>
+        )}
+
+        {/* NON-SERVICE LINE EDITOR */}
+        {kind !== 'service' && nonServiceForm && (
+          <Paper variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+            {kind === 'other' && isOther(nonServiceForm) && (
+              <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+                <TextField
+                  select
+                  required
+                  size="small"
+                  label="Type of other expense"
+                  value={nonServiceForm.expense_type}
+                  onChange={e => setNonServiceForm(prev => (prev && isOther(prev) ? { ...prev, expense_type: e.target.value as OtherExpenseType } : prev))}
+                >
+                  {(reference.other_expense_types?.length ? reference.other_expense_types : OTHER_EXPENSE_TYPES).map(opt => (
+                    <MenuItem key={opt.code} value={opt.code}>
+                      {opt.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                <TextField
+                  size="small"
+                  label="Description (optional)"
+                  value={nonServiceForm.expense_description}
+                  onChange={e => setNonServiceForm(prev => (prev && isOther(prev) ? { ...prev, expense_description: e.target.value } : prev))}
+                />
+
+                <TextField
+                  size="small"
+                  label="Quantity"
+                  type="number"
+                  required
+                  value={nonServiceForm.quantity}
+                  onChange={e => setNonServiceForm(prev => (prev ? { ...prev, quantity: e.target.value } : prev))}
+                />
+
+                <TextField
+                  size="small"
+                  label={`Unit rate (${nonServiceForm.currency})`}
+                  type="number"
+                  required
+                  value={nonServiceForm.unit_rate}
+                  onChange={e => setNonServiceForm(prev => (prev && isOther(prev) ? { ...prev, unit_rate: e.target.value } : prev))}
+                />
+
+                <TextField
+                  size="small"
+                  label="Remarks (mandatory for other expense)"
+                  required
+                  multiline
+                  minRows={2}
+                  value={nonServiceForm.remarks}
+                  onChange={e => setNonServiceForm(prev => (prev ? { ...prev, remarks: e.target.value } : prev))}
+                  sx={{ gridColumn: '1 / -1' }}
+                />
+              </Box>
+            )}
+
+            {kind === 'consumable' && isConsumable(nonServiceForm) && (
+              <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+                <TextField
+                  select
+                  size="small"
+                  label="Consumable item"
+                  required
+                  value={nonServiceForm.item_id}
+                  onChange={e => {
+                    const item = reference.catalogue_items.find(opt => opt.id === e.target.value)
+                    const snap = itemSnapshot(item, baseline)
+                    setNonServiceForm(prev => (prev && isConsumable(prev) ? {
+                      ...prev,
+                      item_id: e.target.value,
+                      currency: snap?.currency || item?.currency || baseline.standard_currency,
+                    } : prev))
+                  }}
+                  sx={{ gridColumn: '1 / -1' }}
+                >
+                  {optionsForKind(nonServiceForm.item_kind, reference, baseline, nonServiceForm.item_id).map(opt => (
+                    <MenuItem key={opt.id} value={opt.id}>
+                      {opt.display_name} · {opt.uom || 'unit'}
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                <TextField
+                  size="small"
+                  label="Quantity"
+                  type="number"
+                  required
+                  value={nonServiceForm.quantity}
+                  onChange={e => setNonServiceForm(prev => (prev ? { ...prev, quantity: e.target.value } : prev))}
+                />
+
+                <TextField
+                  size="small"
+                  label="Daily rate override (optional)"
+                  type="number"
+                  value={nonServiceForm.override_rate ?? ''}
+                  onChange={e => setNonServiceForm(prev => (prev ? { ...prev, override_rate: e.target.value === '' ? null : e.target.value } : prev))}
+                />
+
+                <TextField
+                  size="small"
+                  label="Remarks"
+                  value={nonServiceForm.remarks}
+                  onChange={e => setNonServiceForm(prev => (prev ? { ...prev, remarks: e.target.value } : prev))}
+                  sx={{ gridColumn: '1 / -1' }}
+                />
+              </Box>
+            )}
+
+            {kind === 'tangible' && (
+              <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+                <TextField
+                  select
+                  size="small"
+                  label="Tangible item"
+                  required
+                  value={'tangible_id' in nonServiceForm ? nonServiceForm.tangible_id : ''}
+                  onChange={e => {
+                    const item = reference.catalogue_items.find(opt => opt.id === e.target.value)
+                    const snap = itemSnapshot(item, baseline)
+                    setNonServiceForm(prev => (prev && 'tangible_id' in prev ? {
+                      ...prev,
+                      tangible_id: e.target.value,
+                      currency: snap?.currency || item?.currency || baseline.standard_currency,
+                    } : prev))
+                  }}
+                  sx={{ gridColumn: '1 / -1' }}
+                >
+                  {optionsForKind('tangible', reference, baseline, 'tangible_id' in nonServiceForm ? nonServiceForm.tangible_id : null).map(opt => (
+                    <MenuItem key={opt.id} value={opt.id}>
+                      {opt.display_name} · {opt.uom || 'unit'}
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                <TextField
+                  size="small"
+                  label="Quantity"
+                  type="number"
+                  required
+                  value={nonServiceForm.quantity}
+                  onChange={e => setNonServiceForm(prev => (prev ? { ...prev, quantity: e.target.value } : prev))}
+                />
+
+                <TextField
+                  size="small"
+                  label="Daily rate override (optional)"
+                  type="number"
+                  value={nonServiceForm.override_rate ?? ''}
+                  onChange={e => setNonServiceForm(prev => (prev ? { ...prev, override_rate: e.target.value === '' ? null : e.target.value } : prev))}
+                />
+
+                <TextField
+                  size="small"
+                  label="Remarks"
+                  value={nonServiceForm.remarks}
+                  onChange={e => setNonServiceForm(prev => (prev ? { ...prev, remarks: e.target.value } : prev))}
+                  sx={{ gridColumn: '1 / -1' }}
+                />
+              </Box>
+            )}
+          </Paper>
+        )}
+
+        {submitted && error && <Alert severity="error">{error}</Alert>}
+
+        <Divider />
+        <Typography fontSize={11.5} color="text.secondary">
+          All services and items entered above will be saved as separate, individual line items in this daily sheet.
+        </Typography>
       </Box>
-
-      {isService(form) && <>
-        <Divider/>
-        <Typography fontSize={12} fontWeight={800} letterSpacing={.5} color="text.secondary">CHARGED QUANTITY &amp; RATE</Typography>
-        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1.2fr .8fr' } }}>
-          <TextField label={DAILY_ONE_TIME_CATEGORIES.includes(form.charge_category) ? 'Recorded quantity' : 'Quantity'} type="number" required value={form.quantity} onChange={event => update({ quantity: event.target.value })} inputProps={{ min: 0.0001, step: 'any' }} helperText={DAILY_ONE_TIME_CATEGORIES.includes(form.charge_category) ? 'One-time Day Rate: the locked unit rate is charged once; quantity is retained as an operational record.' : undefined}/>
-          <TextField select label="Quantity unit" value={form.quantity_unit} disabled={form.charging_basis !== 'Day Rate' || DAILY_ONE_TIME_CATEGORIES.includes(form.charge_category)} onChange={event => update({ quantity_unit: event.target.value as DailyQuantityUnit })}>
-            {(form.charging_basis === 'Day Rate'
-              ? DAILY_ONE_TIME_CATEGORIES.includes(form.charge_category) ? ['unit'] : ['days', 'hours']
-              : form.charging_basis === 'Per Service Rate' ? ['service'] : ['section']
-            ).map(unit => <MenuItem key={unit} value={unit}>{unit}</MenuItem>)}
-          </TextField>
-          {form.baseline_service_rate_id && selectedRate && <TextField label="Captured AFE rate" value={dailyMoney(selectedRate.unit_rate, selectedRate.currency)} InputProps={{ readOnly: true }}/>}
-        </Box>
-      </>}
-      {!isService(form) && !isOther(form) && <>
-        <Divider/>
-        <Typography fontSize={12} fontWeight={800} letterSpacing={.5} color="text.secondary">ACTUAL USAGE &amp; RATE</Typography>
-        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1.2fr .8fr' } }}>
-          <TextField label={`Actual quantity${selectedSnapshot?.uom ? ` (${selectedSnapshot.uom})` : ''}`} type="number" required value={form.quantity} onChange={event => update({ quantity: event.target.value })} inputProps={{ min: 0.0001, step: 'any' }}/>
-          <TextField label="Captured rate" value={catalogHasSnapshot && selectedSnapshot ? `${dailyMoney(selectedSnapshot.captured_rate, selectedSnapshot.currency)} / ${selectedSnapshot.uom || 'unit'}` : 'Manual rate required'} InputProps={{ readOnly: true }}/>
-        </Box>
-      </>}
-
-      {isOther(form) && <>
-        <Divider/>
-        <Typography fontSize={12} fontWeight={800} letterSpacing={.5} color="text.secondary">CHARGED QUANTITY &amp; UNIT RATE</Typography>
-        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr 1.2fr' } }}>
-          <TextField label="Quantity" type="number" required value={form.quantity} onChange={event => update({ quantity: event.target.value })} inputProps={{ min: 0.0001, step: 'any' }} helperText="Items lost, days claimed, or 1 for a single charge."/>
-          <TextField select label="Quantity unit" value={form.quantity_unit} onChange={event => update({ quantity_unit: event.target.value as OtherExpenseUnit })}>
-            {(['unit', 'days', 'hours'] as OtherExpenseUnit[]).map(unit => <MenuItem key={unit} value={unit}>{unit}</MenuItem>)}
-          </TextField>
-          <TextField label={`Unit rate (${form.currency || baseline.standard_currency})`} type="number" required value={form.unit_rate} onChange={event => update({ unit_rate: event.target.value })} inputProps={{ min: 0.0001, step: 'any' }}
-            helperText={`Amount charged: ${dailyMoney((Number(form.unit_rate || 0) * Number(form.quantity || 0)).toFixed(2), form.currency || baseline.standard_currency)}`}/>
-        </Box>
-      </>}
-
-      {!isOther(form) && <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
-        <TextField label="Daily unit-rate override (optional)" type="number" value={form.override_rate ?? ''} onChange={event => update({ override_rate: event.target.value === '' ? null : event.target.value })} inputProps={{ min: 0, step: 'any' }} helperText="Overrides only this daily line; the locked AFE/catalogue rate remains unchanged."/>
-        <TextField label="Override reason" value={form.override_reason} onChange={event => update({ override_reason: event.target.value })} disabled={form.override_rate === null} inputProps={{ maxLength: 500 }} helperText={form.override_rate === null ? 'Required when an override rate is entered.' : `${form.override_reason.trim().length}/500 characters`}/>
-      </Box>}
-      <TextField label={isOther(form) ? 'Remarks (mandatory)' : 'Line remarks'} required={isOther(form)}
-        value={form.remarks} onChange={event => update({ remarks: event.target.value })} multiline minRows={2} inputProps={{ maxLength: 500 }}
-        helperText={isOther(form)
-          ? `${form.remarks.trim().length}/500 characters. State what was lost in hole, the incident, and who bears the cost.`
-          : undefined}/>
-      {error && <Alert severity="error">{error}</Alert>}
-    </Box>
-  </FormDialog>
+    </FormDialog>
+  )
 }

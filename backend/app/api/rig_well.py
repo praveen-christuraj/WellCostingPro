@@ -38,6 +38,7 @@ from app.models import (
     WellSection,
     WellSubActivity,
 )
+from app.services.daily_cost import classify_activity
 from app.schemas.rig_well import (
     DeletedRigWellRecord,
     DeletedSelection,
@@ -1661,6 +1662,18 @@ def create_sub_activity(
 ) -> WellSubActivityOut:
     well = _well_for_sub_activity(db, data.well_id, user.organization_id)
     activity = _master_record_or_422(db, Activity, data.activity_id, user.organization_id, "Activity")
+    classification = classify_activity(activity)
+    responsible_party = (data.responsible_party or "").strip()
+    if classification == "Planned":
+        if not responsible_party or responsible_party in ("-", "N/A", "n/a", "None"):
+            responsible_party = "Not Applicable"
+    else:
+        if not responsible_party or responsible_party in ("Not Applicable", "N/A", "n/a", "None", "-"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Responsible party / company is required for {classification} sub activities",
+            )
+    data.responsible_party = responsible_party
     existing = db.scalar(
         select(WellSubActivity).where(
             WellSubActivity.organization_id == user.organization_id,
@@ -1733,6 +1746,21 @@ def update_sub_activity(
             continue
         if field == "activity_id":
             _master_record_or_422(db, Activity, value, user.organization_id, "Activity")
+        elif field == "responsible_party":
+            target_act_id = payload.get("activity_id") or record.activity_id
+            target_act = _master_record_or_422(db, Activity, target_act_id, user.organization_id, "Activity")
+            classification = classify_activity(target_act)
+            party_str = str(value or "").strip()
+            if classification == "Planned":
+                if not party_str or party_str in ("-", "N/A", "n/a", "None"):
+                    party_str = "Not Applicable"
+            else:
+                if not party_str or party_str in ("Not Applicable", "N/A", "n/a", "None", "-"):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Responsible party / company is required for {classification} sub activities",
+                    )
+            value = party_str
         elif field == "sub_activity_code":
             duplicate = db.scalar(
                 select(WellSubActivity).where(
@@ -1957,6 +1985,14 @@ def import_sub_activities(
         if activity is None:
             errors.append(f"Row {row_number} ({payload.sub_activity_code}): Activity '{_string(activity_ref) or '—'}' is missing, ambiguous, or inactive in Master Data")
             continue
+        classification = classify_activity(activity)
+        if classification == "Planned":
+            if not payload.responsible_party or payload.responsible_party in ("-", "N/A", "n/a", "None"):
+                payload.responsible_party = "Not Applicable"
+        else:
+            if not payload.responsible_party or payload.responsible_party in ("Not Applicable", "N/A", "n/a", "None", "-"):
+                errors.append(f"Row {row_number} ({payload.sub_activity_code}): Responsible party is required for {classification} sub activity")
+                continue
         existing = db.scalar(
             select(WellSubActivity).where(
                 WellSubActivity.organization_id == user.organization_id,

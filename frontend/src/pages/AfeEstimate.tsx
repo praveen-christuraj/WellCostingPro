@@ -351,18 +351,34 @@ export default function AfeEstimate() {
       ? current.services.map(item => (item.client_key === line.client_key ? line : item))
       : [...current.services, line],
   }))
-  const upsertConsumable = (line: ConsumableLineInput) => setInputs(current => ({
-    ...current,
-    consumables: current.consumables.some(item => item.client_key === line.client_key)
-      ? current.consumables.map(item => (item.client_key === line.client_key ? line : item))
-      : [...current.consumables, line],
-  }))
-  const upsertTangible = (line: TangibleLineInput) => setInputs(current => ({
-    ...current,
-    tangibles: current.tangibles.some(item => item.client_key === line.client_key)
-      ? current.tangibles.map(item => (item.client_key === line.client_key ? line : item))
-      : [...current.tangibles, line],
-  }))
+  const upsertConsumables = (lines: ConsumableLineInput | ConsumableLineInput[]) => {
+    const list = Array.isArray(lines) ? lines : [lines]
+    setInputs(current => {
+      let updated = [...current.consumables]
+      for (const line of list) {
+        if (updated.some(item => item.client_key === line.client_key)) {
+          updated = updated.map(item => (item.client_key === line.client_key ? line : item))
+        } else {
+          updated.push(line)
+        }
+      }
+      return { ...current, consumables: updated }
+    })
+  }
+  const upsertTangibles = (lines: TangibleLineInput | TangibleLineInput[]) => {
+    const list = Array.isArray(lines) ? lines : [lines]
+    setInputs(current => {
+      let updated = [...current.tangibles]
+      for (const line of list) {
+        if (updated.some(item => item.client_key === line.client_key)) {
+          updated = updated.map(item => (item.client_key === line.client_key ? line : item))
+        } else {
+          updated.push(line)
+        }
+      }
+      return { ...current, tangibles: updated }
+    })
+  }
 
   const setStandardCurrency = (code: string) => setInputs(current => ({ ...current, standard_currency: code }))
   const setExchangeRate = (code: string, value: string) => {
@@ -957,14 +973,14 @@ export default function AfeEstimate() {
       scope={saved.well}
       reference={reference}
       onClose={() => setEditor(null)}
-      onSave={line => { upsertConsumable(line); setEditor(null) }}
+      onSave={lines => { upsertConsumables(lines); setEditor(null) }}
     />}
     {editor?.kind === 'tangible' && <TangibleLineDialog
       open
       initial={editor.key ? inputs.tangibles.find(line => line.client_key === editor.key) ?? null : null}
       reference={reference}
       onClose={() => setEditor(null)}
-      onSave={line => { upsertTangible(line); setEditor(null) }}
+      onSave={lines => { upsertTangibles(lines); setEditor(null) }}
     />}
     <BulkEstimateDialog open={bulkOpen !== null} initialMode={bulkOpen ?? 'consumable'} scope={saved.well} reference={reference} onClose={() => setBulkOpen(null)} onApply={applyBulk}/>
     <CostingSetPickerDialog

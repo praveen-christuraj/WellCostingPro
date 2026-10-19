@@ -128,9 +128,10 @@ export function DailyCostBulkScopeDialog({
         sub_activity_id: selectedSub.id,
         hole_section_id: nextSection,
         phase_id: nextSection ? nextPhase : null,
-        party_name: !line.party_name.trim() && selectedSub.responsible_party
-          ? selectedSub.responsible_party
-          : line.party_name,
+        vendor_id: classification === 'Planned' ? null : line.vendor_id,
+        party_name: classification === 'Planned'
+          ? 'Not Applicable'
+          : (selectedSub.responsible_party || line.party_name),
       }
       let selectedRate = baseline.service_rates.find(rate => rate.id === targetLine.baseline_service_rate_id)
 
