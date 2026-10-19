@@ -146,6 +146,7 @@ digraph WellCostingPro {
   "frontend/src/pages/Overview.tsx";
   "frontend/src/pages/Permissions.tsx";
   "frontend/src/pages/PoSoOrders.tsx";
+  "frontend/src/pages/Reports.tsx";
   "frontend/src/pages/RigWellDeleted.tsx";
   "frontend/src/pages/RigWellOverview.tsx";
   "frontend/src/pages/Rigs.tsx";
@@ -154,6 +155,7 @@ digraph WellCostingPro {
   "frontend/src/pages/Tangibles.tsx";
   "frontend/src/pages/Users.tsx";
   "frontend/src/pages/Vendors.tsx";
+  "frontend/src/pages/WellCostComparisonReport.tsx";
   "frontend/src/pages/WellSubActivities.tsx";
   "frontend/src/pages/Wells.tsx";
   "frontend/src/theme.ts";
@@ -215,6 +217,7 @@ digraph WellCostingPro {
   "backend/app/api/rig_well.py" -> "backend/app/models/__init__.py";
   "backend/app/api/rig_well.py" -> "backend/app/schemas/rig_well.py";
   "backend/app/api/rig_well.py" -> "backend/app/services/__init__.py";
+  "backend/app/api/rig_well.py" -> "backend/app/services/daily_cost.py";
   "backend/app/api/service_master.py" -> "backend/app/api/deps.py";
   "backend/app/api/service_master.py" -> "backend/app/models/__init__.py";
   "backend/app/api/service_master.py" -> "backend/app/models/service_master.py";
@@ -346,6 +349,7 @@ digraph WellCostingPro {
   "frontend/src/App.tsx" -> "frontend/src/pages/Overview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Permissions.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/PoSoOrders.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/pages/Reports.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/RigWellDeleted.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/RigWellOverview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Rigs.tsx";
@@ -354,6 +358,7 @@ digraph WellCostingPro {
   "frontend/src/App.tsx" -> "frontend/src/pages/Tangibles.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Users.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Vendors.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/pages/WellCostComparisonReport.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/WellSubActivities.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Wells.tsx";
   "frontend/src/components/Brand.tsx" -> "frontend/src/context/ThemeContext.tsx";
@@ -631,6 +636,12 @@ digraph WellCostingPro {
   "frontend/src/pages/PoSoOrders.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/PoSoOrders.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/PoSoOrders.tsx" -> "frontend/src/lib/vendorMaster.ts";
+  "frontend/src/pages/Reports.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/pages/Reports.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/Reports.tsx" -> "frontend/src/lib/afe.ts";
+  "frontend/src/pages/Reports.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/Reports.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/pages/Reports.tsx" -> "frontend/src/lib/rigWell.ts";
   "frontend/src/pages/RigWellDeleted.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/RigWellDeleted.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/RigWellDeleted.tsx" -> "frontend/src/context/AuthContext.tsx";
@@ -684,6 +695,13 @@ digraph WellCostingPro {
   "frontend/src/pages/Vendors.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/Vendors.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/Vendors.tsx" -> "frontend/src/lib/vendorMaster.ts";
+  "frontend/src/pages/WellCostComparisonReport.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/pages/WellCostComparisonReport.tsx" -> "frontend/src/components/DataTable.tsx";
+  "frontend/src/pages/WellCostComparisonReport.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/WellCostComparisonReport.tsx" -> "frontend/src/lib/afe.ts";
+  "frontend/src/pages/WellCostComparisonReport.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/WellCostComparisonReport.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/pages/WellCostComparisonReport.tsx" -> "frontend/src/lib/rigWell.ts";
   "frontend/src/pages/WellSubActivities.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/WellSubActivities.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/WellSubActivities.tsx" -> "frontend/src/components/ImportDialog.tsx";
