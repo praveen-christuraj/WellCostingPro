@@ -86,20 +86,20 @@ app itself hidden while printing.
 2. Metadata: rig, well, AFE number, AFE name, objective of the well, location / block, well plan
    status, total depth, planned days, AFE type and plan scope, AFE status, and who saved the
    estimate when.
-3. Sections and depths: one row per hole section with from / to depth, section days and the phase
-   breakdown with phase days, plus a well-plan footer row (sections, total depth, total days, phases).
-4. Services and cost: one row per service line — code, name, provider / vendor, charging basis with
-   its rate detail (unit rate × charged quantity, fixed amount, or section-rate count), scope, phase,
-   currency, amount and **remarks** — with a services subtotal in the standard currency.
-5. Consumables and tangibles: lump sums for **Mud Chemicals, Cement Additives, Fuel and Drill Bits**,
-   the consumables total, the tangibles total and the **total AFE amount**.
-6. Authorisation: **Submitted by / Reviewed by / Approved by**, each with name, email, date and an
-   empty signature row. Names come from the latest recorded move per workflow action in the audit
-   trail; a reopen clears the stages recorded before it.
+3. Services and cost: one row per service line — name, provider / vendor, charging basis with
+   its entered-currency rate detail (unit rate × charged quantity, fixed amount, or **each** section
+   and phase with its entered section rate), amount in the entered currency and **remarks**.
+   Scoped day-rate and per-service lines include their section / phase in the Basis cell;
+   there are no separate Scope or Currency columns. The services subtotal uses the standard currency.
+4. Consumables and tangibles: one lump sum for each group, then the **total AFE amount**.
 
-**Page 2 — line detail.** Every consumable line (lump sums show their section and phase; drill bits
-show the bit, make, type, size and description) and every tangible line (manufacturer, UOM, quantity,
-rate, amount, remarks), each table closing with its standard-currency total and the total AFE amount.
+**Page 2 — supporting detail.** The section/depth/phase plan, every consumable line (lump sums
+show their section and phase; drill bits show the bit, make, type, size and description), and every
+tangible line (manufacturer, UOM, quantity, rate, amount, remarks). Each table closes with its
+standard-currency total. Warnings and the authorisation table (**Submitted by / Reviewed by /
+Approved by**, each with name, email, date and an empty signature row) follow the line details.
+Names come from the latest recorded move per workflow action in the audit trail; a reopen clears
+stages recorded before it.
 
 Amounts stay in each line's currency; subtotals and totals are converted to the estimate's standard
 currency at the rates saved with it, and an incomplete conversion prints "Pending conversion" rather

@@ -68,11 +68,43 @@ assert.ok(!pages[0].textContent.includes('Sections and depths') && pages[1].text
 assert.ok(pages[1].textContent.includes('TANG-KEEP'), 'tangible code remains visible')
 assert.ok(!pages[0].textContent.includes('Authorisation') && pages[1].textContent.includes('Authorisation'), 'sign-off is kept with supporting detail')
 
+const sectionEstimate = structuredClone(estimate)
+sectionEstimate.services = [
+  { ...estimate.services[0], charging_basis: 'Per Section Rate', currency: 'EUR', service_amount: '0', amount: '175',
+    section_rates: [
+      { hole_section_id: 'section1', section_label: 'SEC-1 · Surface', phase_id: 'phase1', phase_label: 'DRILL · Drilling', amount: '75' },
+      { hole_section_id: 'section2', section_label: 'SEC-2 · Intermediate', phase_id: null, phase_label: '', amount: '100' },
+    ] },
+  { ...estimate.services[0], id: 'day-rate', charging_basis: 'Day Rate', hole_section_id: 'section1', section_label: 'SEC-1 · Surface',
+    phase_id: 'phase1', phase_label: 'DRILL · Drilling', currency: 'USD', amount: '80',
+    rates: [{ category: 'Operation', unit_rate: '40' }], charges: [{ category: 'Operation', quantity: '2', quantity_unit: 'days' }] },
+  { ...estimate.services[0], id: 'fixed-rate', section_label: 'SEC-1 · Surface', phase_label: 'DRILL · Drilling' },
+]
+await act(async () => root.render(<AfePrintSheet estimate={sectionEstimate}/>))
+const servicesTable = document.querySelector('.ps-afe-summary .ps-table')
+assert.deepEqual([...servicesTable.querySelectorAll('thead th')].map(cell => cell.textContent),
+  ['#', 'Service', 'Basis / entered rates', 'Amount', 'Remarks'], 'the first-page schedule has five columns without Scope or Currency')
+assert.equal(servicesTable.querySelectorAll('colgroup col').length, 5, 'column widths match the five headers')
+const serviceRows = servicesTable.querySelectorAll('tbody tr.ps-line')
+assert.equal(serviceRows[0].cells.length, 5, 'section-rate row has no extra scope or currency cells')
+assert.ok(serviceRows[0].cells[2].textContent.includes('SEC-1 · Surface · DRILL · Drilling: EUR 75.00'), 'first section and phase show their entered rate')
+assert.ok(serviceRows[0].cells[2].textContent.includes('SEC-2 · Intermediate: EUR 100.00'), 'second section and rate show separately')
+assert.equal(serviceRows[0].cells[3].textContent, 'EUR 175.00', 'service amount still identifies its entered currency')
+assert.ok(serviceRows[1].cells[2].textContent.includes('Operation USD 40.00 × 2 days'), 'day rates retain currency and quantity')
+assert.ok(serviceRows[1].cells[2].textContent.includes('SEC-1 · Surface · DRILL · Drilling'), 'scoped day rates retain section and phase in Basis')
+assert.ok(serviceRows[2].cells[2].textContent.includes('Fixed USD 100.00'), 'fixed rates retain their currency')
+assert.equal(servicesTable.querySelector('tr.ps-subtotal').cells[0].colSpan, 3, 'services total spans the remaining label columns')
+
+const longSchedule = structuredClone(sectionEstimate)
+longSchedule.services = Array.from({ length: 8 }, (_, index) => ({ ...sectionEstimate.services[0], id: `section-line-${index}` }))
+await act(async () => root.render(<AfePrintSheet estimate={longSchedule}/>))
+assert.ok(document.querySelector('.ps-afe-summary.ps-afe-dense'), 'multiple section rates trigger compact layout before service count alone would')
+
 const styles = readFileSync('../frontend/src/styles.css', 'utf8')
 assert.ok(styles.includes('.afe-cost-print-sheet th,') && styles.includes('overflow-wrap: anywhere'), 'AFE cells have scoped wrapping rules')
 assert.ok(styles.includes('.afe-cost-print-sheet .ps-afe-dense'), 'large service schedules receive the compact density step')
 
 await act(async () => root.unmount())
 dom.window.close()
-console.log('AFE print checks passed: service codes hidden, tangible codes retained, compact page grouping and scoped wrapping present.')
+console.log('AFE print checks passed: five-column service schedule, entered section rates, currency labels and compact two-page grouping.')
 process.exit(0)
