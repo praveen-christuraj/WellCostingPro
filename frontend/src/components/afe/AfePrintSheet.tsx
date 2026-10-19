@@ -11,18 +11,29 @@ import { amountText, daysText, STATUS_LABEL, type AfeEstimate, type AfeStatusEve
 const quantityText = (value: string): string =>
   Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 })
 
-/** Day Rate lines carry one unit rate per charge category; the quantity charged sits beside it. */
-function basisDetail(line: ServiceLineOut): string {
-  if (line.charging_basis === 'Day Rate') {
-    if (!line.rates.length) return '—'
-    return line.rates.map(rate => {
-      const charge = line.charges.find(item => item.category === rate.category)
-      const quantity = charge ? ` × ${quantityText(charge.quantity)} ${charge.quantity_unit}` : ''
-      return `${rate.category} ${amountText(rate.unit_rate)}${quantity}`
-    }).join(' · ')
+/** Keep the entered rates (and their currency) beside the charging basis on page one. */
+function basisDetail(line: ServiceLineOut) {
+  if (line.charging_basis === 'Per Section Rate') {
+    return line.section_rates.length
+      ? line.section_rates.map((rate, index) => (
+          <div className="ps-sub" key={`${rate.hole_section_id}-${rate.phase_id ?? ''}-${index}`}>
+            {rate.section_label || 'Section'}{rate.phase_label ? ` · ${rate.phase_label}` : ''}: {amountText(rate.amount, line.currency)}
+          </div>
+        ))
+      : <div className="ps-sub">No section rates</div>
   }
-  if (line.charging_basis === 'Per Service Rate') return `Fixed ${amountText(line.service_amount)}`
-  return `${line.section_rates.length} section rate(s)`
+
+  const scope = [line.section_label, line.phase_label].filter(Boolean).join(' · ')
+  return <>
+    {line.charging_basis === 'Day Rate'
+      ? (line.rates.length ? line.rates.map(rate => {
+          const charge = line.charges.find(item => item.category === rate.category)
+          const quantity = charge ? ` × ${quantityText(charge.quantity)} ${charge.quantity_unit}` : ''
+          return <div className="ps-sub" key={rate.category}>{rate.category} {amountText(rate.unit_rate, line.currency)}{quantity}</div>
+        }) : <div className="ps-sub">—</div>)
+      : <div className="ps-sub">Fixed {amountText(line.service_amount, line.currency)}</div>}
+    {scope && <div className="ps-sub">{scope}</div>}
+  </>
 }
 
 export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
@@ -52,10 +63,14 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
   ]
 
   const lineCount = (count: number): string => (count ? `${count} line(s)` : 'no lines')
+  // Multiple entered rates occupy multiple lines within Basis, even for one service.
+  const serviceDetailRows = services.reduce((count, line) => count + Math.max(1,
+    line.charging_basis === 'Per Section Rate' ? line.section_rates.length
+      : line.charging_basis === 'Day Rate' ? line.rates.length : 1), 0)
 
   return createPortal(<div className="afe-print-sheet afe-cost-print-sheet" aria-hidden="true">
     {/* Page 1 - compact summary: metadata, services, group lump sums and total. */}
-    <div className={`ps-page ps-afe-summary${services.length > 14 ? ' ps-afe-dense' : ''}`}>
+    <div className={`ps-page ps-afe-summary${serviceDetailRows > 14 ? ' ps-afe-dense' : ''}`}>
       <header className="ps-titlebar">
         <div className="ps-title">
           <div className="ps-eyebrow">Authorization for expenditure · cost estimate</div>
@@ -104,11 +119,11 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
       {services.length === 0 ? <p className="ps-empty">No service lines.</p> : (
         <table className="ps-table">
           <colgroup>
-            <col style={{ width: '4%' }}/><col style={{ width: '24%' }}/><col style={{ width: '18%' }}/><col style={{ width: '14%' }}/><col style={{ width: '7%' }}/><col style={{ width: '16%' }}/><col style={{ width: '17%' }}/>
+            <col style={{ width: '4%' }}/><col style={{ width: '26%' }}/><col style={{ width: '34%' }}/><col style={{ width: '17%' }}/><col style={{ width: '19%' }}/>
           </colgroup>
           <thead>
             <tr>
-              <th>#</th><th>Service</th><th>Basis</th><th>Scope</th><th>Ccy</th><th className="num">Amount</th><th>Remarks</th>
+              <th>#</th><th>Service</th><th>Basis / entered rates</th><th className="num">Amount</th><th>Remarks</th>
             </tr>
           </thead>
           <tbody>
@@ -116,15 +131,13 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
               <tr className="ps-line" key={line.client_key ?? line.id ?? line.service_id}>
                 <td>{index + 1}</td>
                 <td><strong>{line.service_name}</strong><div className="ps-sub">{[line.provider_type, line.vendor_name || 'No vendor'].join(' · ')}</div></td>
-                <td>{line.charging_basis}<div className="ps-sub">{basisDetail(line)}</div></td>
-                <td>{line.section_label || (line.charging_basis === 'Per Section Rate' ? 'Per section' : 'All sections')}{line.phase_label ? <div className="ps-sub">{line.phase_label}</div> : null}</td>
-                <td>{line.currency}</td>
+                <td>{line.charging_basis}{basisDetail(line)}</td>
                 <td className="num">{amountText(line.amount, line.currency)}</td>
                 <td className="ps-notes">{line.remarks || '—'}</td>
               </tr>
             ))}
             <tr className="ps-subtotal">
-              <td colSpan={5}>Services total{standard ? ` (${standard})` : ''}</td>
+              <td colSpan={3}>Services total{standard ? ` (${standard})` : ''}</td>
               <td className="num">{summary.services_total === null ? pending : amountText(summary.services_total, standard)}</td>
               <td>{multiCurrency ? 'converted at saved rates' : ''}</td>
             </tr>

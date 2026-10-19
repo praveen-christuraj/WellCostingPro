@@ -272,8 +272,8 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .afe-cost-print-sheet .ps-warnings { margin-top: 1mm; font-size: 7.6pt; }
   .afe-cost-print-sheet .ps-warnings ul { margin: .8mm 0 1mm; padding-left: 5mm; }
 
-  /* Larger service schedules get one further density step so the required page-one summary
-     remains together without removing rate, scope, amount or remark content. */
+  /* Larger service schedules get one further density step so page one retains the
+     entered rates, including per-section breakdowns, amounts and remarks. */
   .afe-cost-print-sheet .ps-afe-dense { font-size: 7.1pt; line-height: 1.1; }
   .afe-cost-print-sheet .ps-afe-dense h1 { font-size: 12.5pt; }
   .afe-cost-print-sheet .ps-afe-dense h2 { margin-top: 1.4mm; }
