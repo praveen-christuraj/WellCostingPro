@@ -6,6 +6,7 @@ import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, useFormDirty, Tag } from '../components/Common'
 import { ImportDialog } from '../components/ImportDialog'
+import { PlanAdjustmentDialog } from '../components/PlanAdjustmentDialog'
 import { WellConfigurationDialog } from '../components/WellConfigurationDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
@@ -25,15 +26,17 @@ import {
  type TransitionAction = 'configure' | 'draft' | 'complete' | 'activate'
 
 function WellActions({
-  well, canEdit, canDelete, onEdit, onConfigure, onDelete, onTransition,
+  well, canEdit, canDelete, canAdjustPlan, onEdit, onConfigure, onDelete, onTransition, onAdjustPlan,
 }: {
   well: Well
   canEdit: boolean
   canDelete: boolean
+  canAdjustPlan: boolean
   onEdit: () => void
   onConfigure: () => void
   onDelete: () => void
   onTransition: (action: TransitionAction) => void
+  onAdjustPlan: () => void
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const menuOpen = Boolean(anchor)
@@ -47,6 +50,9 @@ function WellActions({
     <Tooltip title="Open this well's sub activities">
       <IconButton component={RouterLink} to={`/rig-well/sub-activities?rig_id=${encodeURIComponent(well.rig_id)}&well_id=${encodeURIComponent(well.id)}`} size="small" aria-label={`Open sub activities for ${well.well_code}`}><ListAltRounded fontSize="small"/></IconButton>
     </Tooltip>
+    {canAdjustPlan && (well.config_status === 'configured' || well.completion_config_status === 'configured') && <Tooltip title="SOW plan adjustments (planned days)">
+      <Button size="small" onClick={onAdjustPlan}>Plan adj.</Button>
+    </Tooltip>}
     {(canEdit || canDelete) && <>
       <Button size="small" color="inherit" endIcon={<ArrowDropDownRounded/>} onClick={event => setAnchor(event.currentTarget)}>Status</Button>
       <Menu anchorEl={anchor} open={menuOpen} onClose={close}>
@@ -88,6 +94,7 @@ export default function Wells() {
   const [deleteError, setDeleteError] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [configurationTarget, setConfigurationTarget] = useState<Well | null>(null)
+  const [adjustTarget, setAdjustTarget] = useState<Well | null>(null)
   const [transitionTarget, setTransitionTarget] = useState<Well | null>(null)
   const [transitionAction, setTransitionAction] = useState<TransitionAction>('configure')
   const [transitionRemarks, setTransitionRemarks] = useState('')
@@ -246,6 +253,11 @@ export default function Wells() {
     { headerName: 'COMPLETION PLAN', field: 'completion_config_status', minWidth: 145, cellRenderer: ({ data }: { data: Well }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={data.completion_config_status === 'configured' ? 'info' : 'warning'}>{data.completion_section_count ? data.completion_config_status : 'Not added'}</Tag></Box> },
     { headerName: 'PLANNED DEPTH', field: 'total_depth', minWidth: 140, valueFormatter: params => formatDepth(params.value, params.data?.depth_unit ?? 'm') },
     { headerName: 'PLANNED DAYS', field: 'total_days', minWidth: 125, valueFormatter: params => formatDays(params.value) },
+    {
+      headerName: 'ADJ PLANNED DAYS', field: 'adjusted_total_days', minWidth: 150,
+      headerTooltip: 'Adjusted planned days from the approved plan adjustment',
+      valueFormatter: params => params.value == null ? '—' : formatDays(params.value),
+    },
     { headerName: 'SUB ACTIVITIES', field: 'sub_activity_count', minWidth: 125, maxWidth: 145, valueFormatter: params => Number(params.value ?? 0).toLocaleString() },
     { headerName: 'UPDATED', field: 'updated_at', minWidth: 135, valueFormatter: params => params.value ? new Date(params.value).toLocaleDateString() : '' },
     {
@@ -254,10 +266,12 @@ export default function Wells() {
         well={data}
         canEdit={can('rig-well:update')}
         canDelete={can('rig-well:delete')}
+        canAdjustPlan={can('rig-well:plan-adjust')}
         onEdit={() => openEdit(data)}
         onConfigure={() => setConfigurationTarget(data)}
         onDelete={() => openDelete(data)}
         onTransition={action => openTransition(data, action)}
+        onAdjustPlan={() => setAdjustTarget(data)}
       />,
     },
   ], [can, rigs])
@@ -359,6 +373,13 @@ export default function Wells() {
       onClose={() => setConfigurationTarget(null)}
       onSaved={() => { setNotice('Scoped well configuration updated.'); void load() }}
     />
+
+    {adjustTarget && <PlanAdjustmentDialog
+      open={!!adjustTarget}
+      well={adjustTarget}
+      onClose={() => setAdjustTarget(null)}
+      onChanged={() => { setNotice('Plan adjustment recorded.'); void load() }}
+    />}
 
     <FormDialog
       open={!!transitionTarget}

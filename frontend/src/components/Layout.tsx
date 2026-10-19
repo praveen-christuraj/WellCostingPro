@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AppBar, Avatar, Box, Button, Divider, IconButton, Menu, MenuItem, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
 import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined, SettingsOutlined, StorageOutlined, PlaylistAddCheckRounded, WaterDropOutlined, AssessmentOutlined } from '@mui/icons-material'
 import Brand from './Brand'
@@ -14,6 +14,7 @@ type NavModule = { label: string; icon: typeof DashboardOutlined; items: NavItem
 // Top-side navigation with dropdown module menus (no side navigation).
 const modules: NavModule[] = [
   { label: 'User Management', icon: PeopleOutline, items: [
+    { label: 'Dashboard', path: '/dashboard', icon: DashboardOutlined },
     { label: 'Users', path: '/users', icon: PeopleOutline, permission: 'users:read' },
     { label: 'Roles', path: '/roles', icon: AdminPanelSettingsOutlined, permission: 'roles:read' },
     { label: 'Permissions', path: '/permissions', icon: VpnKeyOutlined, permission: 'permissions:read' },
@@ -92,8 +93,9 @@ export default function Layout() {
   // Browser tabs and history say which screen you are on.
   useEffect(() => {
     // The most specific route wins, so /other-management/audit is not labelled with the module overview.
+    // `/` is a landing redirect to User Management; the dashboard lives at /dashboard.
     const page = location.pathname === '/'
-      ? 'Dashboard'
+      ? 'User Management'
       : modulesForUser.flatMap(m => m.items)
         .filter(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`))
         .sort((a, b) => b.path.length - a.path.length)[0]?.label
@@ -114,7 +116,6 @@ export default function Layout() {
         <IconButton sx={{ display: { md: 'none' }, color: 'text.primary' }} onClick={e => setMobileAnchor(e.currentTarget)} aria-label="Open navigation" aria-haspopup="menu" aria-expanded={!!mobileAnchor}><MenuRounded/></IconButton>
         <Brand/>
         {!compact && <Box component="nav" aria-label="Modules" display="flex" alignItems="center" flexWrap="wrap" rowGap={.25} columnGap={.25} sx={{ ml: { xs: 0, md: 2 }, minWidth: 0, flex: '1 1 auto' }}>
-          <NavLink to="/" end className={({ isActive }) => `topnav-item${isActive ? ' active' : ''}`}><DashboardOutlined sx={{ fontSize: 17 }}/>&nbsp;Dashboard</NavLink>
           {modulesForUser.map(module => {
             const active = currentModule?.label === module.label
             return <Button
@@ -144,7 +145,6 @@ export default function Layout() {
       {moduleAnchor?.module.items.map(item => <MenuItem key={item.path} selected={location.pathname === item.path} onClick={() => { setModuleAnchor(null); navigate(item.path) }}><item.icon sx={{ fontSize: 18, mr: 1.2, color: 'text.secondary' }}/>{item.label}</MenuItem>)}
     </Menu>
     <Menu anchorEl={mobileAnchor} open={!!mobileAnchor} onClose={() => setMobileAnchor(null)}>
-      <MenuItem selected={location.pathname === '/'} onClick={() => { setMobileAnchor(null); navigate('/') }}><DashboardOutlined sx={{ fontSize: 18, mr: 1.2, color: 'text.secondary' }}/>Dashboard</MenuItem>
       {modulesForUser.map(module => <Box key={module.label}>
         <Divider/>
         <Typography fontSize={10} fontWeight={800} letterSpacing={1.2} color="text.secondary" sx={{ px: 2, pt: 1.2, pb: .5 }}>{module.label.toUpperCase()}</Typography>

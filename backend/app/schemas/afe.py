@@ -138,6 +138,14 @@ class AfeOut(BaseModel):
     deleted_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    # Latest approved SOW adjustment, when one exists. Nulls mean no approved
+    # adjustment, so callers fall back to the saved estimate totals above.
+    adjusted_services_total: Decimal | None = None
+    adjusted_consumables_total: Decimal | None = None
+    adjusted_tangibles_total: Decimal | None = None
+    adjusted_total: Decimal | None = None
+    has_sow_adjustment: bool = False
+    sow_revision: int | None = None
 
 
 class AfeIDs(BaseModel):

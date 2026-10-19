@@ -12,6 +12,7 @@ import { BulkEstimateDialog, type BulkResult } from '../components/afe/BulkEstim
 import { CostingSetPickerDialog } from '../components/CostingSetPickerDialog'
 import { ConsumableLineDialog } from '../components/afe/ConsumableLineDialog'
 import { ErrorDetails, StatusDialog, StatusTag } from '../components/afe/AfeShared'
+import { SowAdjustmentDialog } from '../components/afe/SowAdjustmentDialog'
 import { ServiceLineDialog } from '../components/afe/ServiceLineDialog'
 import { TangibleLineDialog } from '../components/afe/TangibleLineDialog'
 import { useAuth } from '../context/AuthContext'
@@ -125,6 +126,7 @@ export default function AfeEstimate() {
   const [setPickerGroup, setSetPickerGroup] = useState<CostingSetGroup | null>(null)
   const [breakdown, setBreakdown] = useState<{ title: string; currency: string; components: AfeComponent[]; warnings: string[] } | null>(null)
   const [statusTarget, setStatusTarget] = useState<AfeStatusAction | null>(null)
+  const [sowOpen, setSowOpen] = useState(false)
   const [discardOpen, setDiscardOpen] = useState(false)
   const [printing, setPrinting] = useState(false)
   const [selected, setSelected] = useState<Record<LineKind, string[]>>({ service: [], consumable: [], tangible: [] })
@@ -701,6 +703,9 @@ export default function AfeEstimate() {
             <Button variant={action === 'approve' ? 'contained' : 'outlined'} color={action === 'reopen' ? 'warning' : 'primary'} disabled={blocked} onClick={() => setStatusTarget(action)}>{STATUS_ACTIONS[action].label}</Button>
           </span></Tooltip>
         })}
+        {saved.persisted && afe.status !== 'draft' && (can('afe:sow-adjust') || can('afe:sow-approve')) && <Tooltip title="Record SOW revisions against the approved estimate without rewriting it"><span>
+          <Button variant="outlined" onClick={() => setSowOpen(true)}>SOW adjustments</Button>
+        </span></Tooltip>}
       </Box>}
     />
 
@@ -711,6 +716,7 @@ export default function AfeEstimate() {
       {editable && previewing && <Tag tone="info">Recalculating preview…</Tag>}
       {editable && !dirty && saved.persisted && <Tag tone="success">Saved {saved.saved_at ? new Date(saved.saved_at).toLocaleString() : ''}{saved.saved_by ? ` by ${saved.saved_by}` : ''}</Tag>}
       {!saved.persisted && <Tag>No estimate saved yet</Tag>}
+      {afe.has_sow_adjustment && afe.adjusted_total != null && <Tag tone="info">SOW Rev {afe.sow_revision} · {amountText(afe.adjusted_total, afe.standard_currency)}</Tag>}
       {showingPreview && <Typography fontSize={12} color="text.secondary">Totals below are a live preview. Save to keep them.</Typography>}
     </Box>
 
@@ -1048,5 +1054,12 @@ export default function AfeEstimate() {
 
     {/* Print sheet is hidden on screen and printed in full (all sections, all lines). */}
     {saved.persisted && <AfePrintSheet estimate={saved}/>}
+
+    {sowOpen && <SowAdjustmentDialog
+      open={sowOpen}
+      afe={afe}
+      onClose={() => setSowOpen(false)}
+      onChanged={updated => setAfe(updated)}
+    />}
   </>
 }

@@ -242,7 +242,40 @@ def _rig_out(rig: Rig, well_count: int = 0) -> RigOut:
     )
 
 
-def _well_out(well: Well, sub_activity_count: int = 0) -> WellOut:
+def _effective_plan_map(db: Session, organization_id: str, well_ids: list[str]) -> dict[str, Any]:
+    """Latest approved drilling-scope plan adjustment per well, keyed by well id."""
+    if not well_ids:
+        return {}
+    try:
+        from app.models.sow_adjustment import WellPlanAdjustment
+
+        rows = list(
+            db.scalars(
+                select(WellPlanAdjustment)
+                .where(
+                    WellPlanAdjustment.organization_id == organization_id,
+                    WellPlanAdjustment.well_id.in_(well_ids),
+                    WellPlanAdjustment.configuration_scope == "drilling",
+                    WellPlanAdjustment.status == "approved",
+                )
+                .order_by(WellPlanAdjustment.well_id, WellPlanAdjustment.revision_number.desc())
+            ).all()
+        )
+    except Exception:  # noqa: BLE001 - unmigrated database has no adjustment tables yet
+        return {}
+    effective: dict[str, Any] = {}
+    for row in rows:
+        effective.setdefault(row.well_id, row)
+    return effective
+
+
+def _well_out_for(db: Session, organization_id: str, well: Well, sub_activity_count: int = 0) -> WellOut:
+    """Single-well output enriched with its effective plan adjustment."""
+    plan_map = _effective_plan_map(db, organization_id, [well.id])
+    return _well_out(well, sub_activity_count, plan_adjustment=plan_map.get(well.id))
+
+
+def _well_out(well: Well, sub_activity_count: int = 0, *, plan_adjustment: Any | None = None) -> WellOut:
     total_depth, total_days = _well_totals(well)
     rig = well.rig
     return WellOut(
@@ -271,6 +304,9 @@ def _well_out(well: Well, sub_activity_count: int = 0) -> WellOut:
         deleted_at=well.deleted_at,
         created_at=well.created_at,
         updated_at=well.updated_at,
+        adjusted_total_days=Decimal(plan_adjustment.planned_days_after) if plan_adjustment else None,
+        has_plan_adjustment=plan_adjustment is not None,
+        plan_revision=plan_adjustment.revision_number if plan_adjustment else None,
     )
 
 
@@ -1013,7 +1049,8 @@ def list_wells(
         .group_by(WellSubActivity.well_id)
     ).all()
     activity_counts = {well_id: int(value) for well_id, value in count_rows}
-    return [_well_out(well, activity_counts.get(well.id, 0)) for well in wells]
+    plan_map = _effective_plan_map(db, user.organization_id, [well.id for well in wells])
+    return [_well_out(well, activity_counts.get(well.id, 0), plan_adjustment=plan_map.get(well.id)) for well in wells]
 
 
 @router.post(
@@ -1049,7 +1086,7 @@ def create_well(data: WellCreate, request: Request, db: Db, user: Current) -> We
         )
         _commit(db)
         db.refresh(existing)
-        return _well_out(existing)
+        return _well_out_for(db, user.organization_id, existing)
     well = Well(
         organization_id=user.organization_id,
         rig_id=rig.id,
@@ -1070,7 +1107,7 @@ def create_well(data: WellCreate, request: Request, db: Db, user: Current) -> We
     )
     _commit(db)
     db.refresh(well)
-    return _well_out(well)
+    return _well_out_for(db, user.organization_id, well)
 
 
 @router.patch(
@@ -1166,7 +1203,7 @@ def soft_delete_well(well_id: str, request: Request, db: Db, user: Current) -> W
     )
     _commit(db)
     db.refresh(well)
-    return _well_out(well)
+    return _well_out_for(db, user.organization_id, well)
 
 
 @router.post(
@@ -1189,7 +1226,7 @@ def restore_well(well_id: str, request: Request, db: Db, user: Current) -> WellO
     )
     _commit(db)
     db.refresh(well)
-    return _well_out(well)
+    return _well_out_for(db, user.organization_id, well)
 
 
 @router.delete(
@@ -1539,7 +1576,7 @@ def transition_well(
     )
     _commit(db)
     db.refresh(well)
-    return _well_out(well)
+    return _well_out_for(db, user.organization_id, well)
 
 
 # ---------------------------------------------------------------------------

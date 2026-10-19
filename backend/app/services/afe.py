@@ -996,7 +996,45 @@ def _well_scope_out(well: Well, configuration_scope: str = "drilling") -> WellSc
     )
 
 
-def _afe_out(afe: Afe, well: Well | None, priced: Priced, *, counts: tuple[int, int, int] | None = None) -> AfeOut:
+def _effective_sow_map(db: Session, organization_id: str, afe_ids: list[str]) -> dict[str, Any]:
+    """Latest approved SOW adjustment per AFE, keyed by AFE id.
+
+    Queried directly (not via the sow_adjustment service) to keep this module
+    free of a service-level import cycle. Missing tables on an unmigrated
+    database mean no adjustments exist yet.
+    """
+    if not afe_ids:
+        return {}
+    try:
+        from app.models.sow_adjustment import AfeSowAdjustment
+
+        rows = list(
+            db.scalars(
+                select(AfeSowAdjustment)
+                .where(
+                    AfeSowAdjustment.organization_id == organization_id,
+                    AfeSowAdjustment.afe_id.in_(afe_ids),
+                    AfeSowAdjustment.status == "approved",
+                )
+                .order_by(AfeSowAdjustment.afe_id, AfeSowAdjustment.revision_number.desc())
+            ).all()
+        )
+    except Exception:  # noqa: BLE001 - unmigrated database has no adjustment tables yet
+        return {}
+    effective: dict[str, Any] = {}
+    for row in rows:
+        effective.setdefault(row.afe_id, row)
+    return effective
+
+
+def _afe_out(
+    afe: Afe,
+    well: Well | None,
+    priced: Priced,
+    *,
+    counts: tuple[int, int, int] | None = None,
+    sow_adjustment: Any | None = None,
+) -> AfeOut:
     service_count, consumable_count, tangible_count = counts or (
         len(afe.service_lines),
         len(afe.consumable_lines),
@@ -1038,6 +1076,12 @@ def _afe_out(afe: Afe, well: Well | None, priced: Priced, *, counts: tuple[int, 
         deleted_at=afe.deleted_at,
         created_at=afe.created_at,
         updated_at=afe.updated_at,
+        adjusted_services_total=Decimal(sow_adjustment.adjusted_services_total) if sow_adjustment else None,
+        adjusted_consumables_total=Decimal(sow_adjustment.adjusted_consumables_total) if sow_adjustment else None,
+        adjusted_tangibles_total=Decimal(sow_adjustment.adjusted_tangibles_total) if sow_adjustment else None,
+        adjusted_total=Decimal(sow_adjustment.adjusted_total) if sow_adjustment else None,
+        has_sow_adjustment=sow_adjustment is not None,
+        sow_revision=sow_adjustment.revision_number if sow_adjustment else None,
     )
 
 
@@ -1085,8 +1129,9 @@ def _estimate_view(db: Session, organization_id: str, afe: Afe, *, persisted: bo
     well = _wells_by_id(db, organization_id, [afe.well_id]).get(afe.well_id)
     lookups = _lookups_for_afes(db, organization_id, [afe])
     priced = _stored_priced(afe, well, lookups)
+    sow_map = _effective_sow_map(db, organization_id, [afe.id])
     return AfeEstimateOut(
-        afe=_afe_out(afe, well, priced),
+        afe=_afe_out(afe, well, priced, sow_adjustment=sow_map.get(afe.id)),
         well=_well_scope_out(well, afe.configuration_scope) if well else _missing_well_scope(afe),
         services=priced.services,
         consumables=priced.consumables,
@@ -1129,7 +1174,16 @@ def _outs_for(db: Session, organization_id: str, afes: Sequence[Afe]) -> list[Af
         return []
     wells = _wells_by_id(db, organization_id, [afe.well_id for afe in afes])
     lookups = _lookups_for_afes(db, organization_id, afes)
-    return [_afe_out(afe, wells.get(afe.well_id), _stored_priced(afe, wells.get(afe.well_id), lookups)) for afe in afes]
+    sow_map = _effective_sow_map(db, organization_id, [afe.id for afe in afes])
+    return [
+        _afe_out(
+            afe,
+            wells.get(afe.well_id),
+            _stored_priced(afe, wells.get(afe.well_id), lookups),
+            sow_adjustment=sow_map.get(afe.id),
+        )
+        for afe in afes
+    ]
 
 
 def afe_out_for(db: Session, organization_id: str, afe: Afe) -> AfeOut:

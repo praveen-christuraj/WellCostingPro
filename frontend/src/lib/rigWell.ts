@@ -44,6 +44,11 @@ export type Well = {
   deleted_at: string | null
   created_at: string
   updated_at: string
+  // Latest approved drilling-scope plan adjustment, when one exists. Null
+  // means no approved adjustment, so callers use total_days above.
+  adjusted_total_days: string | number | null
+  has_plan_adjustment: boolean
+  plan_revision: number | null
 }
 
 export type WellPhaseDraft = {

@@ -1944,6 +1944,13 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
     actual_to_date = _money(tracked_actual_to_date + other_expenses_to_date)
     upa = _money(sum((Decimal(row.standard_amount) for _, row in actual_all if row.classification == "UPA"), Decimal("0")))
     npt = _money(sum((Decimal(row.standard_amount) for _, row in actual_all if row.classification == "NPT"), Decimal("0")))
+    # An approved SOW adjustment revises the plan; the locked planned_total stays
+    # the original AFE amount and the adjusted amount is reported alongside it.
+    adjusted_total: Decimal | None = None
+    sow_map = _effective_sow_map(db, entry.organization_id, [entry.afe_id])
+    adjustment = sow_map.get(entry.afe_id)
+    if adjustment is not None and str(adjustment.standard_currency) == entry.standard_currency:
+        adjusted_total = _money(Decimal(adjustment.adjusted_total))
     return DailyCostComparison(
         effective_on=as_of,
         currency=entry.standard_currency,
@@ -1958,6 +1965,9 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
         npt_to_date=npt,
         groups=groups,
         budget_lines=comparison_lines,
+        adjusted_planned_total=adjusted_total,
+        adjusted_balance=_money(adjusted_total - actual_to_date) if adjusted_total is not None else None,
+        has_adjustment=adjusted_total is not None,
     )
 
 
@@ -2282,6 +2292,26 @@ def reopen_entry(
         entry = _get_entry(db, entry_id, organization_id, deleted=False, lock=True)
         if entry.status != "submitted":
             raise HTTPException(status_code=409, detail="Only a Submitted daily cost sheet can be reopened")
+        # Late reopens (older than the amendment threshold) are amendments:
+        # they need the dedicated amendment right and are logged separately
+        # from the ordinary audit trail. Recent reopens keep working exactly
+        # as before for anyone with the reopen right.
+        days_old = (date.today() - entry.cost_date).days
+        amendment_threshold = 30
+        try:
+            from app.services.sow_adjustment import AMENDMENT_THRESHOLD_DAYS
+
+            amendment_threshold = AMENDMENT_THRESHOLD_DAYS
+        except Exception:  # noqa: BLE001 - fall back to the default window
+            pass
+        if days_old > amendment_threshold and not _has_permission(db, user, "daily-cost:amend"):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"This sheet is {days_old} days old. Reopening a sheet older than "
+                    f"{amendment_threshold} days needs the daily-cost amendment right."
+                ),
+            )
         entry.status = "draft"
         entry.status_remarks = data.remarks
         entry.updated_by = _actor_name(user)
@@ -2292,8 +2322,28 @@ def reopen_entry(
             summary=f"Reopened submitted daily cost sheet {entry.daily_cost_code} as Draft: {data.remarks}",
             request=request,
         )
+        try:
+            from app.services.sow_adjustment import record_amendment
+
+            record_amendment(db, entry=entry, user=user, reason=data.remarks)
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001 - unmigrated database has no amendment table yet
+            pass
         _commit(db)
     return _created_day_or_503(db, organization_id, entry.id)
+
+
+def _has_permission(db: Session, user: User, permission: str) -> bool:
+    """True when the user is an owner or holds the named permission key.
+
+    Mirrors api.deps.require: owners bypass, everyone else needs the key on
+    one of their roles. The roles are already loaded on the request user.
+    """
+    roles = list(user.roles or ())
+    if any(role.is_owner for role in roles):
+        return True
+    return permission in {item.key for role in roles for item in (role.permissions or ())}
 
 
 def soft_delete_entry(
@@ -2705,6 +2755,61 @@ def well_cost_report(
     return [get_day(db, organization_id, entry_id) for entry_id in entry_ids]
 
 
+def _effective_sow_map(db: Session, organization_id: str, afe_ids: list[str]) -> dict[str, Any]:
+    """Latest approved SOW adjustment per AFE, keyed by AFE id.
+
+    Queried directly (not via the sow_adjustment service) to avoid a service
+    import cycle. Missing tables on an unmigrated database mean no
+    adjustments exist yet.
+    """
+    if not afe_ids:
+        return {}
+    try:
+        from app.models.sow_adjustment import AfeSowAdjustment
+
+        rows = list(
+            db.scalars(
+                select(AfeSowAdjustment)
+                .where(
+                    AfeSowAdjustment.organization_id == organization_id,
+                    AfeSowAdjustment.afe_id.in_(afe_ids),
+                    AfeSowAdjustment.status == "approved",
+                )
+                .order_by(AfeSowAdjustment.afe_id, AfeSowAdjustment.revision_number.desc())
+            ).all()
+        )
+    except Exception:  # noqa: BLE001 - unmigrated database has no adjustment tables yet
+        return {}
+    effective: dict[str, Any] = {}
+    for row in rows:
+        effective.setdefault(row.afe_id, row)
+    return effective
+
+
+def _effective_plan_map_for_well(db: Session, organization_id: str, well_id: str) -> dict[str, Any]:
+    """Latest approved plan adjustment per configuration scope for one well."""
+    try:
+        from app.models.sow_adjustment import WellPlanAdjustment
+
+        rows = list(
+            db.scalars(
+                select(WellPlanAdjustment)
+                .where(
+                    WellPlanAdjustment.organization_id == organization_id,
+                    WellPlanAdjustment.well_id == well_id,
+                    WellPlanAdjustment.status == "approved",
+                )
+                .order_by(WellPlanAdjustment.configuration_scope, WellPlanAdjustment.revision_number.desc())
+            ).all()
+        )
+    except Exception:  # noqa: BLE001 - unmigrated database has no adjustment tables yet
+        return {}
+    effective: dict[str, Any] = {}
+    for row in rows:
+        effective.setdefault(row.configuration_scope, row)
+    return effective
+
+
 def well_cost_summary(
     db: Session,
     organization_id: str,
@@ -2767,6 +2872,18 @@ def well_cost_summary(
             display_name=f"{afe.afe_code} — {afe.afe_name} · {entry_rows[0].standard_currency if entry_rows else currency} {planned_total:,.2f}",
         ))
 
+    # ---- SOW adjustments ----------------------------------------------------
+    # The locked baselines above stay the original plan. Approved adjustments
+    # revise the plan alongside them; only currency-matching adjustments apply.
+    sow_map = _effective_sow_map(db, organization_id, [option.id for option in afe_options])
+    plan_map = _effective_plan_map_for_well(db, organization_id, well_id)
+    afe_scope = {row.afe_id: (row.afe.configuration_scope if row.afe else "drilling") for row in entries}
+    adjusted_by_afe: dict[str, Decimal] = {}
+    for option in afe_options:
+        adjustment = sow_map.get(option.id)
+        if adjustment is not None and str(adjustment.standard_currency) == option.standard_currency:
+            adjusted_by_afe[option.id] = _money(Decimal(adjustment.adjusted_total))
+
     lines = _line_union(organization_id, well_id, date_from=date_from, date_to=date_to, include_draft=include_draft)
     totals_by_group = {
         str(row[0] or ""): Decimal(row[1] or 0)
@@ -2802,6 +2919,36 @@ def well_cost_summary(
         planned_by_group["Tangibles"] = planned_by_group.get("Tangibles", Decimal("0")) + Decimal(baseline.tangibles_total)
         planned_days += sum((Decimal(section.total_days) for section in baseline.well_sections), Decimal("0"))
     planned_total = _money(sum(planned_by_group.values(), Decimal("0")))
+
+    # Revised plan: per-AFE adjusted totals replace the locked baseline totals
+    # for AFEs with an approved, currency-matching adjustment.
+    adjusted_planned: Decimal | None = None
+    if adjusted_by_afe:
+        adjusted_total = Decimal("0")
+        for baseline in baselines:
+            if baseline.afe_id in adjusted_by_afe:
+                adjusted_total += adjusted_by_afe[baseline.afe_id]
+            else:
+                adjusted_total += Decimal(baseline.total_amount)
+        adjusted_planned = _money(adjusted_total)
+
+    # Revised planned days: per-scope adjusted totals replace the locked
+    # baseline days for scopes with an approved plan adjustment.
+    planned_days_by_scope: dict[str, Decimal] = {}
+    for baseline in baselines:
+        scope = afe_scope.get(baseline.afe_id, "drilling")
+        planned_days_by_scope[scope] = planned_days_by_scope.get(scope, Decimal("0")) + sum(
+            (Decimal(section.total_days) for section in baseline.well_sections), Decimal("0")
+        )
+    adjusted_planned_days: Decimal | None = None
+    if any(scope in plan_map for scope in planned_days_by_scope):
+        adjusted_days = Decimal("0")
+        for scope, days in planned_days_by_scope.items():
+            if scope in plan_map:
+                adjusted_days += Decimal(plan_map[scope].planned_days_after)
+            else:
+                adjusted_days += days
+        adjusted_planned_days = _rate(adjusted_days)
 
     # ---- daily run sheet -----------------------------------------------------
     per_day: dict[date, dict[str, Any]] = {}
@@ -2847,6 +2994,7 @@ def well_cost_summary(
             budget_balance=_money(planned_total - cumulative),
             sheets=len(values["sheets"]),
             status=("submitted" if statuses == {"submitted"} else "draft" if statuses == {"draft"} else "mixed"),
+            adjusted_budget_balance=_money(adjusted_planned - cumulative) if adjusted_planned is not None else None,
         ))
 
     # ---- AFE positions -------------------------------------------------------
@@ -2862,6 +3010,7 @@ def well_cost_summary(
         # AFE total net of those deductions; the split is reported alongside it.
         other_for_afe = _money(sum((Decimal(row.other_expenses_total) for row in entry_rows), Decimal("0")))
         days_recorded = sorted({row.cost_date for row in entry_rows})
+        adjusted_for_afe = adjusted_by_afe.get(option.id)
         positions.append(DailyCostAfePosition(
             afe_id=option.id, afe_code=option.afe_code, afe_name=option.afe_name,
             afe_status=option.status, currency=option.standard_currency,
@@ -2870,6 +3019,9 @@ def well_cost_summary(
             over_budget=actual > planned, sheets=len(entry_rows), days_recorded=len(days_recorded),
             first_day=days_recorded[0] if days_recorded else None,
             last_day=days_recorded[-1] if days_recorded else None,
+            adjusted_planned_total=adjusted_for_afe,
+            adjusted_balance=_money(adjusted_for_afe - actual) if adjusted_for_afe is not None else None,
+            has_adjustment=adjusted_for_afe is not None,
         ))
 
     # ---- factors -------------------------------------------------------------
@@ -3031,6 +3183,12 @@ def well_cost_summary(
     days_to_budget = (
         Decimal(str(round(float(remaining / average), 1))) if average > 0 and remaining > 0 else None
     )
+    adjusted_balance = _money(adjusted_planned - actual_total) if adjusted_planned is not None else None
+    adjusted_used = (
+        (actual_total / adjusted_planned * Decimal("100")).quantize(Decimal("0.01"))
+        if adjusted_planned is not None and adjusted_planned > 0
+        else None
+    )
     totals = DailyCostWellTotals(
         currency=currency, planned=planned_total, actual=actual_total, balance=_money(remaining),
         used_percent=(actual_total / planned_total * Decimal("100")).quantize(Decimal("0.01")) if planned_total > 0 else Decimal("0.00"),
@@ -3043,6 +3201,11 @@ def well_cost_summary(
         draft_sheets=sum(1 for row in windowed if row.status == "draft"),
         submitted_sheets=sum(1 for row in windowed if row.status == "submitted"),
         lines=int(db.execute(select(func.count()).select_from(lines)).scalar() or 0),
+        adjusted_planned=adjusted_planned,
+        adjusted_balance=adjusted_balance,
+        adjusted_used_percent=adjusted_used,
+        adjusted_planned_days=adjusted_planned_days,
+        has_adjustment=adjusted_planned is not None or adjusted_planned_days is not None,
     )
     return DailyCostWellSummary(
         well=DailyCostWellHeader(

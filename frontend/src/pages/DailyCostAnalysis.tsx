@@ -137,6 +137,9 @@ export default function DailyCostAnalysis() {
     if (!summary) return {}
     const days = summary.daily.map(row => row.cost_date.slice(5))
     const plannedLine = summary.daily.map((_row, index) => Number(summary.totals.planned) * ((index + 1) / Math.max(1, summary.daily.length)))
+    const adjustedLine = summary.totals.adjusted_planned != null
+      ? summary.daily.map((_row, index) => Number(summary.totals.adjusted_planned) * ((index + 1) / Math.max(1, summary.daily.length)))
+      : null
     return {
       animation: false,
       grid: { left: 14, right: 18, top: 26, bottom: 32, containLabel: true },
@@ -163,6 +166,11 @@ export default function DailyCostAnalysis() {
           lineStyle: { width: 1.6, type: 'dashed', color: theme.palette.warning.main },
           itemStyle: { color: theme.palette.warning.main }, data: plannedLine,
         },
+        ...(adjustedLine ? [{
+          name: 'Adjusted straight-line plan', type: 'line' as const, symbol: 'none',
+          lineStyle: { width: 1.6, type: 'dashed' as const, color: theme.palette.success.main },
+          itemStyle: { color: theme.palette.success.main }, data: adjustedLine,
+        }] : []),
       ],
     }
   }, [summary, currency, theme])
@@ -193,6 +201,8 @@ export default function DailyCostAnalysis() {
     })
   }
 
+  const hasAdjustment = summary?.totals.has_adjustment ?? false
+
   const dailyColumns: ColDef<DailyCostDailyRow>[] = [
     { headerName: 'DATE', field: 'cost_date', minWidth: 140, width: 150, valueFormatter: params => displayDate(String(params.value ?? '')) },
     { headerName: 'SERVICES', field: 'services', minWidth: 140, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
@@ -216,6 +226,16 @@ export default function DailyCostAnalysis() {
         return <Typography fontSize={12} fontWeight={700} color={value < 0 ? 'error.main' : 'success.main'}>{dailyMoney(value, currency)}</Typography>
       },
     },
+    ...(hasAdjustment ? [{
+      headerName: 'ADJ AFE BALANCE', field: 'adjusted_budget_balance' as const, minWidth: 160,
+      headerTooltip: 'Adjusted AFE amount less cumulative actual to date',
+      cellRenderer: (params: ICellRendererParams<DailyCostDailyRow>) => {
+        const raw = params.data?.adjusted_budget_balance
+        if (raw == null) return <Typography fontSize={12} color="text.secondary">—</Typography>
+        const value = Number(raw)
+        return <Typography fontSize={12} fontWeight={700} color={value < 0 ? 'error.main' : 'success.main'}>{dailyMoney(value, currency)}</Typography>
+      },
+    } satisfies ColDef<DailyCostDailyRow>] : []),
     {
       headerName: 'SHEETS', field: 'sheets', minWidth: 110,
       cellRenderer: (params: ICellRendererParams<DailyCostDailyRow>) => {
@@ -274,8 +294,9 @@ export default function DailyCostAnalysis() {
     {summary && <>
       {summary.warnings.map(warning => <Alert key={warning.code} severity={warning.severity} icon={warning.severity === 'info' ? undefined : <WarningAmberRounded/>} sx={{ mb: 1.4 }}>{warning.message}</Alert>)}
 
-      <Box display="grid" gap={1.3} mb={1.8} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)', lg: 'repeat(7, 1fr)' } }}>
+      <Box display="grid" gap={1.3} mb={1.8} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)', lg: hasAdjustment ? 'repeat(8, 1fr)' : 'repeat(7, 1fr)' } }}>
         <StatCard label="AFE planned" value={dailyMoney(summary.totals.planned, currency)} hint={`${summary.afes.length} AFE locked on this well`} icon={<AccountBalanceWalletOutlined fontSize="small"/>}/>
+        {hasAdjustment && summary.totals.adjusted_planned != null && <StatCard label="Adjusted AFE" value={dailyMoney(summary.totals.adjusted_planned, currency)} hint={`${summary.totals.adjusted_used_percent ?? '—'}% of the adjusted AFE spent`} icon={<AccountBalanceWalletOutlined fontSize="small"/>}/>}
         <StatCard label="Actual to date" value={dailyMoney(summary.totals.actual, currency)} hint={`${summary.totals.used_percent}% of the locked AFE`} icon={<TrendingUpRounded fontSize="small"/>}/>
         <StatCard label="Other expenses" value={dailyMoney(summary.totals.other_expenses, currency)} hint="LIH and similar charges deducted from the AFE" tone={Number(summary.totals.other_expenses) > 0 ? 'warning' : 'default'} icon={<ReportProblemOutlined fontSize="small"/>}/>
         <StatCard label="Remaining balance" value={dailyMoney(summary.totals.balance, currency)} hint={Number(summary.totals.balance) < 0 ? 'Over the AFE budget' : 'Planned less actual to date'} tone={Number(summary.totals.balance) < 0 ? 'warning' : 'good'} icon={<SavingsOutlined fontSize="small"/>}/>
@@ -307,21 +328,26 @@ export default function DailyCostAnalysis() {
         <Box display="flex" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap" mb={1}>
           <Typography fontWeight={800} fontSize={15}>AFE position on this well</Typography>
           <Typography color="text.secondary" fontSize={11.5}>
-            Planned days {Number(summary.totals.planned_days).toLocaleString()} · first day {displayDate(summary.totals.first_day)} · last day {displayDate(summary.totals.last_day)}
+            Planned days {Number(summary.totals.planned_days).toLocaleString()}
+            {summary.totals.adjusted_planned_days != null && <> · Adjusted {Number(summary.totals.adjusted_planned_days).toLocaleString()}</>}
+            {' '}· Actual {summary.totals.recorded_days} recorded day{summary.totals.recorded_days === 1 ? '' : 's'}
+            {' '}· first day {displayDate(summary.totals.first_day)} · last day {displayDate(summary.totals.last_day)}
             {summary.totals.days_to_budget ? ` · at this burn rate the AFE lasts ${summary.totals.days_to_budget} more days` : ''}
           </Typography>
         </Box>
         <Box sx={{ overflowX: 'auto' }}>
           <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 720, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
-            <thead><tr><th>AFE</th><th>STATUS</th><th>SHEETS</th><th align="right">PLANNED</th><th align="right">ACTUAL</th><th align="right">OTHER EXPENSES</th><th align="right">BALANCE</th><th align="right">DAYS</th></tr></thead>
+            <thead><tr><th>AFE</th><th>STATUS</th><th>SHEETS</th><th align="right">PLANNED</th>{hasAdjustment && <th align="right">ADJUSTED</th>}<th align="right">ACTUAL</th><th align="right">OTHER EXPENSES</th><th align="right">BALANCE</th>{hasAdjustment && <th align="right">ADJ BALANCE</th>}<th align="right">DAYS</th></tr></thead>
             <tbody>{summary.afes.map(afe => <tr key={afe.afe_id}>
               <td><Typography fontSize={12} fontWeight={700}>{afe.afe_code}</Typography><Typography fontSize={10.5} color="text.secondary">{afe.afe_name}</Typography></td>
               <td><Tag tone={afe.over_budget ? 'warning' : 'info'}>{afe.afe_status}</Tag></td>
               <td>{afe.sheets} · {displayDate(afe.first_day)} → {displayDate(afe.last_day)}</td>
               <td align="right">{dailyMoney(afe.planned_total, afe.currency)}</td>
+              {hasAdjustment && <td align="right">{afe.adjusted_planned_total != null ? dailyMoney(afe.adjusted_planned_total, afe.currency) : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>}
               <td align="right">{dailyMoney(afe.actual, afe.currency)}</td>
               <td align="right">{Number(afe.other_expenses) > 0 ? <Typography fontSize={12} fontWeight={700} color="warning.main">− {dailyMoney(afe.other_expenses, afe.currency)}</Typography> : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
               <td align="right"><Typography fontSize={12} fontWeight={700} color={Number(afe.balance) < 0 ? 'error.main' : 'success.main'}>{dailyMoney(afe.balance, afe.currency)}</Typography></td>
+              {hasAdjustment && <td align="right">{afe.adjusted_balance != null ? <Typography fontSize={12} fontWeight={700} color={Number(afe.adjusted_balance) < 0 ? 'error.main' : 'success.main'}>{dailyMoney(afe.adjusted_balance, afe.currency)}</Typography> : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>}
               <td align="right">{afe.days_recorded}</td>
             </tr>)}</tbody>
           </Box>
