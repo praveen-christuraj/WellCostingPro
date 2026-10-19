@@ -322,6 +322,7 @@ export default function WellSubActivities() {
     <ErrorMessage message={error}/>
 
     {loadingLookups ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : selectedWellId ? loadingRows ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <DataTable
+      fillHeight
       key={selectedWellId}
       rows={rows}
       columns={columns}

@@ -130,6 +130,8 @@ export function AfeEstimationTab() {
     {loading
       ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box>
       : <DataTable
+        fillHeight
+        fillReserve={44}
         rows={rows}
         columns={columns}
         searchPlaceholder="Search estimates by AFE, rig, well or status..."

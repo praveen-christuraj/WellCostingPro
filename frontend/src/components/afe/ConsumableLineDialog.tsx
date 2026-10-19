@@ -329,6 +329,10 @@ export function ConsumableLineDialog({ open, initial, scope, reference, onClose,
                 bgcolor: 'action.hover',
                 borderRadius: 1.5,
                 p: 0.5,
+                // Segmented control, not an underlined tab strip: the selected
+                // pill is already shown by its paper background + shadow, so the
+                // theme's selected-tab underline (theme.ts MuiTab) stays off here.
+                '& .MuiTab-root::after': { display: 'none' },
                 '& .MuiTab-root': {
                   minHeight: 38,
                   fontWeight: 700,

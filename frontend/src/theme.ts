@@ -235,7 +235,11 @@ export const buildTheme = (mode: 'light' | 'dark'): Theme => {
       },
       MuiTableCell: {
         styleOverrides: {
-          root: { borderBottom: `1px solid ${s.divider}`, padding: '10px 14px', fontSize: 12.5 },
+          // Dense to match the AG Grid row height (`control.gridRow`): on-screen
+          // MUI summaries/dialog tables should fit the same number of rows per
+          // screen as the registers. Print sheets use their own .ps-* rules.
+          root: { borderBottom: `1px solid ${s.divider}`, padding: '7px 12px', fontSize: 12.5 },
+          sizeSmall: { padding: '5px 10px' },
           head: { fontWeight: 800, fontSize: 11, letterSpacing: '0.5px', textTransform: 'uppercase', color: s.textMuted },
         },
       },
@@ -243,18 +247,41 @@ export const buildTheme = (mode: 'light' | 'dark'): Theme => {
         styleOverrides: { root: { '&:last-child .MuiTableCell-root': { borderBottom: 0 } } },
       },
       MuiTabs: {
-        styleOverrides: { root: { minHeight: 46 }, indicator: { height: 2.5, borderRadius: 2 } },
+        // The sliding indicator is positioned by MUI from getBoundingClientRect()
+        // (viewport pixels). Under the app's `#root { zoom: 0.875 }` density those
+        // measurements are zoom-scaled while the indicator's style is not, so the
+        // underline drifts further from its tab the further right the tab sits —
+        // and it is also wrong until web fonts finish loading. The indicator is
+        // therefore hidden and the selected tab draws its own underline (below):
+        // a CSS pseudo-element on the tab itself is exact at any zoom, font or
+        // scroll position, including scrollable tab strips.
+        styleOverrides: { root: { minHeight: 46 }, indicator: { display: 'none' } },
       },
       MuiTab: {
         styleOverrides: {
           root: {
+            position: 'relative',
             minHeight: 46,
             textTransform: 'none',
             fontSize: 12.5,
             fontWeight: 700,
             color: s.textMuted,
             padding: '8px 14px',
-            '&.Mui-selected': { color: light ? navy[700] : navy[400] },
+            '&::after': {
+              content: '""',
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: 2.5,
+              borderRadius: '2px 2px 0 0',
+              backgroundColor: 'transparent',
+              transition: transition('background-color'),
+            },
+            '&.Mui-selected': {
+              color: light ? navy[700] : navy[400],
+              '&::after': { backgroundColor: light ? navy[700] : navy[400] },
+            },
           },
         },
       },

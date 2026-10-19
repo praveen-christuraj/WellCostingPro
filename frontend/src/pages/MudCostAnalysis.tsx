@@ -556,6 +556,8 @@ export default function MudCostAnalysis() {
             This is a historical section snapshot. You can review its entries, but new entries must use a section in the current well configuration.
           </Alert>}
           {entriesLoading ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={25}/></Box> : <DataTable
+            fillHeight
+            fillReserve={entries.length === 0 ? 74 : 48}
             rows={tableRows}
             columns={entryColumns}
             rowKey="id"
@@ -597,6 +599,8 @@ export default function MudCostAnalysis() {
           </Typography>
           {balanceError && <ErrorMessage message={balanceError} />}
           {balanceLoading ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={25}/></Box> : <DataTable
+            fillHeight
+            fillReserve={56}
             rows={balance?.rows ?? []}
             columns={balanceColumns}
             rowKey="id"

@@ -68,7 +68,7 @@ export default function AuditLog() {
       </Box>
     </Box>
     <ErrorMessage message={error}/>
-    <DataTable rows={rows} columns={columns} searchPlaceholder="Search loaded entries..." exportName="audit-log"/>
+    <DataTable fillHeight fillReserve={total > rows.length ? 40 : 0} rows={rows} columns={columns} searchPlaceholder="Search loaded entries..." exportName="audit-log"/>
     {total > rows.length && <Typography fontSize={12} color="text.secondary" mt={1.5}>Showing the latest {rows.length} of {total} matching entries. Narrow the date range to see older records.</Typography>}
   </>
 }

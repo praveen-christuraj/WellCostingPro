@@ -105,6 +105,7 @@ export function AfeDeletedTab() {
     {loading
       ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box>
       : <DataTable
+        fillHeight
         rows={rows}
         columns={columns}
         searchPlaceholder="Search deleted AFEs by code, name, rig or well..."

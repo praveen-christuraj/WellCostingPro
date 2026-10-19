@@ -292,6 +292,7 @@ export default function CatalogueLists() {
         </Box>
 
         {loading ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <DataTable
+          fillHeight
           rows={rows}
           columns={columns}
           searchPlaceholder="Search values..."
