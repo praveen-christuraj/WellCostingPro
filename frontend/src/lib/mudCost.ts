@@ -13,12 +13,10 @@ export const MUD_COST_CATEGORIES: { key: MudCostCategory; label: string }[] = [
   { key: 'additions', label: 'Additions' },
   { key: 'consumption_losses', label: 'Consumption/Losses' },
   { key: 'others', label: 'Others' },
-  { key: 'closing_stock', label: 'Closing Stock' },
 ]
 
 export const MUD_COST_STOCK_LINES: MudCostLineSpec[] = [
   { code: 'opening_stock', category: 'opening_stock', label: 'Opening Stock' },
-  { code: 'actual_closing_stock', category: 'closing_stock', label: 'Actual Closing Stock' },
 ]
 
 export const MUD_COST_ENTRY_LINES: MudCostLineSpec[] = [
@@ -50,7 +48,6 @@ export const MUD_COST_ENTRY_LINES: MudCostLineSpec[] = [
 export const MUD_COST_LINE_SPECS = [
   MUD_COST_STOCK_LINES[0],
   ...MUD_COST_ENTRY_LINES,
-  MUD_COST_STOCK_LINES[1],
 ]
 
 export const MUD_COST_LINE_GROUPS: { key: MudCostCategory; label: string; lines: MudCostLineSpec[] }[] = [
@@ -127,10 +124,7 @@ export type MudCostEntry = {
   additions: string
   consumption_losses: string
   others: string
-  book_closing_stock: string
-  actual_closing_stock: string
-  actual_closing_stock_remarks: string
-  variance: string
+  closing_stock: string
   lines: MudCostLine[]
   is_deleted: boolean
   deleted_at: string | null
@@ -173,9 +167,7 @@ export type MudCostBalanceRow = {
   additions: string
   consumption_losses: string
   others: string
-  book_closing_stock: string
-  actual_closing_stock: string
-  variance: string
+  closing_stock: string
 }
 
 export type MudCostMaterialBalance = {
@@ -215,8 +207,6 @@ export const MUD_COST_IMPORT_SAMPLE: Record<string, string> = {
   opening_stock_remarks: 'Initial tank measurement',
   extra_obm_received: '20',
   extra_obm_received_remarks: 'Supplier delivery ticket 1048',
-  actual_closing_stock: '515',
-  actual_closing_stock_remarks: 'End of day pit reading',
 }
 
 export function mudQuantity(value: string | number | null | undefined): string {

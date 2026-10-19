@@ -27,7 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.domain.mud_cost import MUD_COST_DB_CATEGORY_KEYS, MUD_COST_LINE_CODES
+from app.domain.mud_cost import MUD_COST_DB_CATEGORY_KEYS, MUD_COST_DB_LINE_CODES
 from app.models.rig_well import now, uid
 
 
@@ -94,10 +94,9 @@ class MudCostEntryLine(Base):
     __tablename__ = "mud_cost_entry_lines"
     __table_args__ = (
         UniqueConstraint("entry_id", "line_code", name="uq_mud_cost_entry_lines_entry_code"),
-        CheckConstraint(_in_values("line_code", MUD_COST_LINE_CODES), name="ck_mud_cost_entry_lines_code"),
+        CheckConstraint(_in_values("line_code", MUD_COST_DB_LINE_CODES), name="ck_mud_cost_entry_lines_code"),
         CheckConstraint(_in_values("category", MUD_COST_DB_CATEGORY_KEYS), name="ck_mud_cost_entry_lines_category"),
-        CheckConstraint("amount >= 0", name="ck_mud_cost_entry_lines_amount"),
-        CheckConstraint("amount = 0 OR LENGTH(TRIM(remarks)) >= 3", name="ck_mud_cost_entry_lines_remarks"),
+        CheckConstraint("amount >= 0 OR line_code = 'opening_stock'", name="ck_mud_cost_entry_lines_amount"),
         Index("ix_mud_cost_entry_line_entry_order", "entry_id", "sort_order"),
         Index("ix_mud_cost_entry_line_org_category", "organization_id", "category"),
     )

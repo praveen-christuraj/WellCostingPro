@@ -34,13 +34,6 @@ function dateLabel(value: string | null | undefined): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString()
 }
 
-function signedQuantity(value: string | number): string {
-  const formatted = mudQuantity(value)
-  const amount = Number(value)
-  if (formatted === '—' || !Number.isFinite(amount)) return '—'
-  return `${amount > 0 ? '+' : ''}${formatted}`
-}
-
 function Stat({ label, value, hint }: { label: string; value: string; hint: string }) {
   return <Paper className="stat-card" variant="outlined" sx={{ p: `${space[4]}px`, borderRadius: `${radius.lg}px`, minWidth: 0 }}>
     <Typography color="text.secondary" fontSize={11} fontWeight={800} letterSpacing={0.7} textTransform="uppercase">{label}</Typography>
@@ -238,9 +231,7 @@ export default function MudCostAnalysis() {
     { headerName: 'ADDITIONS', field: 'additions', minWidth: 125, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'CONSUMPTION / LOSSES', field: 'consumption_losses', minWidth: 175, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'OTHERS', field: 'others', minWidth: 110, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
-    { headerName: 'BOOK CLOSING', field: 'book_closing_stock', minWidth: 145, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
-    { headerName: 'ACTUAL CLOSING', field: 'actual_closing_stock', minWidth: 145, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
-    { headerName: 'VARIANCE', field: 'variance', minWidth: 125, valueFormatter: params => signedQuantity(String(params.value ?? '0')) },
+    { headerName: 'CLOSING STOCK', field: 'closing_stock', minWidth: 145, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     {
       headerName: 'ACTIONS', field: 'id', minWidth: deletedView ? 210 : 160, width: deletedView ? 220 : 185, sortable: false,
       cellRenderer: (params: ICellRendererParams<MudCostEntry>) => {
@@ -278,9 +269,7 @@ export default function MudCostAnalysis() {
     { headerName: 'ADDITIONS', field: 'additions', minWidth: 125, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'CONSUMPTION / LOSSES', field: 'consumption_losses', minWidth: 175, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'OTHERS', field: 'others', minWidth: 110, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
-    { headerName: 'BOOK CLOSING', field: 'book_closing_stock', minWidth: 145, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
-    { headerName: 'ACTUAL CLOSING', field: 'actual_closing_stock', minWidth: 145, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
-    { headerName: 'VARIANCE', field: 'variance', minWidth: 125, valueFormatter: params => signedQuantity(String(params.value ?? '0')) },
+    { headerName: 'CLOSING STOCK', field: 'closing_stock', minWidth: 145, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'ENTRY COUNT', field: 'entry_count', minWidth: 110 },
   ], [])
 
@@ -457,7 +446,7 @@ export default function MudCostAnalysis() {
     <PageHeading
       eyebrow="DAILY COST MANAGEMENT / MUD COST ANALYSIS"
       title="Mud Cost Analysis"
-      subtitle="Capture section-scoped daily mud movements and reconcile book stock against actual closing stock. Each well/date has a single entry; balances stay separate by section."
+      subtitle="Capture section-scoped daily mud movements and calculate closing stock. Each well/date has a single entry; balances stay separate by section."
       action={<Box display="flex" gap={1} flexWrap="wrap">
         <Button variant="outlined" startIcon={<RefreshRounded/>} onClick={() => void refresh()} disabled={referenceLoading || entriesLoading || balanceLoading}>
           {referenceLoading || entriesLoading || balanceLoading ? 'Refreshing…' : 'Refresh'}
@@ -516,7 +505,7 @@ export default function MudCostAnalysis() {
         <Stat label="Daily entries" value={activeEntries.length.toLocaleString()} hint="Active records for the selected well"/>
         <Stat label="Sections used" value={trackedSections.toLocaleString()} hint="Each section reconciles independently"/>
         <Stat label="Latest entry" value={dateLabel(activeEntries[0]?.entry_date)} hint={activeEntries[0]?.section_label ?? 'No records yet'}/>
-        <Stat label="Latest variance" value={entrySectionId === ALL_SECTIONS ? 'Per section' : latestEntry ? signedQuantity(latestEntry.variance) : '—'} hint={entrySection?.display_name ?? 'Choose one section to see its latest variance'}/>
+        <Stat label="Latest closing stock" value={entrySectionId === ALL_SECTIONS ? 'Per section' : latestEntry ? mudQuantity(latestEntry.closing_stock) : '—'} hint={entrySection?.display_name ?? 'Choose one section to see its latest closing stock'}/>
       </Box>}
 
       <Paper variant="outlined" sx={{ borderRadius: `${radius.lg}px`, overflow: 'hidden' }}>
@@ -604,7 +593,7 @@ export default function MudCostAnalysis() {
           </Box>
           {invalidBalanceDates && <Alert severity="error" sx={{ mb: 1.4 }}>The start date must not be after the end date.</Alert>}
           <Typography color="text.secondary" fontSize={11.5} mb={1.4}>
-            {MUD_COST_BALANCE_VIEWS.find(view => view.value === balanceView)?.help} Opening stock carries forward from the prior actual closing. When all sections are selected, every row is still section-specific.
+            {MUD_COST_BALANCE_VIEWS.find(view => view.value === balanceView)?.help} Opening stock carries forward from the prior calculated closing stock, including across days without transactions. When all sections are selected, every row is still section-specific.
           </Typography>
           {balanceError && <ErrorMessage message={balanceError} />}
           {balanceLoading ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={25}/></Box> : <DataTable
@@ -661,7 +650,7 @@ export default function MudCostAnalysis() {
       open={importOpen}
       onClose={() => setImportOpen(false)}
       title="Import Mud Cost entries"
-      subtitle={`Import date-wise rows into ${selectedWell?.display_name ?? 'the selected well'} · ${entrySection?.display_name ?? 'the selected section'}. Blank quantities are saved as zero; use the template to enter remarks alongside non-zero quantities.`}
+      subtitle={`Import date-wise rows into ${selectedWell?.display_name ?? 'the selected well'} · ${entrySection?.display_name ?? 'the selected section'}. Blank quantities are saved as zero; remarks are optional for every row.`}
       headers={MUD_COST_IMPORT_HEADERS}
       optionalHeaders={MUD_COST_IMPORT_OPTIONAL_HEADERS}
       sample={MUD_COST_IMPORT_SAMPLE}

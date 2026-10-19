@@ -22,7 +22,6 @@ MUD_COST_CATEGORIES: tuple[tuple[str, str], ...] = (
     ("additions", "Additions"),
     ("consumption_losses", "Consumption/Losses"),
     ("others", "Others"),
-    ("closing_stock", "Closing Stock"),
 )
 
 MUD_COST_LINE_SPECS: tuple[MudCostLineSpec, ...] = (
@@ -50,7 +49,6 @@ MUD_COST_LINE_SPECS: tuple[MudCostLineSpec, ...] = (
     MudCostLineSpec("backloads", "others", "Backloads"),
     MudCostLineSpec("obm_left_in_hole", "others", "OBM Left-In-Hole"),
     MudCostLineSpec("other_losses_others", "others", "Others"),
-    MudCostLineSpec("actual_closing_stock", "closing_stock", "Actual Closing Stock"),
 )
 
 MUD_COST_LINE_BY_CODE: Mapping[str, MudCostLineSpec] = {
@@ -58,7 +56,9 @@ MUD_COST_LINE_BY_CODE: Mapping[str, MudCostLineSpec] = {
 }
 MUD_COST_LINE_CODES: tuple[str, ...] = tuple(item.code for item in MUD_COST_LINE_SPECS)
 MUD_COST_CATEGORIES_BY_KEY: Mapping[str, str] = dict(MUD_COST_CATEGORIES)
-MUD_COST_DB_CATEGORY_KEYS: tuple[str, ...] = tuple(MUD_COST_CATEGORIES_BY_KEY)
+MUD_COST_DB_CATEGORY_KEYS: tuple[str, ...] = (*MUD_COST_CATEGORIES_BY_KEY, "closing_stock")
+# Retain historical measurements in storage only; they are no longer inputs.
+MUD_COST_DB_LINE_CODES = (*MUD_COST_LINE_CODES, "actual_closing_stock")
 ZERO = Decimal("0")
 
 
@@ -77,12 +77,12 @@ def line_amounts(rows: Mapping[str, object]) -> dict[str, Decimal]:
 def group_total(amounts: Mapping[str, Decimal], category: str) -> Decimal:
     return sum(
         (amounts[item.code] for item in MUD_COST_LINE_SPECS if item.category == category
-         and item.code not in {"opening_stock", "actual_closing_stock"}),
+         and item.code != "opening_stock"),
         ZERO,
     )
 
 
-def book_closing_stock(
+def closing_stock(
     opening_stock: Decimal,
     receipt: Decimal,
     additions: Decimal,
@@ -91,8 +91,3 @@ def book_closing_stock(
 ) -> Decimal:
     """Opening + receipts + additions − losses − other deductions."""
     return opening_stock + receipt + additions - consumption_losses - others
-
-
-def variance(actual_closing_stock: Decimal, book_closing: Decimal) -> Decimal:
-    """Variance is explicitly Actual Closing Stock minus Book Closing Stock."""
-    return actual_closing_stock - book_closing

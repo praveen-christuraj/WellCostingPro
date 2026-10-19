@@ -37,7 +37,7 @@ export function MudCostPrintSheet({ report }: { report: MudCostPrintReport | nul
       <thead><tr>
         <th>Date / period</th><th>Section</th><th className="num">Opening stock</th><th className="num">Receipt</th>
         <th className="num">Additions</th><th className="num">Consumption / losses</th><th className="num">Others</th>
-        <th className="num">Book closing</th><th className="num">Actual closing</th><th className="num">Variance</th>
+        <th className="num">Closing stock</th>
       </tr></thead>
       <tbody>{report.rows.map(row => <tr key={row.id}>
         <td>{row.period_label}{row.entry_count > 1 ? <div className="ps-sub">{row.first_entry_date} to {row.last_entry_date} · {row.entry_count} entries</div> : null}</td>
@@ -47,12 +47,10 @@ export function MudCostPrintSheet({ report }: { report: MudCostPrintReport | nul
         <td className="num">{mudQuantity(row.additions)}</td>
         <td className="num">{mudQuantity(row.consumption_losses)}</td>
         <td className="num">{mudQuantity(row.others)}</td>
-        <td className="num">{mudQuantity(row.book_closing_stock)}</td>
-        <td className="num">{mudQuantity(row.actual_closing_stock)}</td>
-        <td className="num">{mudQuantity(row.variance)}</td>
+        <td className="num">{mudQuantity(row.closing_stock)}</td>
       </tr>)}</tbody>
     </table> : <p className="ps-empty">No material-balance rows in the selected scope and period.</p>}
-    <p className="ps-note">Book closing stock = opening stock + receipt + additions − consumption/losses − others. Variance = actual closing stock − book closing stock.</p>
+    <p className="ps-note">Closing stock = opening stock + receipt + additions − consumption/losses − others.</p>
   </article>, document.body)
 }
 

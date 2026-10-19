@@ -7,7 +7,7 @@ import { ExpandMoreRounded } from '@mui/icons-material'
 import { ErrorMessage, FormDialog } from '../Common'
 import { radius } from '../../designSystem'
 import {
-  MUD_COST_ENTRY_LINES, MUD_COST_LINE_GROUPS, MUD_COST_STOCK_LINES,
+  MUD_COST_ENTRY_LINES, MUD_COST_LINE_GROUPS, MUD_COST_STOCK_LINES, MUD_COST_LINE_SPECS,
   localMudToday, validMudDate, type MudCostEntry, type MudCostEntryUpdatePayload,
   type MudCostLineInput, type MudCostLineSpec, type MudCostSectionOption,
 } from '../../lib/mudCost'
@@ -23,6 +23,7 @@ const QUANTITY_PATTERN = /^(?:\d+|\d*\.\d{1,3})$/
 
 function quantityMilli(value: string | null | undefined): bigint {
   const text = (value ?? '').trim()
+  if (text.startsWith('-')) return -quantityMilli(text.slice(1))
   if (!text || !QUANTITY_PATTERN.test(text)) return 0n
   const [whole = '0', fraction = ''] = text.split('.')
   return BigInt(whole || '0') * 1000n + BigInt((fraction + '000').slice(0, 3) || '0')
@@ -54,8 +55,6 @@ function blankLines(): LineState {
   return Object.fromEntries(MUD_COST_LINE_SPECS.map(line => [line.code, { amount: '', remarks: '' }]))
 }
 
-const MUD_COST_LINE_SPECS = [...MUD_COST_STOCK_LINES.slice(0, 1), ...MUD_COST_ENTRY_LINES, ...MUD_COST_STOCK_LINES.slice(1)]
-
 function initialForm(entry: MudCostEntry | null): FormState {
   const lines = blankLines()
   if (entry) {
@@ -67,11 +66,6 @@ function initialForm(entry: MudCostEntry | null): FormState {
     }
   }
   return { entry_date: entry?.entry_date ?? localMudToday(), lines }
-}
-
-function minRemarkError(amount: string, remarks: string, label: string): string {
-  if (Number(amount || 0) > 0 && remarks.trim().length < 3) return `${label}: add a remark of at least 3 characters.`
-  return ''
 }
 
 function NumberCell({ line, value, onChange, error, disabled = false }: {
@@ -126,15 +120,15 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
     }
   }, [open, entry])
 
-  const priorRows = useMemo(() => entries
-    .filter(row => row.section_id === (entry?.section_id ?? section?.id) && row.id !== entry?.id && !row.is_deleted && row.entry_date < form.entry_date)
-    .sort((a, b) => b.entry_date.localeCompare(a.entry_date)), [entries, entry?.id, entry?.section_id, section?.id, form.entry_date])
-  const isFirstSectionEntry = priorRows.length === 0
-  const previousActual = priorRows[0]
+  const sectionRows = useMemo(() => entries
+    .filter(row => row.rig_id === (entry?.rig_id ?? rig?.id) && row.well_id === (entry?.well_id ?? well?.id) && row.section_id === (entry?.section_id ?? section?.id) && row.id !== entry?.id && !row.is_deleted)
+    .sort((a, b) => b.entry_date.localeCompare(a.entry_date)), [entries, entry?.id, entry?.rig_id, entry?.well_id, entry?.section_id, rig?.id, well?.id, section?.id])
+  const openingLocked = sectionRows.length > 0 || entry !== null
+  const previousEntry = sectionRows.find(row => row.entry_date < form.entry_date)
+  const initialEntry = sectionRows[sectionRows.length - 1]
   const openingLine = form.lines.opening_stock ?? { amount: '', remarks: '' }
-  const actualLine = form.lines.actual_closing_stock ?? { amount: '', remarks: '' }
-  const openingAmount = isFirstSectionEntry ? openingLine.amount : previousActual?.actual_closing_stock ?? entry?.opening_stock ?? '0'
-  const openingRemarks = isFirstSectionEntry ? openingLine.remarks : previousActual?.actual_closing_stock_remarks ?? entry?.opening_stock_remarks ?? ''
+  const openingAmount = previousEntry?.closing_stock ?? entry?.opening_stock ?? initialEntry?.opening_stock ?? openingLine.amount
+  const openingRemarks = previousEntry ? '' : entry?.opening_stock_remarks ?? initialEntry?.opening_stock_remarks ?? openingLine.remarks
   const categoryTotal = (category: string) => MUD_COST_ENTRY_LINES
     .filter(line => line.category === category)
     .reduce((total, line) => total + quantityMilli(form.lines[line.code]?.amount), 0n)
@@ -143,9 +137,7 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
   const additionsTotal = categoryTotal('additions')
   const consumptionTotal = categoryTotal('consumption_losses')
   const otherTotal = categoryTotal('others')
-  const actualTotal = quantityMilli(actualLine.amount)
-  const bookTotal = openingTotal + receiptTotal + additionsTotal - consumptionTotal - otherTotal
-  const varianceTotal = actualTotal - bookTotal
+  const closingTotal = openingTotal + receiptTotal + additionsTotal - consumptionTotal - otherTotal
 
   const duplicateDate = existingRows.find(row => row.id !== entry?.id && row.entry_date === form.entry_date)
   const dateError = !validMudDate(form.entry_date)
@@ -159,7 +151,7 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
   const lineErrors = useMemo(() => {
     const errors: Record<string, string> = {}
     for (const spec of MUD_COST_LINE_SPECS) {
-      if (spec.code === 'opening_stock' && !isFirstSectionEntry) continue
+      if (spec.code === 'opening_stock' && openingLocked) continue
       const value = form.lines[spec.code] ?? { amount: '', remarks: '' }
       const text = value.amount.trim()
       if (text) {
@@ -172,11 +164,9 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
           continue
         }
       }
-      const problem = minRemarkError(value.amount, value.remarks, spec.label)
-      if (problem) errors[spec.code] = problem
     }
     return errors
-  }, [form.lines, isFirstSectionEntry])
+  }, [form.lines, openingLocked])
 
   const updateDate = (entry_date: string) => setForm(current => ({ ...current, entry_date }))
   const updateLine = (code: string, field: 'amount' | 'remarks', value: string) => {
@@ -189,27 +179,27 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
   const validate = async () => {
     if (dateError) { setFormError(dateError); return }
     if (Object.keys(lineErrors).length) {
-      setFormError('Correct quantity values and add a remark for each non-zero quantity before saving.')
+      setFormError('Correct quantity values before saving.')
       return
     }
     setFormError('')
     const lines: MudCostLineInput[] = MUD_COST_LINE_SPECS.map(spec => {
       const row = form.lines[spec.code] ?? { amount: '', remarks: '' }
-      const amount = spec.code === 'opening_stock' && !isFirstSectionEntry ? null : (row.amount.trim() || null)
-      const remarks = spec.code === 'opening_stock' && !isFirstSectionEntry ? '' : row.remarks.trim()
+      const amount = spec.code === 'opening_stock' && openingLocked ? null : (row.amount.trim() || null)
+      const remarks = spec.code === 'opening_stock' && openingLocked ? '' : row.remarks.trim()
       return { line_code: spec.code, amount, remarks }
     })
     await onSave({ entry_date: form.entry_date, lines })
   }
 
   const stockSection = (spec: MudCostLineSpec, derived: boolean) => {
-    const value = spec.code === 'opening_stock' ? openingAmount : actualLine.amount
-    const remarks = spec.code === 'opening_stock' ? openingRemarks : actualLine.remarks
-    const errorText = spec.code === 'opening_stock' && !isFirstSectionEntry ? '' : lineErrors[spec.code]
+    const value = openingAmount
+    const remarks = openingRemarks
+    const errorText = spec.code === 'opening_stock' && openingLocked ? '' : lineErrors[spec.code]
     return <Paper key={spec.code} variant="outlined" sx={{ p: 1.5, borderRadius: `${radius.md}px`, minWidth: 0 }}>
       <Typography fontWeight={800} fontSize={13} mb={1}>{spec.label}</Typography>
       {derived && <Typography color="text.secondary" fontSize={11.5} mb={1}>
-        Carried forward from {previousActual?.entry_date ?? 'the preceding actual closing'}; this section uses its initial value only on the first recorded date.
+        {previousEntry ? `Carried forward from closing stock on ${previousEntry.entry_date}. Days without transactions leave stock unchanged.` : 'The initial opening stock has already been recorded and is locked.'}
       </Typography>}
       <Box display="grid" gap={1.2} sx={{ gridTemplateColumns: { xs: '1fr', md: 'minmax(140px, .55fr) minmax(220px, 1fr)' } }}>
         <NumberCell
@@ -237,7 +227,7 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
     busy={saving}
     busyLabel="Saving Mud Cost entry…"
     title={entry ? 'Edit Mud Cost entry' : 'New Mud Cost entry'}
-    subtitle="Record one date for this well. Blank rows are saved as zero; every non-zero quantity needs a remark."
+    subtitle="Record one date for this well. Blank rows are saved as zero; remarks are optional for every row."
     maxWidth="xl"
     submitLabel={entry ? 'Save entry' : 'Create entry'}
     submitDisabled={!section || !well || Boolean(dateError) || Object.keys(lineErrors).length > 0}
@@ -261,13 +251,10 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
       </Paper>
 
       <Alert severity="info">
-        Keep quantities in one consistent volume unit for this well section. Opening stock after the first entry is calculated from the previous recorded actual closing stock.
+        Keep quantities in one consistent volume unit for this well section. Opening stock after the first entry is calculated from the previous calculated closing stock. Days without transactions carry the same balance forward.
       </Alert>
 
-      <Box display="grid" gap={1.2} sx={{ gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' } }}>
-        {stockSection(MUD_COST_STOCK_LINES[0], !isFirstSectionEntry)}
-        {stockSection(MUD_COST_STOCK_LINES[1], false)}
-      </Box>
+      {stockSection(MUD_COST_STOCK_LINES[0], openingLocked)}
 
       <Paper variant="outlined" sx={{ p: 1.5, borderRadius: `${radius.md}px` }}>
         <Box display="flex" alignItems="baseline" justifyContent="space-between" gap={1} flexWrap="wrap" mb={1.2}>
@@ -281,16 +268,14 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
             { label: 'Additions', value: displayMilli(additionsTotal) },
             { label: 'Consumption / losses', value: displayMilli(consumptionTotal) },
             { label: 'Others', value: displayMilli(otherTotal) },
-            { label: 'Book closing stock', value: displayMilli(bookTotal) },
-            { label: 'Actual closing stock', value: displayMilli(actualTotal) },
-            { label: 'Variance', value: displayMilli(varianceTotal) },
+            { label: 'Closing stock', value: displayMilli(closingTotal) },
           ].map(item => <Box key={item.label} sx={{ minWidth: 0, borderLeft: '2px solid', borderColor: 'divider', pl: 1 }}>
             <Typography color="text.secondary" fontSize={10.5} fontWeight={700} textTransform="uppercase">{item.label}</Typography>
             <Typography className="tnum" fontSize={15} fontWeight={800}>{item.value}</Typography>
           </Box>)}
         </Box>
         <Typography color="text.secondary" fontSize={11} mt={1.2}>
-          Book closing = opening + receipt + additions − consumption/losses − others · Variance = actual closing − book closing.
+          Closing stock = opening + receipt + additions − consumption/losses − others.
         </Typography>
       </Paper>
 

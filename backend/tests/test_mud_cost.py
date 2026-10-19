@@ -145,35 +145,29 @@ def test_daily_lines_persist_and_balances_carry_forward_inside_each_section():
             line("barite", "5", "Weighting agent addition"),
             line("shakers", "8", "Cuttings at shakers"),
             line("offline_centrifuge_loss", "2", "Offline centrifuge dump"),
-            line("actual_closing_stock", "525", "End-of-day pit measurement"),
         ])
         assert Decimal(first["opening_stock"]) == Decimal("500")
         assert Decimal(first["receipt"]) == Decimal("30")
         assert Decimal(first["additions"]) == Decimal("5")
         assert Decimal(first["consumption_losses"]) == Decimal("8")
         assert Decimal(first["others"]) == Decimal("2")
-        assert Decimal(first["book_closing_stock"]) == Decimal("525")
-        assert Decimal(first["variance"]) == Decimal("0")
+        assert Decimal(first["closing_stock"]) == Decimal("525")
+        assert "variance" not in first and "actual_closing_stock" not in first
         assert first["opening_stock_remarks"] == "Initial pit inventory"
-        assert len(first["lines"]) == 25
+        assert len(first["lines"]) == 24
 
         second = create_entry(client, headers, scope, "2026-10-11", lines=[
             line("other_receipts", "10", "Recovered mud return"),
-            line("actual_closing_stock", "530", "End-of-day pit measurement"),
         ])
         assert Decimal(second["opening_stock"]) == Decimal("525")
-        assert second["opening_stock_remarks"] == "End-of-day pit measurement"
-        assert Decimal(second["book_closing_stock"]) == Decimal("535")
-        assert Decimal(second["actual_closing_stock"]) == Decimal("530")
-        assert Decimal(second["variance"]) == Decimal("-5")
+        assert second["opening_stock_remarks"] == ""
+        assert Decimal(second["closing_stock"]) == Decimal("535")
 
         other_section = create_entry(client, headers, scope, "2026-10-12", section_index=1, lines=[
             line("opening_stock", "700", "First stock in this section"),
-            line("actual_closing_stock", "700", "Section-end pit measurement"),
         ])
         assert Decimal(other_section["opening_stock"]) == Decimal("700")
-        assert Decimal(other_section["book_closing_stock"]) == Decimal("700")
-        assert Decimal(other_section["variance"]) == Decimal("0")
+        assert Decimal(other_section["closing_stock"]) == Decimal("700")
 
         listed = client.get(
             f"/api/v1/mud-cost/entries?rig_id={scope['rig']['id']}&well_id={scope['well']['id']}",
@@ -205,10 +199,8 @@ def test_daily_lines_persist_and_balances_carry_forward_inside_each_section():
         monthly_by_section = {row["section_id"]: row for row in monthly.json()["rows"]}
         first_section_id, second_section_id = [item["id"] for item in scope["sections"]]
         assert Decimal(monthly_by_section[first_section_id]["opening_stock"]) == Decimal("500")
-        assert Decimal(monthly_by_section[first_section_id]["actual_closing_stock"]) == Decimal("530")
-        assert Decimal(monthly_by_section[first_section_id]["book_closing_stock"]) == Decimal("535")
+        assert Decimal(monthly_by_section[first_section_id]["closing_stock"]) == Decimal("535")
         assert Decimal(monthly_by_section[second_section_id]["opening_stock"]) == Decimal("700")
-        assert Decimal(monthly_by_section[second_section_id]["actual_closing_stock"]) == Decimal("700")
 
         section_view = client.get(
             f"/api/v1/mud-cost/material-balance?rig_id={scope['rig']['id']}&well_id={scope['well']['id']}&view=section",
@@ -234,35 +226,28 @@ def test_daily_lines_persist_and_balances_carry_forward_inside_each_section():
                 MudCostEntryLine.organization_id == organization.id,
                 MudCostEntryLine.entry_id == first["id"],
             )).all()
-            assert len(stored_lines) == 25
+            assert len(stored_lines) == 24
             stored = {row.line_code: row for row in stored_lines}
             assert stored["extra_obm_received"].amount == Decimal("30.000")
             assert stored["extra_obm_received"].remarks == "Supplier delivery ticket 1048"
             assert stored["opening_stock"].amount == Decimal("500.000")
-            assert stored["actual_closing_stock"].amount == Decimal("525.000")
             carried = db.scalar(select(MudCostEntryLine).where(
                 MudCostEntryLine.entry_id == second["id"],
                 MudCostEntryLine.line_code == "opening_stock",
             ))
             assert carried is not None
             assert carried.amount == Decimal("525.000")
-            assert carried.remarks == "End-of-day pit measurement"
+            assert carried.remarks == ""
 
 
-def test_one_well_date_remarks_and_tenant_boundaries_are_enforced():
+def test_one_well_date_and_tenant_boundaries_are_enforced():
     with TestClient(app) as client:
         north = login(client, "north")
         south = login(client, "south")
         scope = setup_well(client, north)
 
-        missing_remark = create_entry(client, north, scope, "2026-10-10", lines=[
-            line("extra_obm_received", "1", "  "),
-        ], status=422)
-        assert "remark" in str(missing_remark).lower()
-
         created = create_entry(client, north, scope, "2026-10-10", lines=[
-            line("opening_stock", "10", "Initial stock"),
-            line("actual_closing_stock", "10", "Closing stock"),
+            line("opening_stock", "10"),
         ])
         duplicate = create_entry(client, north, scope, "2026-10-10", section_index=1, lines=[
             line("opening_stock", "999", "Must not replace"),
@@ -304,7 +289,7 @@ def test_bulk_import_delete_restore_and_export_audit_keep_balances_consistent():
                 {
                     "entry_date": "2026-10-11",
                     "other_receipts": "10",
-                    "other_receipts_remarks": "Recovered mud return",
+                    "other_receipts_remarks": "",
                     "actual_closing_stock": "530",
                     "actual_closing_stock_remarks": "Daily tank reading",
                 },
@@ -313,13 +298,13 @@ def test_bulk_import_delete_restore_and_export_audit_keep_balances_consistent():
                     "opening_stock": "500",
                     "opening_stock_remarks": "Initial tank measurement",
                     "extra_obm_received": "30",
-                    "extra_obm_received_remarks": "Supplier ticket 1048",
+                    "extra_obm_received_remarks": "",
                     "actual_closing_stock": "520",
                     "actual_closing_stock_remarks": "Daily tank reading",
                 },
                 {
                     "entry_date": "2026-10-12",
-                    "extra_obm_received": "5",
+                    "extra_obm_received": "-5",
                     "actual_closing_stock": "535",
                     "actual_closing_stock_remarks": "Remark absent on receipt",
                 },
@@ -336,7 +321,7 @@ def test_bulk_import_delete_restore_and_export_audit_keep_balances_consistent():
         )
         entries = entries_response.json()
         assert [row["entry_date"] for row in entries] == ["2026-10-11", "2026-10-10"]
-        assert Decimal(entries[0]["opening_stock"]) == Decimal("520")
+        assert Decimal(entries[0]["opening_stock"]) == Decimal("530")
 
         ids = [row["id"] for row in entries]
         bulk_deleted = _json(client, "post", "/api/v1/mud-cost/entries/bulk-delete", headers, {"ids": ids})
@@ -381,3 +366,93 @@ def test_daily_cost_permission_set_covers_mud_cost_workflow():
     assert set(CAPABILITIES["daily-cost"]) >= {
         "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
     }
+
+
+def test_skipped_days_locked_openings_and_recalculation_after_changes():
+    with TestClient(app) as client:
+        headers = login(client)
+        scope = setup_well(client, headers)
+        first = create_entry(client, headers, scope, "2026-10-15", lines=[
+            line("opening_stock", "100"), line("extra_obm_received", "25"),
+        ])
+        # No entry on the 16th: both its opening and closing are implicitly 125.
+        later = create_entry(client, headers, scope, "2026-10-17", lines=[
+            line("opening_stock", "999"), line("shakers", "5", "x"),
+        ])
+        assert Decimal(later["opening_stock"]) == Decimal("125")
+        assert Decimal(later["closing_stock"]) == Decimal("120")
+
+        def get_later():
+            return _json(client, "get", f"/api/v1/mud-cost/entries/{later['id']}", headers, {})
+
+        def update(entry, entry_date, lines):
+            return _json(client, "put", f"/api/v1/mud-cost/entries/{entry['id']}", headers, {
+                "entry_date": entry_date, "lines": lines,
+            })
+
+        # The original opening cannot be overwritten through the API either.
+        changed = update(first, "2026-10-15", [line("opening_stock", "999"), line("extra_obm_received", "30")])
+        assert Decimal(changed["opening_stock"]) == Decimal("100")
+        assert Decimal(get_later()["opening_stock"]) == Decimal("130")
+
+        inserted = create_entry(client, headers, scope, "2026-10-16", lines=[line("barite", "2")])
+        assert Decimal(inserted["opening_stock"]) == Decimal("130")
+        assert Decimal(get_later()["opening_stock"]) == Decimal("132")
+        assert Decimal(get_later()["closing_stock"]) == Decimal("127")
+
+        # Filtering out prior days must not reset the opening stock.
+        for view in ("daily", "monthly", "section", "inception"):
+            balance = client.get("/api/v1/mud-cost/material-balance", headers=headers, params={
+                "rig_id": scope["rig"]["id"], "well_id": scope["well"]["id"],
+                "view": view, "from": "2026-10-17", "to": "2026-10-17",
+            })
+            assert balance.status_code == 200, balance.text
+            row = balance.json()["rows"][0]
+            assert Decimal(row["opening_stock"]) == Decimal("100" if view == "inception" else "132")
+            assert Decimal(row["closing_stock"]) == Decimal("127")
+            assert "variance" not in row and "actual_closing_stock" not in row
+
+        _json(client, "post", "/api/v1/mud-cost/entries/bulk-delete", headers, {"ids": [inserted["id"]]})
+        assert Decimal(get_later()["opening_stock"]) == Decimal("130")
+        _json(client, "post", "/api/v1/mud-cost/entries/bulk-restore", headers, {"ids": [inserted["id"]]})
+        assert Decimal(get_later()["opening_stock"]) == Decimal("132")
+
+        # Moving a transaction to after the 17th removes it from that day's opening.
+        update(inserted, "2026-10-18", [line("barite", "2")])
+        assert Decimal(get_later()["opening_stock"]) == Decimal("130")
+        # A new earlier date also reuses the initial stock instead of accepting another seed.
+        earlier = create_entry(client, headers, scope, "2026-10-14", lines=[
+            line("opening_stock", "999"), line("base_oil", "3"),
+        ])
+        assert Decimal(earlier["opening_stock"]) == Decimal("100")
+        assert Decimal(get_later()["opening_stock"]) == Decimal("133")
+
+
+def test_all_remarks_optional_and_legacy_closing_never_drives_balance():
+    from app.domain.mud_cost import MUD_COST_LINE_SPECS
+
+    with TestClient(app) as client:
+        headers = login(client)
+        scope = setup_well(client, headers)
+        first = create_entry(client, headers, scope, "2026-10-15", lines=[
+            line(spec.code, "1") for spec in MUD_COST_LINE_SPECS
+        ])
+        assert all(row["remarks"] == "" for row in first["lines"])
+        # Negative calculated stock is not clamped to zero on carry-forward.
+        assert Decimal(first["closing_stock"]) < 0
+        with SessionLocal() as db:
+            stored = db.get(MudCostEntry, first["id"])
+            db.add(MudCostEntryLine(
+                organization_id=stored.organization_id, entry_id=stored.id,
+                line_code="actual_closing_stock", category="closing_stock",
+                line_label="Actual Closing Stock", amount=Decimal("999"), remarks="Legacy measurement", sort_order=24,
+            ))
+            db.commit()
+        later = create_entry(client, headers, scope, "2026-10-17")
+        assert Decimal(later["opening_stock"]) == Decimal(first["closing_stock"])
+        assert Decimal(later["closing_stock"]) == Decimal(first["closing_stock"])
+        assert all(row["line_code"] != "actual_closing_stock" for row in later["lines"])
+        rejected = create_entry(client, headers, scope, "2026-10-18", lines=[
+            line("actual_closing_stock", "100"),
+        ], status=422)
+        assert "Unknown Mud Cost Analysis row" in str(rejected)

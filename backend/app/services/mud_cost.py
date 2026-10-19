@@ -13,10 +13,9 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.domain.mud_cost import (
     MUD_COST_LINE_SPECS,
     ZERO,
-    book_closing_stock,
+    closing_stock,
     group_total,
     line_amounts,
-    variance,
 )
 from app.models import MudCostEntry, MudCostEntryLine, Rig, Well, WellSection
 from app.models.rig_well import now
@@ -270,10 +269,21 @@ def _ensure_line_rows(
 ) -> None:
     incoming = {item.line_code: item for item in rows}
     existing = _line_map(entry)
+    initial_opening = None
+    if "opening_stock" not in existing:
+        # Once this scope has an opening, even a back-dated insert must reuse it.
+        peers = [row for row in _entries_for_section(db, entry.organization_id, entry.section_id)
+                 if row.id != entry.id and row.rig_id == entry.rig_id and row.well_id == entry.well_id]
+        if peers:
+            initial_opening = _line_map(peers[0]).get("opening_stock")
     for sort_order, spec in enumerate(MUD_COST_LINE_SPECS):
+        if spec.code == "opening_stock" and spec.code in existing:
+            continue  # Saved openings are owned by the carry-forward calculation.
         input_row = incoming.get(spec.code)
         amount = ZERO if input_row is None or input_row.amount is None else Decimal(input_row.amount)
         remarks = "" if input_row is None else input_row.remarks.strip()
+        if spec.code == "opening_stock" and initial_opening is not None:
+            amount, remarks = initial_opening.amount, initial_opening.remarks
         line = existing.get(spec.code)
         if line is None:
             line = MudCostEntryLine(
@@ -311,55 +321,40 @@ def _entries_for_section(
 
 
 def _recalculate_section_opening_stock(db: Session, organization_id: str, section_id: str) -> None:
-    """Persist each later day's opening as the previous actual closing.
-
-    The earliest active row retains its own stored opening stock. This makes a
-    back-dated insert, edit, delete or restore deterministic while preserving the
-    first stock observation when an earlier row is temporarily deleted.
-    """
+    """Persist calculated carry-forward, including across days without transactions."""
     entries = _entries_for_section(db, organization_id, section_id, deleted=False)
-    previous_actual: Decimal | None = None
-    previous_actual_remarks = ""
+    balances = _balance_values(entries)
     for entry in entries:
-        lines = _line_map(entry)
-        opening = lines.get("opening_stock")
-        actual = lines.get("actual_closing_stock")
-        if opening is None or actual is None:
-            continue
-        if previous_actual is not None:
-            opening.amount = previous_actual
-            opening.remarks = previous_actual_remarks
+        opening = _line_map(entry).get("opening_stock")
+        if opening is not None:
+            opening.amount = balances[entry.id]["opening_stock"]
+            opening.remarks = balances[entry.id]["opening_stock_remarks"]
             opening.updated_at = now()
-        previous_actual = Decimal(actual.amount)
-        previous_actual_remarks = actual.remarks
     db.flush()
 
 
 def _balance_values(entries: Iterable[MudCostEntry]) -> dict[str, dict[str, Any]]:
-    grouped: dict[str, list[MudCostEntry]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str], list[MudCostEntry]] = defaultdict(list)
     for entry in entries:
-        grouped[entry.section_id].append(entry)
+        grouped[(entry.rig_id, entry.well_id, entry.section_id)].append(entry)
     result: dict[str, dict[str, Any]] = {}
     for section_entries in grouped.values():
         section_entries.sort(key=lambda item: (item.entry_date, item.id))
-        previous_actual: Decimal | None = None
-        previous_actual_remarks = ""
+        previous_closing: Decimal | None = None
         for entry in section_entries:
             lines = _line_map(entry)
             raw = _values_for_entry(entry)
-            if previous_actual is None:
+            if previous_closing is None:
                 opening = raw["opening_stock"]
                 opening_remarks = lines.get("opening_stock").remarks if lines.get("opening_stock") else ""
             else:
-                opening = previous_actual
-                opening_remarks = previous_actual_remarks
+                opening = previous_closing
+                opening_remarks = ""
             receipt = group_total(raw, "receipt")
             additions = group_total(raw, "additions")
             consumption_losses = group_total(raw, "consumption_losses")
             others = group_total(raw, "others")
-            actual_closing = raw["actual_closing_stock"]
-            book_closing = book_closing_stock(opening, receipt, additions, consumption_losses, others)
-            actual_line = lines.get("actual_closing_stock")
+            closing = closing_stock(opening, receipt, additions, consumption_losses, others)
             result[entry.id] = {
                 "opening_stock": opening,
                 "opening_stock_remarks": opening_remarks,
@@ -367,13 +362,9 @@ def _balance_values(entries: Iterable[MudCostEntry]) -> dict[str, dict[str, Any]
                 "additions": additions,
                 "consumption_losses": consumption_losses,
                 "others": others,
-                "book_closing_stock": book_closing,
-                "actual_closing_stock": actual_closing,
-                "actual_closing_stock_remarks": actual_line.remarks if actual_line else "",
-                "variance": variance(actual_closing, book_closing),
+                "closing_stock": closing,
             }
-            previous_actual = actual_closing
-            previous_actual_remarks = actual_line.remarks if actual_line else ""
+            previous_closing = closing
     return result
 
 
@@ -391,11 +382,7 @@ def _entry_out(entry: MudCostEntry, balance: Mapping[str, Any] | None = None) ->
         additions = group_total(raw, "additions")
         consumption_losses = group_total(raw, "consumption_losses")
         others = group_total(raw, "others")
-        actual_closing = raw["actual_closing_stock"]
-        actual_line = _line_map(entry).get("actual_closing_stock")
-        book_closing = book_closing_stock(opening, receipt, additions, consumption_losses, others)
-        actual_remarks = actual_line.remarks if actual_line else ""
-        variance_value = variance(actual_closing, book_closing)
+        closing = closing_stock(opening, receipt, additions, consumption_losses, others)
     else:
         opening = balance["opening_stock"]
         opening_remarks = balance["opening_stock_remarks"]
@@ -403,10 +390,7 @@ def _entry_out(entry: MudCostEntry, balance: Mapping[str, Any] | None = None) ->
         additions = balance["additions"]
         consumption_losses = balance["consumption_losses"]
         others = balance["others"]
-        actual_closing = balance["actual_closing_stock"]
-        actual_remarks = balance["actual_closing_stock_remarks"]
-        book_closing = balance["book_closing_stock"]
-        variance_value = balance["variance"]
+        closing = balance["closing_stock"]
 
     lines = []
     line_rows = _line_map(entry)
@@ -452,10 +436,7 @@ def _entry_out(entry: MudCostEntry, balance: Mapping[str, Any] | None = None) ->
         additions=additions,
         consumption_losses=consumption_losses,
         others=others,
-        book_closing_stock=book_closing,
-        actual_closing_stock=actual_closing,
-        actual_closing_stock_remarks=actual_remarks,
-        variance=variance_value,
+        closing_stock=closing,
         lines=lines,
         is_deleted=entry.is_deleted,
         deleted_at=entry.deleted_at,
@@ -685,9 +666,7 @@ def _persisted_balance_row(entry: MudCostEntry, balance: Mapping[str, Any]) -> M
         additions=balance["additions"],
         consumption_losses=balance["consumption_losses"],
         others=balance["others"],
-        book_closing_stock=balance["book_closing_stock"],
-        actual_closing_stock=balance["actual_closing_stock"],
-        variance=balance["variance"],
+        closing_stock=balance["closing_stock"],
     )
 
 
@@ -711,8 +690,7 @@ def _aggregate_balance_rows(
         consumption_losses = sum((row.consumption_losses for row in rows), ZERO)
         others = sum((row.others for row in rows), ZERO)
         opening = first.opening_stock
-        book = book_closing_stock(opening, receipt, additions, consumption_losses, others)
-        actual = last.actual_closing_stock
+        closing = closing_stock(opening, receipt, additions, consumption_losses, others)
         if view == "monthly":
             month_date = date(first.cost_date.year, first.cost_date.month, 1)
             period_label = month_date.strftime("%B %Y")
@@ -744,9 +722,7 @@ def _aggregate_balance_rows(
             additions=additions,
             consumption_losses=consumption_losses,
             others=others,
-            book_closing_stock=book,
-            actual_closing_stock=actual,
-            variance=variance(actual, book),
+            closing_stock=closing,
         ))
     return output
 
@@ -832,9 +808,6 @@ def _import_entry_payload(
         if spec.code == "opening_stock":
             amount = row.get("opening_stock")
             remarks = row.get("opening_stock_remarks", row.get("opening_stock_remark", ""))
-        elif spec.code == "actual_closing_stock":
-            amount = row.get("actual_closing_stock") or row.get("closing_stock")
-            remarks = row.get("actual_closing_stock_remarks", row.get("actual_closing_stock_remark", ""))
         else:
             amount = row.get(spec.code)
             remarks = row.get(f"{spec.code}_remarks", row.get(f"{spec.code}_remark", ""))
