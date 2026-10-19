@@ -213,14 +213,18 @@ export default function DailyCostSheet() {
     message: 'This daily cost sheet has changes that are not saved yet. Save them before leaving, or discard them deliberately.',
   })
 
-  const addOrEditLine = (line: EditableDailyCostLine) => {
+  const addOrEditLine = (lineOrLines: EditableDailyCostLine | EditableDailyCostLine[]) => {
     if (!lineEditor) return
     const group = GROUP_KEY[lineEditor.kind]
     const index = lineEditor.index
+    const linesToAdd = Array.isArray(lineOrLines) ? lineOrLines : [lineOrLines]
     setPayload(current => {
       const rows = [...current[group]] as EditableDailyCostLine[]
-      if (index === null) rows.push(line)
-      else rows[index] = line
+      if (index === null) {
+        rows.push(...linesToAdd)
+      } else {
+        rows[index] = linesToAdd[0]
+      }
       return { ...current, [group]: rows }
     })
     if (group === 'services') clearServiceSelection()
@@ -228,7 +232,7 @@ export default function DailyCostSheet() {
     setLineEditor(null)
     setNotice(group === 'other_expenses'
       ? 'Other expense updated. The AFE remaining balance is being recalculated with the deduction; save to commit the change.'
-      : 'Line updated. Preview and AFE remaining balance are recalculating; save to commit the change.')
+      : `${linesToAdd.length > 1 ? `${linesToAdd.length} lines` : 'Line'} updated. Preview and AFE remaining balance are recalculating; save to commit the change.`)
   }
 
   const removeLine = () => {
@@ -453,14 +457,15 @@ export default function DailyCostSheet() {
           skipped += 1
           continue
         }
+        const isPlanned = deriveClassification(activity) === 'Planned'
         nextServices.push({
           id: null,
           activity_id: activity.id,
           hole_section_id: sectionId,
           phase_id: sectionId ? phaseId : null,
           sub_activity_id: subActivity.id,
-          vendor_id: vendor?.id ?? null,
-          party_name: vendor?.vendor_name || service.vendor_name || subActivity.responsible_party || '',
+          vendor_id: isPlanned ? null : vendor?.id ?? null,
+          party_name: isPlanned ? 'Not Applicable' : subActivity.responsible_party || vendor?.vendor_name || service.vendor_name || '',
           quantity: '1',
           currency: rate.currency,
           override_rate: null,
@@ -637,9 +642,13 @@ export default function DailyCostSheet() {
     const activity = reference.activities.find(item => item.id === id)
     return activity ? `${activity.activity_code} · ${activity.activity_name}` : 'Activity unavailable'
   }
-  const vendorName = (vendorId: string | null, party: string) => {
+  const vendorName = (vendorId: string | null, party: string, activityId?: string) => {
+    const act = activityId ? reference.activities.find(item => item.id === activityId) : null
+    if (act && deriveClassification(act) === 'Planned') {
+      return 'Not Applicable'
+    }
     const vendor = reference.vendors.find(item => item.id === vendorId)
-    return vendor?.vendor_name || party || '—'
+    return vendor?.vendor_name || party || (party === 'Not Applicable' ? 'Not Applicable' : '—')
   }
   const getGridRows = (kind: DailyCostLineKind): GridLine[] => {
     const group = GROUP_KEY[kind]
@@ -701,7 +710,7 @@ export default function DailyCostSheet() {
       )
       else if (sourceRate !== '0') localAmount = amountForRate(sourceRate, line.quantity, 'unit')
       const activity = activityName(line.activity_id)
-      const vendor = vendorName(line.vendor_id, line.party_name)
+      const vendor = vendorName(line.vendor_id, line.party_name, line.activity_id)
       const sub = priced
         ? (priced.sub_activity_code ? `${priced.sub_activity_code} · ${priced.sub_activity_name}` : priced.sub_activity_name || '—')
         : reference.sub_activities.find(item => item.id === line.sub_activity_id)?.display_name ?? '—'

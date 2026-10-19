@@ -20,6 +20,14 @@ import {
   type Well,
 } from '../lib/rigWell'
 
+function isPlannedActivity(activity?: MasterActivity | null): boolean {
+  if (!activity) return true
+  const text = `${activity.code} ${activity.name}`.toLowerCase()
+  if (/\bnpt\b/.test(text) || /non[ -]?productive/.test(text)) return false
+  if (/\bupa\b/.test(text) || text.includes('unplanned')) return false
+  return true
+}
+
 export default function WellSubActivities() {
   const { can } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -128,24 +136,45 @@ export default function WellSubActivities() {
     setSearchParams(params, { replace: true })
   }
 
+  const selectedActivity = activities.find(a => a.id === form.activity_id) ?? null
+  const isPlanned = selectedActivity ? isPlannedActivity(selectedActivity) : true
+
   const openCreate = () => {
     setFormRecord(null)
-    setForm(emptySubActivityForm(selectedWellId))
+    const initial = emptySubActivityForm(selectedWellId)
+    const firstAct = activities[0]
+    if (firstAct) {
+      initial.activity_id = firstAct.id
+      initial.responsible_party = isPlannedActivity(firstAct) ? 'Not Applicable' : ''
+    }
+    setForm(initial)
     setFormError('')
     setFormOpen(true)
   }
   const openEdit = (record: SubActivity) => {
     setFormRecord(record)
+    const act = activities.find(a => a.id === record.activity_id)
+    const planned = isPlannedActivity(act)
     setForm({
       well_id: selectedWellId,
       sub_activity_code: record.sub_activity_code,
       sub_activity_name: record.sub_activity_name,
       activity_id: record.activity_id,
-      responsible_party: record.responsible_party,
+      responsible_party: planned ? 'Not Applicable' : record.responsible_party,
       description: record.description,
     })
     setFormError('')
     setFormOpen(true)
+  }
+
+  const onActivityChange = (activityId: string) => {
+    const act = activities.find(a => a.id === activityId)
+    const planned = isPlannedActivity(act)
+    setForm(prev => ({
+      ...prev,
+      activity_id: activityId,
+      responsible_party: planned ? 'Not Applicable' : (prev.responsible_party === 'Not Applicable' ? '' : prev.responsible_party),
+    }))
   }
 
   const save = async () => {
@@ -157,7 +186,7 @@ export default function WellSubActivities() {
       sub_activity_code: form.sub_activity_code.trim(),
       sub_activity_name: form.sub_activity_name.trim(),
       activity_id: form.activity_id,
-      responsible_party: form.responsible_party.trim(),
+      responsible_party: isPlanned ? 'Not Applicable' : form.responsible_party.trim(),
       description: form.description.trim(),
     }
     try {
@@ -313,7 +342,7 @@ export default function WellSubActivities() {
       onSubmit={() => void save()}
       busy={saving}
       dirty={formDirty}
-      submitDisabled={!selectedWellId || !activities.length || !form.sub_activity_code.trim() || !form.sub_activity_name.trim() || !form.activity_id || !form.responsible_party.trim() || !form.description.trim()}
+      submitDisabled={!selectedWellId || !activities.length || !form.sub_activity_code.trim() || !form.sub_activity_name.trim() || !form.activity_id || (!isPlanned && (!form.responsible_party.trim() || form.responsible_party.trim() === 'Not Applicable')) || !form.description.trim()}
       submitLabel={formRecord ? 'Save changes' : 'Create sub activity'}
     >
       <Box display="grid" gap={2} pt={.5}>
@@ -325,10 +354,19 @@ export default function WellSubActivities() {
           <TextField label="Sub activity code" required fullWidth value={form.sub_activity_code} onChange={event => setForm({ ...form, sub_activity_code: event.target.value })} inputProps={{ maxLength: 50 }} helperText="Unique within this well; normalized to uppercase."/>
           <TextField label="Sub activity name" required fullWidth value={form.sub_activity_name} onChange={event => setForm({ ...form, sub_activity_name: event.target.value })} inputProps={{ maxLength: 150 }}/>
         </Box>
-        <TextField select label="Activity" required fullWidth value={form.activity_id} onChange={event => setForm({ ...form, activity_id: event.target.value })}>
+        <TextField select label="Activity" required fullWidth value={form.activity_id} onChange={event => onActivityChange(event.target.value)}>
           {activities.map(activity => <MenuItem key={activity.id} value={activity.id}>{activity.code} — {activity.name}</MenuItem>)}
         </TextField>
-        <TextField label="Responsible party / company" required fullWidth value={form.responsible_party} onChange={event => setForm({ ...form, responsible_party: event.target.value })} inputProps={{ maxLength: 200 }} helperText="Who performs or owns this work step?"/>
+        <TextField
+          label="Responsible party / company"
+          required={!isPlanned}
+          disabled={isPlanned}
+          fullWidth
+          value={isPlanned ? 'Not Applicable' : form.responsible_party}
+          onChange={event => setForm({ ...form, responsible_party: event.target.value })}
+          inputProps={{ maxLength: 200 }}
+          helperText={isPlanned ? 'Not applicable for planned activities.' : 'Who performs or is responsible for this work step? (Mandatory for UPA/NPT)'}
+        />
         <TextField label="Description / remarks" required fullWidth multiline minRows={3} value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} inputProps={{ maxLength: 4000 }}/>
         <ErrorMessage message={formError}/>
       </Box>

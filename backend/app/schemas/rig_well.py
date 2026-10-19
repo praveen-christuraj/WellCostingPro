@@ -261,7 +261,7 @@ class WellSubActivityCreate(BaseModel):
     sub_activity_code: str = Field(min_length=1, max_length=50)
     sub_activity_name: str = Field(min_length=1, max_length=150)
     activity_id: str = Field(min_length=1, max_length=36)
-    responsible_party: str = Field(min_length=1, max_length=200)
+    responsible_party: str = Field(default="Not Applicable", max_length=200)
     description: str = Field(min_length=1, max_length=4000)
 
     model_config = ConfigDict(extra="forbid")
@@ -271,8 +271,16 @@ class WellSubActivityCreate(BaseModel):
     def normalise_code(cls, value: Any) -> Any:
         return _normalise_code(value)
 
+    @field_validator("responsible_party", mode="before")
+    @classmethod
+    def trim_responsible_party(cls, value: Any) -> Any:
+        if value is None:
+            return "Not Applicable"
+        val = str(value).strip()
+        return val if val else "Not Applicable"
+
     @field_validator(
-        "well_id", "sub_activity_name", "activity_id", "responsible_party", "description", mode="before"
+        "well_id", "sub_activity_name", "activity_id", "description", mode="before"
     )
     @classmethod
     def trim_required(cls, value: Any) -> Any:
@@ -283,7 +291,7 @@ class WellSubActivityUpdate(BaseModel):
     sub_activity_code: str | None = Field(default=None, min_length=1, max_length=50)
     sub_activity_name: str | None = Field(default=None, min_length=1, max_length=150)
     activity_id: str | None = Field(default=None, min_length=1, max_length=36)
-    responsible_party: str | None = Field(default=None, min_length=1, max_length=200)
+    responsible_party: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, min_length=1, max_length=4000)
 
     model_config = ConfigDict(extra="forbid")
@@ -293,8 +301,16 @@ class WellSubActivityUpdate(BaseModel):
     def normalise_code(cls, value: Any) -> Any:
         return _normalise_code(value)
 
+    @field_validator("responsible_party", mode="before")
+    @classmethod
+    def trim_responsible_party(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        val = str(value).strip()
+        return val if val else "Not Applicable"
+
     @field_validator(
-        "sub_activity_name", "activity_id", "responsible_party", "description", mode="before"
+        "sub_activity_name", "activity_id", "description", mode="before"
     )
     @classmethod
     def trim_required(cls, value: Any) -> Any:
