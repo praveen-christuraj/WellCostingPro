@@ -16,6 +16,7 @@ digraph WellCostingPro {
   "backend/app/api/database_browser.py";
   "backend/app/api/deps.py";
   "backend/app/api/master_data.py";
+  "backend/app/api/mud_cost.py";
   "backend/app/api/rbac.py";
   "backend/app/api/rig_well.py";
   "backend/app/api/service_master.py";
@@ -28,6 +29,7 @@ digraph WellCostingPro {
   "backend/app/core/security.py";
   "backend/app/domain/__init__.py";
   "backend/app/domain/afe_costing.py";
+  "backend/app/domain/mud_cost.py";
   "backend/app/main.py";
   "backend/app/models/__init__.py";
   "backend/app/models/afe.py";
@@ -36,6 +38,7 @@ digraph WellCostingPro {
   "backend/app/models/daily_cost.py";
   "backend/app/models/entities.py";
   "backend/app/models/master_data.py";
+  "backend/app/models/mud_cost.py";
   "backend/app/models/rig_well.py";
   "backend/app/models/service_master.py";
   "backend/app/models/vendor_master.py";
@@ -47,6 +50,7 @@ digraph WellCostingPro {
   "backend/app/schemas/daily_cost.py";
   "backend/app/schemas/database_browser.py";
   "backend/app/schemas/master_data.py";
+  "backend/app/schemas/mud_cost.py";
   "backend/app/schemas/rbac.py";
   "backend/app/schemas/rig_well.py";
   "backend/app/schemas/service_master.py";
@@ -61,6 +65,7 @@ digraph WellCostingPro {
   "backend/app/services/daily_cost.py";
   "backend/app/services/database_browser.py";
   "backend/app/services/dependencies.py";
+  "backend/app/services/mud_cost.py";
   "backend/app/services/provisioning.py";
   "frontend/src/App.tsx";
   "frontend/src/components/Brand.tsx";
@@ -100,6 +105,8 @@ digraph WellCostingPro {
   "frontend/src/components/daily-cost/DailyCostLineDialog.tsx";
   "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx";
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx";
+  "frontend/src/components/mud-cost/MudCostEntryDialog.tsx";
+  "frontend/src/components/mud-cost/MudCostPrintSheet.tsx";
   "frontend/src/context/AuthContext.tsx";
   "frontend/src/context/ThemeContext.tsx";
   "frontend/src/designSystem.ts";
@@ -111,6 +118,7 @@ digraph WellCostingPro {
   "frontend/src/lib/databaseBrowser.ts";
   "frontend/src/lib/export.ts";
   "frontend/src/lib/masterData.ts";
+  "frontend/src/lib/mudCost.ts";
   "frontend/src/lib/rigWell.ts";
   "frontend/src/lib/serviceMaster.ts";
   "frontend/src/lib/types.ts";
@@ -133,6 +141,7 @@ digraph WellCostingPro {
   "frontend/src/pages/Login.tsx";
   "frontend/src/pages/MasterDataOverview.tsx";
   "frontend/src/pages/MasterDataRecords.tsx";
+  "frontend/src/pages/MudCostAnalysis.tsx";
   "frontend/src/pages/OtherManagementOverview.tsx";
   "frontend/src/pages/Overview.tsx";
   "frontend/src/pages/Permissions.tsx";
@@ -194,6 +203,9 @@ digraph WellCostingPro {
   "backend/app/api/master_data.py" -> "backend/app/schemas/master_data.py";
   "backend/app/api/master_data.py" -> "backend/app/services/__init__.py";
   "backend/app/api/master_data.py" -> "backend/app/services/dependencies.py";
+  "backend/app/api/mud_cost.py" -> "backend/app/api/deps.py";
+  "backend/app/api/mud_cost.py" -> "backend/app/schemas/mud_cost.py";
+  "backend/app/api/mud_cost.py" -> "backend/app/services/__init__.py";
   "backend/app/api/rbac.py" -> "backend/app/api/deps.py";
   "backend/app/api/rbac.py" -> "backend/app/core/security.py";
   "backend/app/api/rbac.py" -> "backend/app/models/__init__.py";
@@ -242,6 +254,7 @@ digraph WellCostingPro {
   "backend/app/models/__init__.py" -> "backend/app/models/daily_cost.py";
   "backend/app/models/__init__.py" -> "backend/app/models/entities.py";
   "backend/app/models/__init__.py" -> "backend/app/models/master_data.py";
+  "backend/app/models/__init__.py" -> "backend/app/models/mud_cost.py";
   "backend/app/models/__init__.py" -> "backend/app/models/rig_well.py";
   "backend/app/models/__init__.py" -> "backend/app/models/service_master.py";
   "backend/app/models/__init__.py" -> "backend/app/models/vendor_master.py";
@@ -256,6 +269,9 @@ digraph WellCostingPro {
   "backend/app/models/daily_cost.py" -> "backend/app/models/rig_well.py";
   "backend/app/models/entities.py" -> "backend/app/core/database.py";
   "backend/app/models/master_data.py" -> "backend/app/core/database.py";
+  "backend/app/models/mud_cost.py" -> "backend/app/core/database.py";
+  "backend/app/models/mud_cost.py" -> "backend/app/domain/mud_cost.py";
+  "backend/app/models/mud_cost.py" -> "backend/app/models/rig_well.py";
   "backend/app/models/rig_well.py" -> "backend/app/core/database.py";
   "backend/app/models/rig_well.py" -> "backend/app/models/master_data.py";
   "backend/app/models/service_master.py" -> "backend/app/models/master_data.py";
@@ -264,6 +280,7 @@ digraph WellCostingPro {
   "backend/app/models/well_sub_activity.py" -> "backend/app/models/master_data.py";
   "backend/app/models/well_sub_activity.py" -> "backend/app/models/rig_well.py";
   "backend/app/schemas/afe.py" -> "backend/app/domain/afe_costing.py";
+  "backend/app/schemas/mud_cost.py" -> "backend/app/domain/mud_cost.py";
   "backend/app/seed.py" -> "backend/app/bootstrap.py";
   "backend/app/seed.py" -> "backend/app/core/migrations.py";
   "backend/app/seed.py" -> "backend/app/services/__init__.py";
@@ -296,6 +313,12 @@ digraph WellCostingPro {
   "backend/app/services/daily_cost.py" -> "backend/app/schemas/daily_cost.py";
   "backend/app/services/daily_cost.py" -> "backend/app/services/__init__.py";
   "backend/app/services/dependencies.py" -> "backend/app/core/database.py";
+  "backend/app/services/mud_cost.py" -> "backend/app/domain/mud_cost.py";
+  "backend/app/services/mud_cost.py" -> "backend/app/models/__init__.py";
+  "backend/app/services/mud_cost.py" -> "backend/app/models/entities.py";
+  "backend/app/services/mud_cost.py" -> "backend/app/models/rig_well.py";
+  "backend/app/services/mud_cost.py" -> "backend/app/schemas/mud_cost.py";
+  "backend/app/services/mud_cost.py" -> "backend/app/services/__init__.py";
   "backend/app/services/provisioning.py" -> "backend/app/core/database.py";
   "backend/app/services/provisioning.py" -> "backend/app/core/security.py";
   "backend/app/services/provisioning.py" -> "backend/app/models/__init__.py";
@@ -318,6 +341,7 @@ digraph WellCostingPro {
   "frontend/src/App.tsx" -> "frontend/src/pages/Login.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/MasterDataOverview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/MasterDataRecords.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/pages/MudCostAnalysis.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/OtherManagementOverview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Overview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Permissions.tsx";
@@ -452,6 +476,10 @@ digraph WellCostingPro {
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx" -> "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx";
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/designSystem.ts";
+  "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/lib/mudCost.ts";
+  "frontend/src/components/mud-cost/MudCostPrintSheet.tsx" -> "frontend/src/lib/mudCost.ts";
   "frontend/src/context/AuthContext.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/context/AuthContext.tsx" -> "frontend/src/lib/types.ts";
   "frontend/src/context/ThemeContext.tsx" -> "frontend/src/theme.ts";
@@ -567,6 +595,16 @@ digraph WellCostingPro {
   "frontend/src/pages/MasterDataRecords.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/MasterDataRecords.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/MasterDataRecords.tsx" -> "frontend/src/lib/masterData.ts";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/DataTable.tsx";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/ImportDialog.tsx";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostEntryDialog.tsx";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostPrintSheet.tsx";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/designSystem.ts";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/lib/export.ts";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/lib/mudCost.ts";
   "frontend/src/pages/OtherManagementOverview.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/OtherManagementOverview.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/OtherManagementOverview.tsx" -> "frontend/src/lib/api.ts";

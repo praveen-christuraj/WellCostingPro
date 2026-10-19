@@ -40,12 +40,10 @@ class MudCostLineIn(_Strict):
         return value
 
     @model_validator(mode="after")
-    def known_code_and_explained_quantity(self):
+    def known_code(self):
         spec = MUD_COST_LINE_BY_CODE.get(self.line_code)
         if spec is None:
             raise ValueError(f"Unknown Mud Cost Analysis row '{self.line_code}'.")
-        if self.amount is not None and self.amount > 0 and len(self.remarks.strip()) < 3:
-            raise ValueError(f"{spec.label} needs a remark of at least 3 characters when a quantity is entered.")
         return self
 
 
@@ -113,10 +111,7 @@ class MudCostEntryOut(BaseModel):
     additions: Decimal
     consumption_losses: Decimal
     others: Decimal
-    book_closing_stock: Decimal
-    actual_closing_stock: Decimal
-    actual_closing_stock_remarks: str
-    variance: Decimal
+    closing_stock: Decimal
     lines: list[MudCostLineOut]
     is_deleted: bool
     deleted_at: datetime | None
@@ -147,9 +142,7 @@ class MudCostBalanceRowOut(BaseModel):
     additions: Decimal
     consumption_losses: Decimal
     others: Decimal
-    book_closing_stock: Decimal
-    actual_closing_stock: Decimal
-    variance: Decimal
+    closing_stock: Decimal
 
 
 class MudCostMaterialBalanceOut(BaseModel):
