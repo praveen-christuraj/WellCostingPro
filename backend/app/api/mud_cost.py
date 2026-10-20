@@ -14,7 +14,10 @@ from app.schemas.mud_cost import (
     MudCostImportRequest,
     MudCostImportResponse,
     MudCostMaterialBalanceOut,
+    MudCostReconciliationOut,
     MudCostReference,
+    MudCostSectionSettingIn,
+    MudCostSectionSettingOut,
 )
 from app.services import mud_cost as service
 
@@ -76,6 +79,55 @@ def material_balance(
     return service.material_balance(
         db, user.organization_id, rig_id=rig_id, well_id=well_id, section_id=section_id,
         view=view, date_from=date_from, date_to=date_to,
+    )
+
+
+@router.get(
+    "/section-settings",
+    response_model=list[MudCostSectionSettingOut],
+    dependencies=[Depends(require("daily-cost:read"))],
+)
+def section_settings(
+    db: Db,
+    user: Current,
+    rig_id: str = Query(min_length=1, max_length=36),
+    well_id: str = Query(min_length=1, max_length=36),
+) -> list[MudCostSectionSettingOut]:
+    return service.section_settings(db, user.organization_id, rig_id, well_id)
+
+
+@router.put(
+    "/section-settings",
+    response_model=MudCostSectionSettingOut,
+    dependencies=[Depends(require("daily-cost:update"))],
+)
+def save_section_setting(
+    data: MudCostSectionSettingIn,
+    request: Request,
+    db: Db,
+    user: Current,
+) -> MudCostSectionSettingOut:
+    return service.upsert_section_setting(db, user.organization_id, data, user, request)
+
+
+@router.get(
+    "/reconciliation",
+    response_model=MudCostReconciliationOut,
+    dependencies=[Depends(require("daily-cost:read"))],
+)
+def reconciliation(
+    db: Db,
+    user: Current,
+    rig_id: str = Query(min_length=1, max_length=36),
+    well_id: str = Query(min_length=1, max_length=36),
+    section_id: str = Query(default="", max_length=36),
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+    include_draft: bool = Query(default=True),
+) -> MudCostReconciliationOut:
+    return service.mud_cost_reconciliation(
+        db, user.organization_id, rig_id=rig_id, well_id=well_id, section_id=section_id,
+        date_from=date_from, date_to=date_to, include_draft=include_draft,
     )
 
 

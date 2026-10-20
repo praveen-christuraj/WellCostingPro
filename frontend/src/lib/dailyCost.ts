@@ -386,6 +386,30 @@ export type DailyCostWellTotals = {
   // Progress days counted from the Well Spud Date & Time (null until a spud
   // date is entered on any scope).
   spud_actual_days: string | null; spud_days_variance: string | null
+  // Mud chemicals comparison: the recorded actual and the reconciled amount
+  // that the final AFE comparison uses. comparison_* are the final figures.
+  actual_mud_chemicals: string; reconciled_mud_cost: string; comparison_mud_cost: string
+  mud_cost_adjustment: string
+  comparison_actual: string | null; comparison_consumables: string | null
+  comparison_balance: string | null; comparison_used_percent: string | null
+  comparison_adjusted_balance: string | null; has_mud_reconciliation: boolean
+}
+export type DailyCostMudSectionReconciliation = {
+  section_id: string; section_label: string
+  mud_type: string | null; mud_type_label: string
+  is_configured: boolean; is_wbm: boolean
+  currency: string; base_rate: string; actual_cost: string
+  reconciled_cost: string | null; cost_per_bbl: string | null
+  consumption_losses: string; adjustment: string | null; remarks: string
+}
+export type DailyCostMudReconciliation = {
+  available: boolean; currency: string
+  actual_cost: string; reconciled_cost: string; unreconciled_actual_cost: string
+  comparison_cost: string; adjustment: string
+  latest_cost_per_bbl: string | null; latest_cost_per_bbl_section: string
+  latest_cost_per_bbl_date: string | null
+  configured_section_count: number; unconfigured_section_count: number
+  sections: DailyCostMudSectionReconciliation[]; note: string
 }
 export type DailyCostWellSummary = {
   well: {
@@ -400,6 +424,7 @@ export type DailyCostWellSummary = {
   budget_lines: DailyCostComparisonLine[]
   warnings: DailyCostWarning[]
   progress: WellProgressScope[]
+  mud_cost: DailyCostMudReconciliation | null
 }
 
 /** Server-side register filters, so the daily basis stays quick on a long well. */

@@ -3,7 +3,7 @@ import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import {
-  AccountBalanceWalletOutlined, AnalyticsOutlined, CalendarMonthOutlined, DownloadOutlined,
+  AccountBalanceWalletOutlined, AnalyticsOutlined, CalculateOutlined, CalendarMonthOutlined, DownloadOutlined,
   PrintOutlined, RefreshRounded, ReportProblemOutlined, SavingsOutlined, TimelineOutlined, TrendingUpRounded,
   WarningAmberRounded,
 } from '@mui/icons-material'
@@ -211,6 +211,13 @@ export default function DailyCostAnalysis() {
   }
 
   const hasAdjustment = summary?.totals.has_adjustment ?? false
+  const mud = summary?.mud_cost ?? null
+  const hasMudReconciliation = Boolean(mud?.available)
+  const comparisonActual = summary?.totals.comparison_actual ?? summary?.totals.actual ?? '0'
+  const comparisonBalance = summary?.totals.comparison_balance ?? summary?.totals.balance ?? '0'
+  const comparisonUsedPercent = summary?.totals.comparison_used_percent ?? summary?.totals.used_percent ?? '0'
+  const comparisonAdjustedBalance = summary?.totals.comparison_adjusted_balance ?? null
+  const comparisonCardCount = 7 + (hasAdjustment ? 1 : 0) + (hasMudReconciliation ? 1 : 0)
 
   const dailyColumns: ColDef<DailyCostDailyRow>[] = [
     { headerName: 'DATE', field: 'cost_date', minWidth: 140, width: 150, valueFormatter: params => displayDate(String(params.value ?? '')) },
@@ -323,12 +330,13 @@ export default function DailyCostAnalysis() {
     {summary && <>
       {summary.warnings.map(warning => <Alert key={warning.code} severity={warning.severity} icon={warning.severity === 'info' ? undefined : <WarningAmberRounded/>} sx={{ mb: 1.4 }}>{warning.message}</Alert>)}
 
-      <Box display="grid" gap={1.3} mb={1.8} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)', lg: hasAdjustment ? 'repeat(8, 1fr)' : 'repeat(7, 1fr)' } }}>
+      <Box display="grid" gap={1.3} mb={1.8} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)', lg: `repeat(${comparisonCardCount}, 1fr)` } }}>
         <StatCard label="AFE planned" value={dailyMoney(summary.totals.planned, currency)} hint={`${summary.afes.length} AFE locked on this well`} icon={<AccountBalanceWalletOutlined fontSize="small"/>}/>
         {hasAdjustment && summary.totals.adjusted_planned != null && <StatCard label="Adjusted AFE" value={dailyMoney(summary.totals.adjusted_planned, currency)} hint={`${summary.totals.adjusted_used_percent ?? '—'}% of the adjusted AFE spent`} icon={<AccountBalanceWalletOutlined fontSize="small"/>}/>}
         <StatCard label="Actual to date" value={dailyMoney(summary.totals.actual, currency)} hint={`${summary.totals.used_percent}% of the locked AFE`} icon={<TrendingUpRounded fontSize="small"/>}/>
+        {hasMudReconciliation && <StatCard label="Comparison total" value={dailyMoney(comparisonActual, currency)} hint={`${comparisonUsedPercent}% of the locked AFE after mud reconciliation`} icon={<CalculateOutlined fontSize="small"/>}/>}
         <StatCard label="Other expenses" value={dailyMoney(summary.totals.other_expenses, currency)} hint="LIH and similar charges deducted from the AFE" tone={Number(summary.totals.other_expenses) > 0 ? 'warning' : 'default'} icon={<ReportProblemOutlined fontSize="small"/>}/>
-        <StatCard label="Remaining balance" value={dailyMoney(summary.totals.balance, currency)} hint={Number(summary.totals.balance) < 0 ? 'Over the AFE budget' : 'Planned less actual to date'} tone={Number(summary.totals.balance) < 0 ? 'warning' : 'good'} icon={<SavingsOutlined fontSize="small"/>}/>
+        <StatCard label="Remaining balance" value={dailyMoney(comparisonBalance, currency)} hint={hasMudReconciliation ? 'Planned less the reconciled comparison total' : Number(comparisonBalance) < 0 ? 'Over the AFE budget' : 'Planned less actual to date'} tone={Number(comparisonBalance) < 0 ? 'warning' : 'good'} icon={<SavingsOutlined fontSize="small"/>}/>
         <StatCard label="Average per day" value={dailyMoney(summary.totals.average_per_day, currency)} hint={`${summary.totals.recorded_days} recorded of ${summary.totals.elapsed_days} elapsed days`} icon={<TimelineOutlined fontSize="small"/>}/>
         <StatCard label="UPA to date" value={dailyMoney(summary.totals.upa, currency)} hint="Unplanned activity charges" tone={Number(summary.totals.upa) > 0 ? 'warning' : 'default'} icon={<AnalyticsOutlined fontSize="small"/>}/>
         <StatCard label="NPT to date" value={dailyMoney(summary.totals.npt, currency)} hint="Non-productive time charges" tone={Number(summary.totals.npt) > 0 ? 'warning' : 'default'} icon={<AnalyticsOutlined fontSize="small"/>}/>
@@ -382,6 +390,41 @@ export default function DailyCostAnalysis() {
           </Box>
         </Box>
       </Paper>
+
+      {mud && <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, mb: 1.8 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={1} flexWrap="wrap" mb={1}>
+          <Box>
+            <Typography fontWeight={800} fontSize={15}>Mud cost reconciliation</Typography>
+            <Typography color="text.secondary" fontSize={11.5} mt={.25}>{mud.note}</Typography>
+          </Box>
+          <Tag tone={mud.available ? 'success' : 'warning'}>{mud.available ? 'Reconciled in comparison' : 'Actual cost only'}</Tag>
+        </Box>
+        <Box sx={{ overflowX: 'auto' }}>
+          <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 860, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
+            <thead><tr><th>SECTION</th><th>MUD TYPE</th><th align="right">COST/BBL</th><th align="right">BASE RATE</th><th align="right">ACTUAL MUD COST</th><th align="right">RECONCILED</th><th align="right">DIFFERENCE</th><th align="right">CONSUMPTION / LOSSES</th></tr></thead>
+            <tbody>{mud.sections.map(row => <tr key={row.section_id}>
+              <td>{row.section_label}</td>
+              <td><Tag tone={row.is_configured ? 'info' : 'warning'}>{row.mud_type ?? 'Not configured'}</Tag></td>
+              <td align="right">{row.cost_per_bbl != null ? dailyMoney(row.cost_per_bbl, mud.currency) : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
+              <td align="right">{row.mud_type && row.mud_type !== 'WBM' ? dailyMoney(row.base_rate, mud.currency) : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
+              <td align="right">{dailyMoney(row.actual_cost, mud.currency)}</td>
+              <td align="right">{row.reconciled_cost != null ? dailyMoney(row.reconciled_cost, mud.currency) : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
+              <td align="right">{row.adjustment != null ? <Typography fontSize={12} fontWeight={700} color={Number(row.adjustment) < 0 ? 'error.main' : Number(row.adjustment) > 0 ? 'warning.main' : 'text.secondary'}>{dailyMoney(row.adjustment, mud.currency)}</Typography> : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
+              <td align="right">{Number(row.consumption_losses).toLocaleString(undefined, { maximumFractionDigits: 3 })}</td>
+            </tr>)}</tbody>
+          </Box>
+        </Box>
+        <Box display="flex" justifyContent="space-between" gap={1} flexWrap="wrap" mt={1.2}>
+          <Typography color="text.secondary" fontSize={11.5}>
+            Final mud chemicals comparison: {dailyMoney(mud.comparison_cost, mud.currency)} (recorded actual {dailyMoney(mud.actual_cost, mud.currency)}; difference {dailyMoney(mud.adjustment, mud.currency)}).
+            {Number(mud.unreconciled_actual_cost) > 0 && <> {dailyMoney(mud.unreconciled_actual_cost, mud.currency)} stays at actual cost because those sections cannot be reconciled.</>}
+          </Typography>
+          <Typography color="text.secondary" fontSize={11.5}>
+            {mud.latest_cost_per_bbl != null ? `Latest Cost/BBL ${dailyMoney(mud.latest_cost_per_bbl, mud.currency)} · ${mud.latest_cost_per_bbl_section}` : 'No derived Cost/BBL for the configured mud types'}
+            {comparisonAdjustedBalance != null && <> · Adjusted AFE comparison balance {dailyMoney(comparisonAdjustedBalance, currency)}</>}
+          </Typography>
+        </Box>
+      </Paper>}
 
       <Box mb={1.8}>
         <DataTable

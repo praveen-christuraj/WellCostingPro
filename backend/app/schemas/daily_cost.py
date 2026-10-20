@@ -916,6 +916,51 @@ class DailyCostFactorGroup(BaseModel):
     rows: list[DailyCostFactorRow]
 
 
+class DailyCostMudSectionReconciliation(BaseModel):
+    """One section's mud chemicals actual versus its reconciled mud cost."""
+
+    section_id: str
+    section_label: str
+    mud_type: str | None = None
+    mud_type_label: str = "Not configured"
+    is_configured: bool = False
+    is_wbm: bool = False
+    currency: str = ""
+    base_rate: Decimal = Decimal("0")
+    actual_cost: Decimal = Decimal("0")
+    reconciled_cost: Decimal | None = None
+    cost_per_bbl: Decimal | None = None
+    consumption_losses: Decimal = Decimal("0")
+    adjustment: Decimal | None = None
+    remarks: str = ""
+
+
+class DailyCostMudReconciliation(BaseModel):
+    """Section-scoped mud reconciliation projected into the well cost analysis.
+
+    ``actual_cost`` is the mud chemicals spend recorded in the daily register.
+    ``reconciled_cost`` values the mud system at its latest Cost/BBL. The final
+    comparison uses ``comparison_cost``: reconciled where a section can be
+    reconciled, actual where it cannot (unconfigured, no mud entries, or mud
+    chemicals with no attributable section), so no recorded cost ever vanishes.
+    """
+
+    available: bool
+    currency: str
+    actual_cost: Decimal
+    reconciled_cost: Decimal
+    unreconciled_actual_cost: Decimal
+    comparison_cost: Decimal
+    adjustment: Decimal
+    latest_cost_per_bbl: Decimal | None = None
+    latest_cost_per_bbl_section: str = ""
+    latest_cost_per_bbl_date: date | None = None
+    configured_section_count: int = 0
+    unconfigured_section_count: int = 0
+    sections: list[DailyCostMudSectionReconciliation] = Field(default_factory=list)
+    note: str = ""
+
+
 class DailyCostWellTotals(BaseModel):
     currency: str
     planned: Decimal
@@ -950,6 +995,20 @@ class DailyCostWellTotals(BaseModel):
     # the scopes that have a spud instant). Null means no scope is spudded yet.
     spud_actual_days: Decimal | None = None
     spud_days_variance: Decimal | None = None
+    # Mud chemicals comparison. ``actual_mud_chemicals`` is the recorded Daily
+    # Cost figure; ``comparison_mud_cost`` replaces it with the reconciled amount
+    # where a section supports reconciliation. The comparison_* figures are what
+    # the final AFE comparison uses, while ``actual`` above remains as recorded.
+    actual_mud_chemicals: Decimal = Decimal("0")
+    reconciled_mud_cost: Decimal = Decimal("0")
+    comparison_mud_cost: Decimal = Decimal("0")
+    mud_cost_adjustment: Decimal = Decimal("0")
+    comparison_actual: Decimal | None = None
+    comparison_consumables: Decimal | None = None
+    comparison_balance: Decimal | None = None
+    comparison_used_percent: Decimal | None = None
+    comparison_adjusted_balance: Decimal | None = None
+    has_mud_reconciliation: bool = False
 
 
 class DailyCostWellSummary(BaseModel):
@@ -973,6 +1032,9 @@ class DailyCostWellSummary(BaseModel):
     warnings: list[DailyCostWarnings]
     # One milestone block per configuration scope, counted to today.
     progress: list[DailyCostWellProgress] = Field(default_factory=list)
+    # Present when the well has daily cost sheets: the section-by-section
+    # actual vs reconciled mud cost used by the final comparison.
+    mud_cost: DailyCostMudReconciliation | None = None
 
 
 DailyCostDayOut.model_rebuild()

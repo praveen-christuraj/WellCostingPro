@@ -27,7 +27,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.domain.mud_cost import MUD_COST_DB_CATEGORY_KEYS, MUD_COST_DB_LINE_CODES
+from app.domain.mud_cost import (
+    MUD_COST_DB_CATEGORY_KEYS,
+    MUD_COST_DB_LINE_CODES,
+    MUD_COST_MUD_TYPE_KEYS,
+    MUD_COST_REMARK_REQUIRED_TYPE,
+)
 from app.models.rig_well import now, uid
 
 
@@ -118,3 +123,53 @@ class MudCostEntryLine(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now, nullable=False)
 
     entry: Mapped[MudCostEntry] = relationship(back_populates="lines", lazy="select")
+
+
+class MudCostSectionSetting(Base):
+    """One mud system configuration per well section.
+
+    Configuration is section-scoped: it stores the mud type (WBM / OBM / SOBM /
+    OTHERS), the optional remark, and the section's Cost/BBL base rate. Only
+    OTHERS requires a remark; WBM needs no base rate because it is reconciled at
+    the actual Daily Cost figures. The row is keyed by the stable hole-section
+    identity so a later well-plan edit (which replaces ``well_sections`` rows)
+    does not orphan the configuration; ``section_id`` keeps the latest snapshot.
+    """
+
+    __tablename__ = "mud_cost_section_settings"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "well_id", "section_scope", "hole_section_id",
+            name="uq_mud_cost_section_settings_scope",
+        ),
+        CheckConstraint(_in_values("mud_type", MUD_COST_MUD_TYPE_KEYS), name="ck_mud_cost_section_settings_mud_type"),
+        CheckConstraint("base_rate >= 0", name="ck_mud_cost_section_settings_base_rate"),
+        CheckConstraint(
+            f"mud_type <> '{MUD_COST_REMARK_REQUIRED_TYPE}' OR LENGTH(TRIM(remarks)) > 0",
+            name="ck_mud_cost_section_settings_remarks",
+        ),
+        Index("ix_mud_cost_section_settings_org_well", "organization_id", "well_id"),
+        Index("ix_mud_cost_section_settings_org_rig", "organization_id", "rig_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rig_id: Mapped[str] = mapped_column(ForeignKey("rigs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    well_id: Mapped[str] = mapped_column(ForeignKey("wells.id", ondelete="RESTRICT"), nullable=False, index=True)
+    section_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    hole_section_id: Mapped[str] = mapped_column(
+        ForeignKey("hole_sections.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    section_scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    section_code_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
+    section_name_snapshot: Mapped[str] = mapped_column(String(150), nullable=False)
+    mud_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    remarks: Mapped[str] = mapped_column(String(500), default="", server_default="", nullable=False)
+    base_rate: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=Decimal("0"), server_default="0", nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), default="", server_default="", nullable=False)
+    created_by: Mapped[str] = mapped_column(String(255), default="", server_default="", nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(255), default="", server_default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now, nullable=False)

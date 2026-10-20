@@ -1,5 +1,20 @@
 export type MudCostCategory = 'opening_stock' | 'receipt' | 'additions' | 'consumption_losses' | 'others' | 'closing_stock'
 export type MudCostBalanceView = 'daily' | 'monthly' | 'section' | 'inception'
+export type MudCostMudType = 'WBM' | 'OBM' | 'SOBM' | 'OTHERS'
+
+export const MUD_COST_MUD_TYPES: { value: MudCostMudType; label: string; help: string }[] = [
+  { value: 'WBM', label: 'WBM — Water Based Mud', help: 'No reconciliation arithmetic. The Daily Cost mud chemicals actual is the actual cost.' },
+  { value: 'OBM', label: 'OBM — Oil Based Mud', help: 'Extra OBM + Additions form total mud; ALPHA, BETA and Cost/BBL drive the reconciled cost.' },
+  { value: 'SOBM', label: 'SOBM — Synthetic Oil Based Mud', help: 'Same reconciliation formula as OBM, using this section’s Cost/BBL base rate.' },
+  { value: 'OTHERS', label: 'OTHERS — Other mud system', help: 'Same formula as OBM. Remarks are mandatory so the mud system is documented.' },
+]
+
+export const MUD_COST_MUD_TYPE_LABELS: Record<MudCostMudType, string> = {
+  WBM: 'Water Based Mud',
+  OBM: 'Oil Based Mud',
+  SOBM: 'Synthetic Oil Based Mud',
+  OTHERS: 'Others',
+}
 
 export type MudCostLineSpec = {
   code: string
@@ -179,9 +194,76 @@ export type MudCostMaterialBalance = {
   rows: MudCostBalanceRow[]
 }
 
+export type MudCostSectionSetting = {
+  id: string | null
+  rig_id: string; rig_code: string; well_id: string; well_code: string
+  section_id: string; hole_section_id: string
+  section_scope: 'drilling' | 'completion'
+  section_code: string; section_name: string; section_label: string; display_name: string
+  mud_type: MudCostMudType | null; mud_type_label: string
+  remarks: string; base_rate: string; currency: string
+  is_configured: boolean; is_current: boolean
+  created_by: string; updated_by: string; created_at: string | null; updated_at: string | null
+}
+
+export type MudCostSectionSettingPayload = {
+  rig_id: string
+  well_id: string
+  section_id: string
+  mud_type: MudCostMudType
+  remarks: string
+  base_rate: string | null
+}
+
+export type MudCostReconciliationRow = {
+  id: string
+  rig_id: string; rig_code: string
+  well_id: string; well_code: string
+  section_id: string; section_scope: 'drilling' | 'completion'
+  section_code: string; section_name: string; section_label: string
+  mud_type: MudCostMudType | null; mud_type_label: string
+  is_configured: boolean; is_wbm: boolean
+  cost_date: string; currency: string; base_rate: string
+  additions: string; extra_obm_received: string; actual_cost: string
+  total_mud: string; alpha: string | null; beta: string | null
+  cost_per_bbl: string | null
+  consumption_losses: string; reconciled_cost: string | null
+  cumulative_additions: string; cumulative_extra_obm_received: string
+  cumulative_actual_cost: string; cumulative_total_mud: string
+  cumulative_alpha: string | null; cumulative_beta: string | null
+  cumulative_consumption_losses: string; cumulative_reconciled_cost: string | null
+}
+
+export type MudCostReconciliationSection = {
+  section_id: string; hole_section_id: string
+  rig_id: string; rig_code: string; well_id: string; well_code: string
+  section_scope: 'drilling' | 'completion'
+  section_code: string; section_name: string; section_label: string
+  mud_type: MudCostMudType | null; mud_type_label: string
+  remarks: string; is_configured: boolean; is_current: boolean; is_wbm: boolean
+  currency: string; base_rate: string
+  first_date: string | null; last_date: string | null; entry_count: number
+  additions: string; extra_obm_received: string; actual_cost: string
+  total_mud: string; alpha: string | null; beta: string | null
+  consumption_losses: string; cost_per_bbl: string | null
+  reconciled_cost: string | null; adjustment: string | null
+}
+
+export type MudCostReconciliation = {
+  from_date: string | null; to_date: string | null; currency: string
+  selected_section_count: number; configured_section_count: number
+  unconfigured_section_count: number; entry_count: number
+  latest_cost_per_bbl: string | null; latest_cost_per_bbl_section: string
+  latest_cost_per_bbl_date: string | null
+  total_actual_cost: string; total_reconciled_cost: string
+  total_adjustment: string; total_consumption_losses: string
+  sections: MudCostReconciliationSection[]
+  rows: MudCostReconciliationRow[]
+}
+
 export type MudCostImportResult = { imported_count: number; error_count: number; errors: string[]; success: boolean }
 export type MudCostExportPayload = {
-  module: 'entries' | 'deleted' | 'material_balance'
+  module: 'entries' | 'deleted' | 'material_balance' | 'reconciliation'
   format: 'csv' | 'xlsx' | 'pdf' | 'print'
   record_count: number
   rig_id: string
