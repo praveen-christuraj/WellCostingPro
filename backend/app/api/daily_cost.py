@@ -22,6 +22,8 @@ from app.schemas.daily_cost import (
     DailyCostSaveIn,
     DailyCostStatusIn,
     DailyCostWellOption,
+    DailyCostWellProgressReport,
+    DailyCostWellProgressUpdate,
     DailyCostWellSummary,
 )
 from app.services import daily_cost as service
@@ -61,6 +63,35 @@ def well_cost_summary(
     return service.well_cost_summary(
         db, user.organization_id, well_id, date_from=date_from, date_to=date_to, include_draft=include_draft,
     )
+
+
+@router.get(
+    "/wells/{well_id}/progress", response_model=DailyCostWellProgressReport,
+    dependencies=[Depends(require("daily-cost:read"))],
+)
+def well_progress(
+    well_id: str,
+    db: Db,
+    user: Current,
+    as_of: date | None = Query(default=None),
+) -> DailyCostWellProgressReport:
+    """Well Spud Date & Time and Progress Completed Date & Time with the day counts they drive."""
+    return service.well_progress_report(db, user.organization_id, well_id, as_of=as_of)
+
+
+@router.put(
+    "/wells/{well_id}/progress", response_model=DailyCostWellProgressReport,
+    dependencies=[Depends(require("daily-cost:update"))],
+)
+def update_well_progress(
+    well_id: str,
+    data: DailyCostWellProgressUpdate,
+    db: Db,
+    user: Current,
+    request: Request,
+) -> DailyCostWellProgressReport:
+    """Enter or edit the spud / progress completion milestones; the spud date can never be cleared."""
+    return service.update_well_progress(db, user.organization_id, well_id, data, user, request)
 
 
 @router.get(

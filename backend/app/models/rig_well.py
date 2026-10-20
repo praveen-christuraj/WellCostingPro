@@ -105,6 +105,15 @@ class Well(RigWellRecord):
     completion_config_status: Mapped[str] = mapped_column(String(20), default="draft", server_default="draft", nullable=False)
     completion_depth_unit: Mapped[str] = mapped_column(String(10), default="m", server_default="m", nullable=False)
 
+    # Daily-cost register progress milestones, one pair per configuration scope.
+    # Naive datetimes keep the exact site-entered local date & time: actual days
+    # count from the Well Spud Date & Time up to the Progress Completed Date &
+    # Time once it is entered, otherwise to the end of the report date.
+    drilling_spud_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    drilling_progress_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completion_spud_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completion_progress_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     def sections_for_scope(self, scope: str) -> list["WellSection"]:
         return self.completion_sections if scope == "completion" else self.sections
 

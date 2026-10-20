@@ -626,5 +626,5 @@ class DailyCostServiceCostItem(Base):
     service_line_id: Mapped[str] = mapped_column(ForeignKey("daily_cost_service_lines.id", ondelete="CASCADE"), nullable=False, index=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False)
-    amount: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(28, 10), nullable=False)
     __table_args__ = (CheckConstraint("amount >= 0", name="ck_service_cost_item_amount"),)

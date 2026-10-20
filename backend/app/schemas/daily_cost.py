@@ -696,6 +696,53 @@ class DailyCostWarnings(BaseModel):
     message: str
 
 
+class DailyCostWellProgress(BaseModel):
+    """Spud and progress milestones for one configuration scope of a well.
+
+    Actual days count from the Well Spud Date & Time — not from the first
+    daily cost sheet — up to the Progress Completed Date & Time once it is
+    entered (the count then stops for that progress), otherwise up to the end
+    of the report date, in fractional days rounded to three decimals (a well
+    spudded 10:00 counts 0.583 days for that same day's report).
+    ``days_variance`` is actual days less planned days for the scope.
+    """
+
+    scope: Literal["drilling", "completion"]
+    scope_label: str
+    progress_label: str
+    spud_at: datetime | None
+    progress_completed_at: datetime | None
+    is_completed: bool
+    planned_days: Decimal
+    actual_days: Decimal | None
+    days_variance: Decimal | None
+    as_of_date: date | None
+
+
+class DailyCostWellProgressReport(BaseModel):
+    """Per-scope progress milestones for one well."""
+
+    well_id: str
+    well_code: str
+    well_name: str
+    scopes: list[DailyCostWellProgress]
+
+
+class DailyCostWellProgressUpdate(BaseModel):
+    """Enter or edit the register's spud / progress completion milestones.
+
+    ``spud_at`` can be entered once and then only edited — it can never be
+    cleared, so the actual day count always keeps a start point. Omitted
+    fields keep their stored values.
+    """
+
+    scope: Literal["drilling", "completion"]
+    spud_at: datetime | None = None
+    progress_completed_at: datetime | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class DailyCostDayOut(BaseModel):
     entry: DailyCostEntryOut
     services: list[DailyCostServiceLineOut]
@@ -704,6 +751,8 @@ class DailyCostDayOut(BaseModel):
     other_expenses: list[DailyCostOtherExpenseLineOut]
     comparison: DailyCostComparison
     warnings: list[DailyCostWarnings]
+    # Milestones of the sheet's AFE scope, counted to the sheet's cost date.
+    progress: DailyCostWellProgress | None = None
 
 
 class DailyCostPreviewOut(BaseModel):
@@ -897,6 +946,10 @@ class DailyCostWellTotals(BaseModel):
     adjusted_used_percent: Decimal | None = None
     adjusted_planned_days: Decimal | None = None
     has_adjustment: bool = False
+    # Progress-day figures counted from the Well Spud Date & Time (summed over
+    # the scopes that have a spud instant). Null means no scope is spudded yet.
+    spud_actual_days: Decimal | None = None
+    spud_days_variance: Decimal | None = None
 
 
 class DailyCostWellSummary(BaseModel):
@@ -918,6 +971,8 @@ class DailyCostWellSummary(BaseModel):
     factors: list[DailyCostFactorGroup]
     budget_lines: list[DailyCostBudgetComparison]
     warnings: list[DailyCostWarnings]
+    # One milestone block per configuration scope, counted to today.
+    progress: list[DailyCostWellProgress] = Field(default_factory=list)
 
 
 DailyCostDayOut.model_rebuild()

@@ -117,6 +117,7 @@ digraph WellCostingPro {
   "frontend/src/components/daily-cost/DailyCostLineDialog.tsx";
   "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx";
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx";
+  "frontend/src/components/daily-cost/WellProgressPanel.tsx";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx";
   "frontend/src/components/mud-cost/MudCostPrintSheet.tsx";
   "frontend/src/context/AuthContext.tsx";
@@ -555,6 +556,9 @@ digraph WellCostingPro {
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx" -> "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx";
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/components/daily-cost/WellProgressPanel.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/components/daily-cost/WellProgressPanel.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/components/daily-cost/WellProgressPanel.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/designSystem.ts";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/lib/mudCost.ts";
@@ -632,6 +636,7 @@ digraph WellCostingPro {
   "frontend/src/pages/DailyCostAnalysis.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/DailyCostAnalysis.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/DailyCostAnalysis.tsx" -> "frontend/src/components/daily-cost/WellCostPrintDialog.tsx";
+  "frontend/src/pages/DailyCostAnalysis.tsx" -> "frontend/src/components/daily-cost/WellProgressPanel.tsx";
   "frontend/src/pages/DailyCostAnalysis.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/DailyCostAnalysis.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/DailyCostAnalysis.tsx" -> "frontend/src/lib/dailyCost.ts";
@@ -650,6 +655,7 @@ digraph WellCostingPro {
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/daily-cost/DailyCostLineDialog.tsx";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/daily-cost/WellCostPrintDialog.tsx";
+  "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/daily-cost/WellProgressPanel.tsx";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/lib/costingSets.ts";
