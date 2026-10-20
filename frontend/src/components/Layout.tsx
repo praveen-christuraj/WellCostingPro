@@ -79,6 +79,10 @@ export default function Layout() {
   const changePassword = async () => { setSavingPassword(true); setPasswordError(''); try { await api('/auth/change-password', { method: 'POST', body: body({ current_password: currentPassword, new_password: newPassword }) }); setPasswordDialog(false); setCurrentPassword(''); setNewPassword(''); await logout() } catch (e) { setPasswordError((e as Error).message) } finally { setSavingPassword(false) } }
 
   const visible = (item: NavItem) => (!item.permission || can(item.permission)) && (!item.anyOf || item.anyOf.some(can)) && (!item.requires || item.requires.every(can))
+  // The business dashboard spans three modules, so it sits directly in the bar
+  // rather than inside one module's dropdown.
+  const showBusinessDashboard = can('rig-well:read') || can('afe:read') || can('daily-cost:read')
+  const businessDashboardActive = location.pathname.startsWith('/business-dashboard')
   const modulesForUser = modules.map(m => ({ ...m, items: m.items.filter(visible) })).filter(m => m.items.length > 0)
   const currentModule = modulesForUser.find(m => m.items.some(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`)))
 
@@ -94,7 +98,9 @@ export default function Layout() {
   useEffect(() => {
     // The most specific route wins, so /other-management/audit is not labelled with the module overview.
     // `/` is a landing redirect to User Management; the dashboard lives at /dashboard.
-    const page = location.pathname === '/'
+    const page = location.pathname.startsWith('/business-dashboard')
+      ? 'Dashboard'
+      : location.pathname === '/'
       ? 'User Management'
       : modulesForUser.flatMap(m => m.items)
         .filter(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`))
@@ -115,7 +121,12 @@ export default function Layout() {
       <Toolbar sx={{ gap: { xs: 1, sm: 1.5 }, minHeight: { xs: 58, sm: 62 }, px: { xs: 1.5, sm: 2.5 }, flexWrap: 'wrap' }}>
         <IconButton sx={{ display: { md: 'none' }, color: 'text.primary' }} onClick={e => setMobileAnchor(e.currentTarget)} aria-label="Open navigation" aria-haspopup="menu" aria-expanded={!!mobileAnchor}><MenuRounded/></IconButton>
         <Brand/>
-        {!compact && <Box component="nav" aria-label="Modules" display="flex" alignItems="center" flexWrap="wrap" rowGap={.25} columnGap={.25} sx={{ ml: { xs: 0, md: 2 }, minWidth: 0, flex: '1 1 auto' }}>
+        {!compact && showBusinessDashboard && <Button
+          className={`topnav-item${businessDashboardActive ? ' active' : ''}`}
+          onClick={() => navigate('/business-dashboard')}
+          sx={{ ml: { md: 1.5 } }}
+        >Dashboard</Button>}
+        {!compact && <Box component="nav" aria-label="Modules" display="flex" alignItems="center" flexWrap="wrap" rowGap={.25} columnGap={.25} sx={{ ml: { xs: 0, md: 1 }, minWidth: 0, flex: '1 1 auto' }}>
           {modulesForUser.map(module => {
             const active = currentModule?.label === module.label
             return <Button
@@ -145,6 +156,9 @@ export default function Layout() {
       {moduleAnchor?.module.items.map(item => <MenuItem key={item.path} selected={location.pathname === item.path} onClick={() => { setModuleAnchor(null); navigate(item.path) }}><item.icon sx={{ fontSize: 18, mr: 1.2, color: 'text.secondary' }}/>{item.label}</MenuItem>)}
     </Menu>
     <Menu anchorEl={mobileAnchor} open={!!mobileAnchor} onClose={() => setMobileAnchor(null)}>
+      {showBusinessDashboard && <MenuItem selected={businessDashboardActive} onClick={() => { setMobileAnchor(null); navigate('/business-dashboard') }}>
+        <DashboardOutlined sx={{ fontSize: 18, mr: 1.2, color: 'text.secondary' }}/>Dashboard
+      </MenuItem>}
       {modulesForUser.map(module => <Box key={module.label}>
         <Divider/>
         <Typography fontSize={10} fontWeight={800} letterSpacing={1.2} color="text.secondary" sx={{ px: 2, pt: 1.2, pb: .5 }}>{module.label.toUpperCase()}</Typography>

@@ -6,6 +6,7 @@ import { useAuth } from './context/AuthContext'
 const Layout = lazy(() => import('./components/Layout'))
 const Login = lazy(() => import('./pages/Login'))
 const Overview = lazy(() => import('./pages/Overview'))
+const BusinessDashboard = lazy(() => import('./pages/BusinessDashboard'))
 const Users = lazy(() => import('./pages/Users'))
 const Roles = lazy(() => import('./pages/Roles'))
 const Permissions = lazy(() => import('./pages/Permissions'))
@@ -46,10 +47,12 @@ function Guard({ permission, children }: { permission: string | string[]; childr
   return allowed ? children : <Navigate to="/" replace/>
 }
 
-// Landing after login: User Management is the home page. Users without
-// users:read fall back to the dashboard (now under User Management).
+// Landing after login: the cross-module Business Dashboard is the home page for
+// anybody who can read a costing module. Users without one of those permissions
+// keep the previous landing (the User Management register or its dashboard).
 function Landing() {
   const { can } = useAuth()
+  if (can('rig-well:read') || can('afe:read') || can('daily-cost:read')) return <Navigate to="/business-dashboard" replace/>
   return can('users:read') ? <Navigate to="/users" replace/> : <Navigate to="/dashboard" replace/>
 }
 
@@ -73,6 +76,7 @@ export default function App() {
         <Route element={<Layout/>}>
           <Route index element={<Landing/>}/>
           <Route path="dashboard" element={<Overview/>}/>
+          <Route path="business-dashboard" element={<GuardAny permissions={['rig-well:read', 'afe:read', 'daily-cost:read']}><BusinessDashboard/></GuardAny>}/>
           <Route path="users" element={<Guard permission="users:read"><Users/></Guard>}/>
           <Route path="roles" element={<Guard permission="roles:read"><Roles/></Guard>}/>
           <Route path="permissions" element={<Guard permission="permissions:read"><Permissions/></Guard>}/>
