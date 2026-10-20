@@ -709,6 +709,7 @@ export default function DailyCostSheet() {
       }
       let localAmount = '—'
       if (priced) localAmount = priced.amount
+      else if ('cost_items' in line && line.cost_items?.length) localAmount = String(line.cost_items.reduce((sum, item) => sum + Number(item.amount), 0))
       else if (line.override_rate !== null) localAmount = amountForRate(
         line.override_rate, line.quantity, 'quantity_unit' in line ? line.quantity_unit : 'unit',
         'charging_basis' in line ? line.charging_basis ?? undefined : undefined,

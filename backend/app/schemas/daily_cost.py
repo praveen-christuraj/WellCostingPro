@@ -145,7 +145,20 @@ class DailyCostLineInput(_Strict):
         return self
 
 
+class ServiceCostItemIn(BaseModel):
+    description: str = Field(min_length=1, max_length=500)
+    amount: Decimal = Field(ge=0, max_digits=24, decimal_places=6)
+
+    @field_validator("description")
+    @classmethod
+    def nonblank_description(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Enter a cost item description.")
+        return value.strip()
+
+
 class DailyCostServiceLineIn(DailyCostLineInput):
+    cost_items: list[ServiceCostItemIn] = Field(default_factory=list, max_length=100)
     service_id: str = Field(min_length=1, max_length=36)
     baseline_service_rate_id: str | None = Field(default=None, max_length=36)
     charging_basis: ChargingBasis | None = None
@@ -525,6 +538,7 @@ class DailyCostLineOut(BaseModel):
 
 
 class DailyCostServiceLineOut(DailyCostLineOut):
+    cost_items: list[ServiceCostItemIn] = Field(default_factory=list)
     service_id: str
     service_code: str
     service_name: str

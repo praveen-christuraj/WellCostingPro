@@ -56,15 +56,16 @@ export function TangiblePicker({ value, options, onChange, error, helperText }: 
     value={selected}
     onChange={(_event, next) => onChange(next?.id ?? '')}
     getOptionLabel={option => `${option.tangible_code} · ${option.tangible_name}`}
-    filterOptions={keywordFilter(option => [option.tangible_code, option.tangible_name, option.manufacturer_name, option.description, option.category_name, option.subcategory_name, option.scope])}
+    filterOptions={keywordFilter(option => [option.tangible_code, option.tangible_name, option.manufacturer_name, option.description, option.category_name, option.subcategory_name, option.scope, option.currency, option.captured_rate])}
     isOptionEqualToValue={(option, current) => option.id === current.id}
     renderOption={(props, option) => <li {...props} key={option.id}>
       <Box minWidth={0}>
         <Typography fontSize={13} fontWeight={700}>{option.tangible_code} · {option.tangible_name}</Typography>
         <Typography fontSize={11.5} color="text.secondary" noWrap>{option.manufacturer_name || 'No manufacturer'} · {option.description || 'No description'}</Typography>
+        <Typography fontSize={12} fontWeight={700}>{amountText(option.captured_rate, option.currency)}</Typography>
       </Box>
     </li>}
-    renderInput={(params: AutocompleteRenderInputParams) => <TextField {...params} label="Tangible" required error={error} helperText={helperText ?? 'Search by code, name, manufacturer, description or category.'}/>}
+    renderInput={(params: AutocompleteRenderInputParams) => <TextField {...params} label="Tangible" required error={error} helperText={helperText ?? 'Search by code, name, manufacturer, description, category or price.'}/>}
     noOptionsText="No tangibles match. Add tangibles in Master Data → Tangibles."
     fullWidth
   />

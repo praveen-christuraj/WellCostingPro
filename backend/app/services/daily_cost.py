@@ -14,6 +14,8 @@ AFE total, and each one carries a mandatory remark.
 
 from __future__ import annotations
 
+from app.models.daily_cost import DailyCostServiceCostItem
+
 import logging
 import re
 import threading
@@ -1410,7 +1412,7 @@ def _normalise_service(
         billable_quantity = Decimal("1")
     else:
         billable_quantity = quantity / Decimal("24") if basis == "Day Rate" and line.quantity_unit == "hours" else quantity
-    amount = _money(billable_quantity * selected_rate)
+    amount = _money(sum((item.amount for item in line.cost_items), Decimal("0"))) if line.cost_items else _money(billable_quantity * selected_rate)
     old_override = Decimal(old.override_rate) if old and old.override_rate is not None else None
     old_reason = old.override_reason if old else ""
     label = _label(service.service_code, service.service_name)
@@ -1421,6 +1423,7 @@ def _normalise_service(
         audit_change = (old_override, None, old_reason, currency, label)
     base.update(
         {
+            "cost_items": [DailyCostServiceCostItem(description=item.description, amount=item.amount, sort_order=index) for index, item in enumerate(line.cost_items)],
             "service_id": service.id,
             "service_code_snapshot": service.service_code,
             "service_name_snapshot": service.service_name,
@@ -2041,7 +2044,7 @@ def _line_out(line: Any, labels: dict[str, DailyCostBaselineBudgetLine]) -> Any:
     common = _daily_line_common(line, labels)
     if isinstance(line, DailyCostServiceLine):
         return DailyCostServiceLineOut(
-            **common, service_id=line.service_id, service_code=line.service_code_snapshot,
+            **common, cost_items=[{"description": item.description, "amount": item.amount} for item in line.cost_items], service_id=line.service_id, service_code=line.service_code_snapshot,
             service_name=line.service_name_snapshot, charging_basis=line.charging_basis,
             charge_category=line.charge_category, baseline_service_rate_id=line.baseline_service_rate_id,
         )
@@ -3825,7 +3828,7 @@ def _saved_inputs(
             "override_reason": row.override_reason, "remarks": row.remarks,
         }
     services = [DailyCostServiceLineIn(
-        **common(row), service_id=row.service_id, baseline_service_rate_id=row.baseline_service_rate_id,
+        **common(row), cost_items=[{"description": item.description, "amount": item.amount} for item in row.cost_items], service_id=row.service_id, baseline_service_rate_id=row.baseline_service_rate_id,
         charging_basis=row.charging_basis, charge_category=row.charge_category,
         quantity_unit=row.quantity_unit,
     ) for row in entry.service_lines]
