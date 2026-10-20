@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from app.api.deps import Current, Db, require, owner, granted
 from app.core.security import hash_password
-from app.models import User, Role, Permission
+from app.models import User, Role, Permission, UserCostingSet, UserCostingSetItem
 from app.schemas.rbac import (UserCreate, UserUpdate, UserOut, RoleCreate, RoleUpdate, RoleOut,
-                              PermissionCreate, PermissionUpdate, PermissionOut, IDList, Overview)
+                              PermissionCreate, PermissionUpdate, PermissionOut, IDList, Overview,
+                              UserBulkDeleteOut)
 from app.services import audit
 
 router = APIRouter(tags=["Access management"])
@@ -120,6 +121,66 @@ def assign_roles(item_id: str, data: IDList, request: Request, db: Db, user: Cur
                  summary=f"Set roles for {item.email}: {', '.join(r.name for r in roles) or 'none'}", request=request)
     commit(db)
     return item
+
+
+def assert_deletable(actor: User, item: User):
+    """Guards shared by the single and bulk delete paths.
+
+    An administrator can remove any ordinary member of the workspace, but never
+    their own account and never an organization owner: the owner role is the
+    platform administrator and the RBAC baseline keeps at least one. A
+    non-owner may not delete an account holding capabilities they lack either —
+    otherwise `users:delete` would become a way to remove a more privileged
+    colleague.
+    """
+    if item.id == actor.id:
+        raise HTTPException(403, "You cannot delete your own account")
+    if any(role.is_owner for role in item.roles):
+        raise HTTPException(403, f"{item.email} holds the organization owner role and cannot be deleted")
+    assert_assignable(actor, item.roles)
+
+
+def erase_user(db, actor: User, item: User, request: Request):
+    """Permanently remove a workspace member and the data only they owned.
+
+    The audit trail keeps its own copy of the actor's name and e-mail, so the
+    history of this account survives the deletion. Refresh tokens cascade with
+    the row; the private costing shortcuts are cleared explicitly so the delete
+    behaves the same on every database driver.
+    """
+    audit.record(db, organization_id=actor.organization_id, actor=actor, action="delete", entity_type="user",
+                 entity_id=item.id, entity_label=item.email,
+                 summary=f"Deleted user {item.full_name} <{item.email}>"
+                         + (f" with roles: {', '.join(role.name for role in item.roles)}" if item.roles else ""),
+                 request=request)
+    set_ids = select(UserCostingSet.id).where(UserCostingSet.user_id == item.id)
+    db.execute(delete(UserCostingSetItem).where(UserCostingSetItem.set_id.in_(set_ids)))
+    db.execute(delete(UserCostingSet).where(UserCostingSet.user_id == item.id))
+    db.delete(item)
+
+
+@router.delete("/users/{item_id}", status_code=204, dependencies=[Depends(require("users:delete"))])
+def delete_user(item_id: str, request: Request, db: Db, user: Current):
+    item = scoped(db, User, item_id, user.organization_id)
+    assert_deletable(user, item)
+    erase_user(db, user, item, request)
+    commit(db)
+
+
+@router.post("/users/bulk-delete", response_model=UserBulkDeleteOut, dependencies=[Depends(require("users:delete"))])
+def bulk_delete_users(data: IDList, request: Request, db: Db, user: Current):
+    items = resolve_ids(db, User, data.ids, user.organization_id)
+    protected = [item for item in items if item.id == user.id or any(role.is_owner for role in item.roles)]
+    if protected:
+        names = ", ".join(sorted(item.email for item in protected))
+        raise HTTPException(409, f"These accounts cannot be deleted: {names}. Your own account and organization owners are protected.")
+    for item in items:
+        assert_deletable(user, item)
+    for item in items:
+        erase_user(db, user, item, request)
+    commit(db)
+    # Sorted so the response (and its tests) do not depend on row order.
+    return {"deleted_count": len(items), "deleted_emails": sorted(item.email for item in items)}
 
 
 @router.get("/roles", response_model=list[RoleOut], dependencies=[Depends(require("roles:read"))])

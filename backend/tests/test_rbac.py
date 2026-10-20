@@ -10,10 +10,10 @@ os.environ["SECRET_KEY"] = "test-only-secret-do-not-deploy-12345"
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from app.core.database import Base, engine, SessionLocal
 from app.main import app
-from app.models import Organization, User, Role, Permission
+from app.models import AuditLog, Organization, RefreshSession, User, Role, Permission
 from app.core.security import hash_password
 
 
@@ -115,3 +115,125 @@ def test_lockout_owner_protection_and_bad_payloads():
         for _ in range(5):
             assert client.post("/api/v1/auth/login", json={"organization": "north", "email": "owner@example.com", "password": "wrong-password"}).status_code == 401
         assert client.post("/api/v1/auth/login", json={"organization": "north", "email": "owner@example.com", "password": "correct-password-123"}).status_code == 429
+
+
+# --- User deletion -----------------------------------------------------------
+# Administrators create workspace members, so they must be able to remove them.
+# Owner accounts and the signed-in account stay protected.
+
+
+def make_user(client, headers, email="member@example.com", role_ids=None):
+    response = client.post("/api/v1/users", headers=headers, json={
+        "email": email, "full_name": "Workspace Member", "password": "member-password-123", "role_ids": role_ids or [],
+    })
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_owner_can_delete_a_created_user_and_the_email_is_reusable():
+    with TestClient(app) as client:
+        headers = login(client)
+        user = make_user(client, headers)
+        assert client.delete(f"/api/v1/users/{user['id']}", headers=headers).status_code == 204
+        emails = [row["email"] for row in client.get("/api/v1/users", headers=headers).json()]
+        assert user["email"] not in emails
+        assert client.delete(f"/api/v1/users/{user['id']}", headers=headers).status_code == 404
+        # The audit trail keeps the deletion, attributed to the administrator.
+        with SessionLocal() as db:
+            entry = db.scalar(select(AuditLog).where(
+                AuditLog.entity_type == "user", AuditLog.entity_id == user["id"], AuditLog.action == "delete"))
+            assert entry is not None and entry.actor_email == "owner@example.com"
+        # A permanently deleted account frees its e-mail address for re-invitation.
+        assert make_user(client, headers)["email"] == user["email"]
+
+
+def test_deleted_user_cannot_sign_in_and_sessions_are_revoked():
+    with TestClient(app) as client:
+        headers = login(client)
+        user = make_user(client, headers)
+        assert client.post("/api/v1/auth/login", json={"organization": "north", "email": user["email"], "password": "member-password-123"}).status_code == 200
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count(RefreshSession.id)).where(RefreshSession.user_id == user["id"])) > 0
+        assert client.delete(f"/api/v1/users/{user['id']}", headers=headers).status_code == 204
+        with SessionLocal() as db:
+            assert db.get(User, user["id"]) is None
+            assert db.scalar(select(func.count(RefreshSession.id)).where(RefreshSession.user_id == user["id"])) == 0
+        assert client.post("/api/v1/auth/login", json={"organization": "north", "email": user["email"], "password": "member-password-123"}).status_code == 401
+
+
+def test_owner_and_self_are_protected_from_deletion():
+    with TestClient(app) as client:
+        headers = login(client)
+        me = client.get("/api/v1/auth/me", headers=headers).json()
+        assert client.delete(f"/api/v1/users/{me['id']}", headers=headers).status_code == 403
+        # A second owner is still an owner: the RBAC baseline never leaves the
+        # workspace without an administrator through this endpoint.
+        with SessionLocal() as db:
+            org_id = db.get(User, me["id"]).organization_id
+            owner_role = db.scalar(select(Role).where(Role.organization_id == org_id, Role.is_owner.is_(True)))
+            second = User(organization_id=org_id, email="second-owner@example.com", full_name="Second Owner",
+                          password_hash=hash_password("second-owner-pass-123"), roles=[owner_role])
+            db.add(second)
+            db.commit()
+            second_id = second.id
+        response = client.delete(f"/api/v1/users/{second_id}", headers=headers)
+        assert response.status_code == 403
+        assert "owner" in response.json()["detail"].lower()
+        with SessionLocal() as db:
+            assert db.get(User, second_id) is not None
+
+
+def test_cross_tenant_user_deletion_is_not_found():
+    with TestClient(app) as client:
+        north, south = login(client), login(client, "south")
+        user = make_user(client, north)
+        assert client.delete(f"/api/v1/users/{user['id']}", headers=south).status_code == 404
+        assert client.post("/api/v1/users/bulk-delete", headers=south, json={"ids": [user["id"]]}).status_code == 422
+        assert client.delete(f"/api/v1/users/{user['id']}", headers=north).status_code == 204
+
+
+def test_user_deletion_requires_the_users_delete_capability():
+    with TestClient(app) as client:
+        admin = login(client)
+        member = make_user(client, admin)
+        permission = client.post("/api/v1/permissions", headers=admin, json={"key": "users:delete", "description": "Delete users"})
+        assert permission.status_code == 201
+        remover_role = client.post("/api/v1/roles", headers=admin, json={"name": "User Administrator"}).json()["id"]
+        assert client.put(f"/api/v1/roles/{remover_role}/permissions", headers=admin, json={"ids": [permission.json()["id"]]}).status_code == 200
+        remover = make_user(client, admin, email="remover@example.com", role_ids=[remover_role])
+        token = client.post("/api/v1/auth/login", json={"organization": "north", "email": remover["email"], "password": "member-password-123"}).json()["access_token"]
+        remover_headers = {"Authorization": f"Bearer {token}"}
+        # A member without the capability cannot delete anybody, even with a link.
+        reader_role = client.post("/api/v1/roles", headers=admin, json={"name": "Reader"}).json()["id"]
+        reader = make_user(client, admin, email="reader@example.com", role_ids=[reader_role])
+        reader_token = client.post("/api/v1/auth/login", json={"organization": "north", "email": reader["email"], "password": "member-password-123"}).json()["access_token"]
+        assert client.delete(f"/api/v1/users/{member['id']}", headers={"Authorization": f"Bearer {reader_token}"}).status_code == 403
+        # A capability holder may remove an ordinary member.
+        assert client.delete(f"/api/v1/users/{member['id']}", headers=remover_headers).status_code == 204
+        # But not an account holding capabilities the deleter does not hold.
+        privileged_permission = client.post("/api/v1/permissions", headers=admin, json={"key": "reports:approve", "description": "Approve reports"}).json()["id"]
+        privileged_role = client.post("/api/v1/roles", headers=admin, json={"name": "Approver"}).json()["id"]
+        client.put(f"/api/v1/roles/{privileged_role}/permissions", headers=admin, json={"ids": [privileged_permission]})
+        approver = make_user(client, admin, email="approver@example.com", role_ids=[privileged_role])
+        assert client.delete(f"/api/v1/users/{approver['id']}", headers=remover_headers).status_code == 403
+        # And never an organization owner.
+        me = client.get("/api/v1/auth/me", headers=admin).json()
+        assert client.delete(f"/api/v1/users/{me['id']}", headers=remover_headers).status_code == 403
+
+
+def test_bulk_user_deletion_reports_protected_accounts():
+    with TestClient(app) as client:
+        headers = login(client)
+        me = client.get("/api/v1/auth/me", headers=headers).json()
+        first = make_user(client, headers, email="first@example.com")
+        second = make_user(client, headers, email="second@example.com")
+        response = client.post("/api/v1/users/bulk-delete", headers=headers, json={"ids": [first["id"], me["id"]]})
+        assert response.status_code == 409
+        assert me["email"] in response.json()["detail"]
+        with SessionLocal() as db:
+            assert db.get(User, first["id"]) is not None
+        result = client.post("/api/v1/users/bulk-delete", headers=headers, json={"ids": [first["id"], second["id"]]})
+        assert result.status_code == 200, result.text
+        assert result.json() == {"deleted_count": 2, "deleted_emails": sorted([first["email"], second["email"]])}
+        emails = [row["email"] for row in client.get("/api/v1/users", headers=headers).json()]
+        assert first["email"] not in emails and second["email"] not in emails

@@ -66,6 +66,11 @@ class IDList(BaseModel):
     ids: list[str]
 
 
+class UserBulkDeleteOut(BaseModel):
+    deleted_count: int
+    deleted_emails: list[str]
+
+
 class LoginInput(BaseModel):
     organization: str
     email: EmailStr
