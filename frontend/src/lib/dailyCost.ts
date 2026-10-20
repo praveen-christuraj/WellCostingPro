@@ -198,10 +198,25 @@ export type DailyCostComparison = {
   adjusted_planned_total: string | null; adjusted_balance: string | null; has_adjustment: boolean
 }
 export type DailyCostWarning = { code: string; severity: 'info' | 'warning' | 'error'; message: string }
+/**
+ * One configuration scope's register milestones. Actual days count from the
+ * Well Spud Date & Time (never from the first sheet) to the end of the report
+ * date, and stop at the Progress Completed Date & Time once it is entered.
+ */
+export type WellProgressScope = {
+  scope: 'drilling' | 'completion'; scope_label: string; progress_label: string
+  spud_at: string | null; progress_completed_at: string | null; is_completed: boolean
+  planned_days: string; actual_days: string | null; days_variance: string | null
+  as_of_date: string | null
+}
+export type WellProgressReport = {
+  well_id: string; well_code: string; well_name: string; scopes: WellProgressScope[]
+}
 export type DailyCostDay = {
   entry: DailyCostEntry; services: DailyCostServiceLine[]; consumables: DailyCostConsumableLine[]
   tangibles: DailyCostTangibleLine[]; other_expenses: DailyCostOtherExpenseLine[]
   comparison: DailyCostComparison; warnings: DailyCostWarning[]
+  progress: WellProgressScope | null
 }
 export type DailyCostPreview = {
   services: DailyCostServiceLine[]; consumables: DailyCostConsumableLine[]; tangibles: DailyCostTangibleLine[]
@@ -368,6 +383,9 @@ export type DailyCostWellTotals = {
   // adjustment, so callers use planned / planned_days above.
   adjusted_planned: string | null; adjusted_balance: string | null; adjusted_used_percent: string | null
   adjusted_planned_days: string | null; has_adjustment: boolean
+  // Progress days counted from the Well Spud Date & Time (null until a spud
+  // date is entered on any scope).
+  spud_actual_days: string | null; spud_days_variance: string | null
 }
 export type DailyCostWellSummary = {
   well: {
@@ -381,6 +399,7 @@ export type DailyCostWellSummary = {
   factors: DailyCostFactorGroup[]
   budget_lines: DailyCostComparisonLine[]
   warnings: DailyCostWarning[]
+  progress: WellProgressScope[]
 }
 
 /** Server-side register filters, so the daily basis stays quick on a long well. */

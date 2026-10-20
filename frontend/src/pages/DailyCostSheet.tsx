@@ -13,6 +13,7 @@ import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag, useUnsavedChangesGuard } from '../components/Common'
 import { DailyCostLineDialog, type DailyCostLineKind, type EditableDailyCostLine } from '../components/daily-cost/DailyCostLineDialog'
 import { DailyCostBulkScopeDialog } from '../components/daily-cost/DailyCostBulkScopeDialog'
+import { WellProgressPanel } from '../components/daily-cost/WellProgressPanel'
 import { CostingSetPickerDialog } from '../components/CostingSetPickerDialog'
 import { useCostPrint } from '../components/daily-cost/DailyCostPrintSheet'
 import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
@@ -24,7 +25,7 @@ import {
   DAILY_COST_STATUSES, DAILY_ONE_TIME_CATEGORIES, dailyMoney, deriveClassification, displayDate, entryQuery, otherExpenseLabel, saveFromDay,
   type DailyCostBaseline, type DailyCostComparisonLine, type DailyCostDay, type DailyCostGroup,
   type AnyDailyCostLine, type DailyCostImportResult, type DailyCostPreview, type DailyCostReference,
-  type DailyCostSavePayload, type DailyCostServiceInput, type DailyQuantityUnit,
+  type DailyCostSavePayload, type DailyCostServiceInput, type DailyQuantityUnit, type WellProgressScope,
   type ConsumableCategory, type ConsumableKind,
 } from '../lib/dailyCost'
 import { formatDepthMeters } from '../lib/units'
@@ -69,6 +70,10 @@ export default function DailyCostSheet() {
   const { can } = useAuth()
   const canReadCostingSets = can('costing-sets:read')
   const [day, setDay] = useState<DailyCostDay | null>(null)
+  // Well progress milestones (spud / progress completion) for this sheet's AFE scope.
+  const [progress, setProgress] = useState<WellProgressScope | null>(null)
+  const [progressDirty, setProgressDirty] = useState(false)
+  const progressSaveRef = useRef<(() => Promise<boolean>) | null>(null)
   const [baseline, setBaseline] = useState<DailyCostBaseline | null>(null)
   const [reference, setReference] = useState<DailyCostReference | null>(null)
   const [payload, setPayload] = useState<DailyCostSavePayload>({ remarks: '', services: [], consumables: [], tangibles: [], other_expenses: [] })
@@ -122,6 +127,7 @@ export default function DailyCostSheet() {
       setDay(dayData)
       setBaseline(baselineData)
       setReference(referenceData)
+      setProgress(dayData.progress)
       setPayload(saveFromDay(dayData))
       setSelectedServiceIndices([])
       setServiceSelectionResetKey(value => value + 1)
@@ -215,13 +221,17 @@ export default function DailyCostSheet() {
   }, [dirty])
 
   // Page-level unsaved-changes guard (convention 15): navigation, back and tab
-  // close first offer to save this sheet. The beforeunload handler above stays
-  // for the raw reload case.
+  // close first offer to save this sheet — including unsaved progress dates.
+  // The beforeunload handler above stays for the raw reload case.
   const leaveGuard = useUnsavedChangesGuard({
-    when: dirty,
-    onSave: () => save(),
+    when: dirty || progressDirty,
+    onSave: async () => {
+      if (progressDirty && !(await (progressSaveRef.current?.() ?? true))) return false
+      if (dirty) return save()
+      return true
+    },
     title: 'Leave without saving?',
-    message: 'This daily cost sheet has changes that are not saved yet. Save them before leaving, or discard them deliberately.',
+    message: 'This daily cost sheet has changes that are not saved yet — cost lines or the well progress dates. Save them before leaving, or discard them deliberately.',
   })
 
   const addOrEditLine = (lineOrLines: EditableDailyCostLine | EditableDailyCostLine[]) => {
@@ -278,6 +288,7 @@ export default function DailyCostSheet() {
     try {
       const updated = await api<DailyCostDay>(`/daily-cost/entries/${entryId}`, { method: 'PUT', body: body(payload) })
       setDay(updated)
+      setProgress(current => updated.progress ?? current)
       setPayload(saveFromDay(updated))
       setPreview(null)
       setNotice('Daily cost sheet saved. Actual-to-date and remaining AFE balance have been refreshed.')
@@ -902,6 +913,13 @@ export default function DailyCostSheet() {
         {canReopen && <Button variant="outlined" startIcon={<UndoRounded/>} onClick={() => openStatus('reopen')}>Reopen</Button>}
       </Box>}
     />
+
+    {progress && <WellProgressPanel
+      wellId={entry.well_id} scopes={[progress]} canEdit={can('daily-cost:update')}
+      asOfLabel={`the sheet date (${displayDate(entry.cost_date)})`}
+      onSaved={report => setProgress(report.scopes.find(scope => scope.scope === progress.scope) ?? progress)}
+      onDirtyChange={setProgressDirty} saveRef={progressSaveRef}
+    />}
 
     {notice && <Alert severity="success" sx={{ mb: 1.5 }} onClose={() => setNotice('')}>{notice}</Alert>}
     {costingSetError && <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setCostingSetError('')}>{costingSetError}</Alert>}

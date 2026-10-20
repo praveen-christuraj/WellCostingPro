@@ -13,13 +13,14 @@ import {
 } from '@mui/material'
 import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
-import { ErrorMessage, PageHeading, Tag } from '../components/Common'
+import { ErrorMessage, PageHeading, Tag, useUnsavedChangesGuard } from '../components/Common'
 import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
+import { WellProgressPanel } from '../components/daily-cost/WellProgressPanel'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import {
   dailyMoney, displayDate, DAILY_COST_STATUSES, type DailyCostDailyRow, type DailyCostFactorGroup,
-  type DailyCostFactorRow, type DailyCostWellOption, type DailyCostWellSummary,
+  type DailyCostFactorRow, type DailyCostWellOption, type DailyCostWellSummary, type WellProgressScope,
 } from '../lib/dailyCost'
 import { formatDepthMeters } from '../lib/units'
 
@@ -84,6 +85,10 @@ export default function DailyCostAnalysis() {
   const theme = useTheme()
   const [wells, setWells] = useState<DailyCostWellOption[]>([])
   const [summary, setSummary] = useState<DailyCostWellSummary | null>(null)
+  // Register milestones (spud / progress completion) with their day counts.
+  const [progress, setProgress] = useState<WellProgressScope[]>([])
+  const [progressDirty, setProgressDirty] = useState(false)
+  const progressSaveRef = useRef<(() => Promise<boolean>) | null>(null)
   const [selectedWell, setSelectedWell] = useState(wellId)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -108,7 +113,7 @@ export default function DailyCostAnalysis() {
     const version = ++requestVersion.current
     setLoadError('')
     setSummary(null)
-    if (!selectedWell) { setLoading(false); return }
+    if (!selectedWell) { setProgress([]); setLoading(false); return }
     if (dateFrom && dateTo && dateFrom > dateTo) { setLoading(false); return }
     setLoading(true)
     try {
@@ -117,7 +122,10 @@ export default function DailyCostAnalysis() {
       if (dateTo) params.set('to', dateTo)
       params.set('include_draft', String(includeDraft))
       const result = await api<DailyCostWellSummary>(`/daily-cost/wells/${selectedWell}/cost-summary?${params.toString()}`)
-      if (version === requestVersion.current) setSummary(result)
+      if (version === requestVersion.current) {
+        setSummary(result)
+        setProgress(result.progress)
+      }
     } catch (caught) {
       if (version !== requestVersion.current) return
       setLoadError(caught instanceof Error ? caught.message : 'The well cost analysis could not be loaded')
@@ -254,6 +262,14 @@ export default function DailyCostAnalysis() {
 
   const canExport = can('daily-cost:export')
 
+  // Unsaved-changes protection (convention 15) for the progress date entries.
+  const leaveGuard = useUnsavedChangesGuard({
+    when: progressDirty,
+    onSave: () => (progressSaveRef.current?.() ?? Promise.resolve(true)),
+    title: 'Leave with unsaved progress dates?',
+    message: 'The Well Spud Date & Time or Progress Completed Date & Time entries are not saved yet. Save them before leaving, or discard them deliberately.',
+  })
+
   return <>
     <PageHeading
       eyebrow="DAILY COST MANAGEMENT / WELL COST ANALYSIS"
@@ -286,6 +302,13 @@ export default function DailyCostAnalysis() {
       </Box>
       {dateFrom && dateTo && dateFrom > dateTo && <Alert severity="error" sx={{ mt: 1.3 }}>The start date is after the end date. Swap them to analyse this period.</Alert>}
     </Paper>
+
+    {progress.length > 0 && selectedWell && <WellProgressPanel
+      wellId={selectedWell} scopes={progress} canEdit={can('daily-cost:update')}
+      asOfLabel="today"
+      onSaved={report => setProgress(report.scopes)}
+      onDirtyChange={setProgressDirty} saveRef={progressSaveRef}
+    />}
 
     {loading && !summary && <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box>}
 
@@ -433,5 +456,7 @@ export default function DailyCostAnalysis() {
         />
       </Box>
     </>}
+    {/* Intercepts navigation, the back button and tab close while progress dates are unsaved. */}
+    {leaveGuard}
   </>
 }

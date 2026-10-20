@@ -50,12 +50,25 @@ export function DailyCostPrintSheet({ report }: { report: CostPrintReport | null
 function DailySections({ day }: { day: DailyCostDay }) {
   const { entry, comparison } = day
   const money = (value: string) => dailyMoney(value, entry.standard_currency)
+  const milestone = (value: string | null) => (value ? `${value.replace('T', ' ').slice(0, 16)} hrs` : '—')
+  const progress = day.progress
   return <section>
     <h2>{entry.daily_cost_code} · {displayDate(entry.cost_date)}</h2>
     <h3>1. Well, AFE and daily sheet details</h3>
     <table><tbody>
       <tr><th>Well</th><td>{entry.well_code} · {entry.well_name}</td><th>Rig</th><td>{entry.rig_code} · {entry.rig_name}</td></tr>
       <tr><th>AFE</th><td>{entry.afe_code} · {entry.afe_name} ({entry.afe_status})</td><th>Sheet status</th><td>{entry.status} · {entry.standard_currency}{entry.is_deleted ? ` · Deleted ${entry.deleted_at}` : ''}</td></tr>
+      {progress && <>
+        <tr>
+          <th>Well spud date &amp; time ({progress.scope_label.toLowerCase()})</th><td>{milestone(progress.spud_at)}</td>
+          <th>{progress.progress_label}</th><td>{milestone(progress.progress_completed_at)}{progress.is_completed ? ' — day count stopped' : ''}</td>
+        </tr>
+        <tr>
+          <th>Actual days (from spud, to sheet date)</th><td>{progress.actual_days ?? '—'}</td>
+          <th>Planned days · difference (actual − planned)</th>
+          <td>{Number(progress.planned_days).toFixed(3)} · {progress.days_variance === null ? '—' : `${Number(progress.days_variance) > 0 ? '+' : ''}${Number(progress.days_variance).toFixed(3)}`}</td>
+        </tr>
+      </>}
       <tr><th>Actual depth (standardized)</th><td>{formatDepthMeters(entry.actual_depth, 'm')}</td><th>USD total (FX {entry.usd_exchange_rate ?? '1'})</th><td>{dailyMoney(entry.total_cost_usd ?? entry.total_cost, 'USD')}</td></tr>
       <tr><th>Budget locked</th><td>{entry.budget_baseline_locked_at}</td><th>Rates locked</th><td>{entry.rate_baseline_locked_at}</td></tr>
       <tr><th>Created</th><td>{entry.created_at} · {entry.created_by}</td><th>Updated</th><td>{entry.updated_at} · {entry.updated_by}</td></tr>
