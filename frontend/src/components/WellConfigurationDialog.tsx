@@ -6,6 +6,7 @@ import { ErrorMessage, FormDialog, Tag } from './Common'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import type { MasterConfigurationOption, RigWellConfigurationOptions, Well, WellConfiguration } from '../lib/rigWell'
+import { formatDepthMeters } from '../lib/units'
 
 type PhaseInput = { key: string; phase_id: string; days: string; remarks: string }
 type SectionInput = {
@@ -249,10 +250,19 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
       {options.phases.length === 0 && <Alert severity="warning" action={can('master-data:read') ? <Button component={RouterLink} to="/master-data/records?module=phases" size="small">Phases</Button> : undefined}>No active Phases are configured for this workspace yet.</Alert>}
 
       <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: '1fr 1fr 1fr' }} gap={1.5}>
-        <TextField select label="Depth unit" value={depthUnit} disabled={readOnly} onChange={event => { setDirty(true); setDepthUnit(event.target.value as 'm' | 'ft') }}>
+        <TextField select label="Depth unit" value={depthUnit} disabled={readOnly} onChange={event => { setDirty(true); setDepthUnit(event.target.value as 'm' | 'ft') }} helperText={depthUnit === 'ft' ? 'Standardized automatically to metres (ft ÷ 3.281)' : 'Standard unit across all wells'}>
           <MenuItem value="m">Metres (m)</MenuItem><MenuItem value="ft">Feet (ft)</MenuItem>
         </TextField>
-        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, px: 1.5, py: 1 }}><Typography fontSize={10} fontWeight={800} color="text.secondary" textTransform="uppercase">Planned total depth</Typography><Typography fontSize={15} fontWeight={800} mt={.3}>{finalDepth ? `${Number(finalDepth).toLocaleString()} ${depthUnit}` : '—'}</Typography></Box>
+        <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, px: 1.5, py: 1 }}>
+          <Typography fontSize={10} fontWeight={800} color="text.secondary" textTransform="uppercase">Planned total depth (standardized m)</Typography>
+          <Typography fontSize={15} fontWeight={800} mt={.3}>
+            {finalDepth
+              ? depthUnit === 'ft'
+                ? `${formatDepthMeters(finalDepth, 'ft')} (${Number(finalDepth).toLocaleString()} ft)`
+                : formatDepthMeters(finalDepth, 'm')
+              : '—'}
+          </Typography>
+        </Box>
         <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, px: 1.5, py: 1 }}><Typography fontSize={10} fontWeight={800} color="text.secondary" textTransform="uppercase">Planned duration</Typography><Typography fontSize={15} fontWeight={800} mt={.3}>{totalDays.toFixed(2)} days</Typography></Box>
       </Box>
 
@@ -281,8 +291,8 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
                 {section.hole_section_id && !selectedSection && <MenuItem value={section.hole_section_id} disabled>Deleted or unavailable section · choose another</MenuItem>}
                 {options.hole_sections.map(option => <MenuItem key={option.id} value={option.id}>{option.code} — {option.name}</MenuItem>)}
               </TextField>
-              <TextField type="number" label={`From (${depthUnit})`} required value={section.from_depth} disabled={readOnly} inputProps={{ min: 0, step: .01 }} onChange={event => updateSection(section.key, { from_depth: event.target.value })}/>
-              <TextField type="number" label={`To (${depthUnit})`} required value={section.to_depth} disabled={readOnly} inputProps={{ min: 0, step: .01 }} onChange={event => updateSection(section.key, { to_depth: event.target.value })}/>
+              <TextField type="number" label={`From (${depthUnit})`} required value={section.from_depth} disabled={readOnly} inputProps={{ min: 0, step: .01 }} helperText={depthUnit === 'ft' && section.from_depth.trim() !== '' ? `= ${formatDepthMeters(section.from_depth, 'ft')}` : undefined} onChange={event => updateSection(section.key, { from_depth: event.target.value })}/>
+              <TextField type="number" label={`To (${depthUnit})`} required value={section.to_depth} disabled={readOnly} inputProps={{ min: 0, step: .01 }} helperText={depthUnit === 'ft' && section.to_depth.trim() !== '' ? `= ${formatDepthMeters(section.to_depth, 'ft')}` : undefined} onChange={event => updateSection(section.key, { to_depth: event.target.value })}/>
               <TextField label="Section remarks" value={section.remarks} disabled={readOnly} inputProps={{ maxLength: 1000 }} onChange={event => updateSection(section.key, { remarks: event.target.value })}/>
             </Box>
             <Divider sx={{ my: 1.6 }}/>

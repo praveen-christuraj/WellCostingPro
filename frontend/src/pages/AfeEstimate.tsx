@@ -16,6 +16,8 @@ import { SowAdjustmentDialog } from '../components/afe/SowAdjustmentDialog'
 import { ServiceLineDialog } from '../components/afe/ServiceLineDialog'
 import { TangibleLineDialog } from '../components/afe/TangibleLineDialog'
 import { useAuth } from '../context/AuthContext'
+import { formatDepth } from '../lib/rigWell'
+import { formatDepthMeters } from '../lib/units'
 import { ApiError, api, body } from '../lib/api'
 import {
   STATUS_ACTIONS, amountText, consumableProblems, daysText, emptyConsumableLine, emptyServiceLine, emptyTangibleLine, estimateToInput, nextActions, scopeRows, serviceProblems, stableJson, tangibleProblems, toNumber,
@@ -749,7 +751,7 @@ export default function AfeEstimate() {
         <Box display="flex" gap={1} alignItems="center" flexWrap="wrap">
           <Tag tone={saved.well.config_status === 'configured' ? 'info' : 'warning'}>Plan {saved.well.config_status}</Tag>
           <Tag>{saved.well.status}</Tag>
-          <Typography fontSize={12} color="text.secondary">Planned {daysText(saved.well.total_days)}{saved.well.total_depth ? ` · ${Number(saved.well.total_depth).toLocaleString()} ${saved.well.depth_unit}` : ''}</Typography>
+          <Typography fontSize={12} color="text.secondary">Planned {daysText(saved.well.total_days)}{saved.well.total_depth ? ` · ${formatDepth(saved.well.total_depth, saved.well.depth_unit)}` : ''}</Typography>
           <Button component={RouterLink} to="/rig-well/wells" size="small">Edit plan</Button>
         </Box>
       </Box>
@@ -760,7 +762,7 @@ export default function AfeEstimate() {
             <TableHead>
               <TableRow>
                 <TableCell>Section</TableCell>
-                <TableCell>Depth</TableCell>
+                <TableCell>Depth (standardized m)</TableCell>
                 <TableCell align="right">Planned days</TableCell>
                 <TableCell>Phases (planned days)</TableCell>
               </TableRow>
@@ -768,7 +770,7 @@ export default function AfeEstimate() {
             <TableBody>
               {wellSections.map(section => <TableRow key={section.hole_section_id}>
                 <TableCell><Typography fontSize={13} fontWeight={700}>{section.section_code} · {section.section_name}</Typography></TableCell>
-                <TableCell>{section.from_depth} → {section.to_depth}</TableCell>
+                <TableCell>{formatDepthMeters(section.from_depth, saved.well.depth_unit)} → {formatDepthMeters(section.to_depth, saved.well.depth_unit)}</TableCell>
                 <TableCell align="right">{daysText(section.total_days)}</TableCell>
                 <TableCell>{section.phases.length ? section.phases.map(phase => `${phase.phase_name} (${daysText(phase.days)})`).join(' · ') : 'No phases'}</TableCell>
               </TableRow>)}

@@ -67,11 +67,17 @@ class DailyCostEntryCreate(_Strict):
     afe_id: str = Field(min_length=1, max_length=36)
     cost_date: date
     remarks: str = Field(default="", max_length=1000)
+    usd_exchange_rate: Decimal | None = Field(default=None, gt=0, le=Decimal("999999"), max_digits=18, decimal_places=6)
 
     @field_validator("well_id", "afe_id", "remarks", mode="before")
     @classmethod
     def trim_text(cls, value: Any) -> Any:
         return _trim(value)
+
+    @field_validator("usd_exchange_rate", mode="before")
+    @classmethod
+    def blank_usd_rate(cls, value: Any) -> Any:
+        return _blank_to_none(value)
 
 
 class DailyCostLineInput(_Strict):
@@ -93,14 +99,28 @@ class DailyCostLineInput(_Strict):
     party_name: str = Field(default="", max_length=200)
     quantity: Decimal = Field(gt=0, le=Decimal("1000000"), max_digits=18, decimal_places=4)
     currency: str = Field(default="", max_length=10)
+    exchange_rate: Decimal | None = Field(default=None, gt=0, le=Decimal("999999"), max_digits=18, decimal_places=6)
+    actual_depth: Decimal | None = Field(default=None, ge=0, le=Decimal("999999999"), max_digits=18, decimal_places=4)
+    actual_depth_unit: Literal["m", "ft"] = "m"
+    depth_seq: int | None = None
     override_rate: Decimal | None = Field(default=None, ge=0, le=MAX_RATE, max_digits=18, decimal_places=4)
     override_reason: str = Field(default="", max_length=500)
     remarks: str = Field(default="", max_length=500)
 
-    @field_validator("hole_section_id", "phase_id", "sub_activity_id", "vendor_id", mode="before")
+    @field_validator("hole_section_id", "phase_id", "sub_activity_id", "vendor_id", "exchange_rate", "actual_depth", mode="before")
     @classmethod
     def blank_ids_to_none(cls, value: Any) -> Any:
         return _blank_to_none(value)
+
+    @field_validator("actual_depth_unit", mode="before")
+    @classmethod
+    def normalize_depth_unit_field(cls, value: Any) -> Any:
+        text = _trim(value).lower() if isinstance(value, str) else value
+        if text in ("", None, "m", "meter", "meters", "metre", "metres"):
+            return "m"
+        if text in ("ft", "feet", "foot"):
+            return "ft"
+        return value
 
     @field_validator("currency", mode="before")
     @classmethod
@@ -193,6 +213,7 @@ class DailyCostOtherExpenseLineIn(DailyCostLineInput):
 
 class DailyCostSaveIn(_Strict):
     remarks: str = Field(default="", max_length=1000)
+    usd_exchange_rate: Decimal | None = Field(default=None, gt=0, le=Decimal("999999"), max_digits=18, decimal_places=6)
     services: list[DailyCostServiceLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
     consumables: list[DailyCostConsumableLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
     tangibles: list[DailyCostTangibleLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
@@ -202,6 +223,11 @@ class DailyCostSaveIn(_Strict):
     @classmethod
     def trim_remarks(cls, value: Any) -> Any:
         return _trim(value)
+
+    @field_validator("usd_exchange_rate", mode="before")
+    @classmethod
+    def blank_usd_rate(cls, value: Any) -> Any:
+        return _blank_to_none(value)
 
     @model_validator(mode="after")
     def unique_line_ids(self):
@@ -480,6 +506,12 @@ class DailyCostLineOut(BaseModel):
     exchange_rate: Decimal
     amount: Decimal
     standard_amount: Decimal
+    usd_exchange_rate: Decimal = Decimal("1")
+    usd_amount: Decimal = Decimal("0")
+    actual_depth: Decimal | None = None
+    actual_depth_entered: Decimal | None = None
+    actual_depth_unit: Literal["m", "ft"] = "m"
+    depth_seq: int = 0
     rate_source: str
     rate_revision_number: int | None
     rate_effective_date: date | None
@@ -576,6 +608,19 @@ class DailyCostComparison(BaseModel):
     has_adjustment: bool = False
 
 
+class DailyCostSectionDepthOut(BaseModel):
+    """Last depth value entered for a (date, well, section) in standardized metres."""
+
+    hole_section_id: str | None = None
+    section_code: str = ""
+    section_name: str = ""
+    actual_depth: Decimal
+    depth_unit: Literal["m"] = "m"
+    entered_depth: Decimal | None = None
+    entered_unit: Literal["m", "ft"] = "m"
+    daily_cost_code: str = ""
+
+
 class DailyCostEntryOut(BaseModel):
     id: str
     daily_cost_code: str
@@ -607,6 +652,17 @@ class DailyCostEntryOut(BaseModel):
     total_cost: Decimal
     upa_total: Decimal
     npt_total: Decimal
+    usd_exchange_rate: Decimal = Decimal("1")
+    services_total_usd: Decimal = Decimal("0")
+    consumables_total_usd: Decimal = Decimal("0")
+    tangibles_total_usd: Decimal = Decimal("0")
+    other_expenses_total_usd: Decimal = Decimal("0")
+    total_cost_usd: Decimal = Decimal("0")
+    upa_total_usd: Decimal = Decimal("0")
+    npt_total_usd: Decimal = Decimal("0")
+    actual_depth: Decimal | None = None
+    depth_unit: Literal["m"] = "m"
+    section_depths: list[DailyCostSectionDepthOut] = Field(default_factory=list)
     rate_baseline_locked_at: datetime
     budget_baseline_locked_at: datetime
     warning_count: int
@@ -646,6 +702,10 @@ class DailyCostPreviewOut(BaseModel):
     total_cost: Decimal
     upa_total: Decimal
     npt_total: Decimal
+    total_cost_usd: Decimal = Decimal("0")
+    actual_depth: Decimal | None = None
+    depth_unit: Literal["m"] = "m"
+    section_depths: list[DailyCostSectionDepthOut] = Field(default_factory=list)
     warnings: list[DailyCostWarnings]
 
 
@@ -755,6 +815,9 @@ class DailyCostDailyRow(BaseModel):
     sheets: int
     status: Literal["draft", "submitted", "mixed"]
     adjusted_budget_balance: Decimal | None = None
+    actual_depth: Decimal | None = None
+    total_usd: Decimal = Decimal("0")
+    cumulative_usd: Decimal = Decimal("0")
 
 
 class DailyCostFactorRow(BaseModel):

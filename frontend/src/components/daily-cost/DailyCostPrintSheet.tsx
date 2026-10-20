@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { dailyMoney, displayDate, type DailyCostDay, type DailyCostLineOutput } from '../../lib/dailyCost'
+import { formatDepthMeters } from '../../lib/units'
 
 export type CostPrintReport = { title: string; period: string; days: DailyCostDay[] }
 
@@ -27,15 +28,17 @@ export function DailyCostPrintSheet({ report }: { report: CostPrintReport | null
           dailyMoney(days.reduce((total, day) => total + Number(day.entry[field]), 0), entry.standard_currency)
         return <Fragment key={key}>
           <h3>{entry.well_code} · {entry.afe_code} · {entry.afe_name} ({entry.standard_currency})</h3>
-          <table><thead><tr><th>Date / daily sheet</th><th>Status</th><th>Services</th><th>Consumables</th><th>Tangibles</th><th>Other expenses</th><th>Total</th></tr></thead>
+          <table><thead><tr><th>Date / daily sheet</th><th>Status</th><th>Actual depth (m)</th><th>Services</th><th>Consumables</th><th>Tangibles</th><th>Other expenses</th><th>Total</th><th>USD Total</th></tr></thead>
             <tbody>{days.map(day => <tr key={day.entry.id}>
               <td>{displayDate(day.entry.cost_date)} · {day.entry.daily_cost_code}</td><td>{day.entry.status}</td>
+              <td className="num">{formatDepthMeters(day.entry.actual_depth, 'm')}</td>
               <td className="num">{dailyMoney(day.entry.services_total, entry.standard_currency)}</td>
               <td className="num">{dailyMoney(day.entry.consumables_total, entry.standard_currency)}</td>
               <td className="num">{dailyMoney(day.entry.tangibles_total, entry.standard_currency)}</td>
               <td className="num">{dailyMoney(day.entry.other_expenses_total, entry.standard_currency)}</td>
               <td className="num">{dailyMoney(day.entry.total_cost, entry.standard_currency)}</td>
-            </tr>)}<tr className="ps-total"><th colSpan={2}>Period total · this AFE only</th><td className="num">{sum('services_total')}</td><td className="num">{sum('consumables_total')}</td><td className="num">{sum('tangibles_total')}</td><td className="num">{sum('other_expenses_total')}</td><td className="num">{sum('total_cost')}</td></tr></tbody>
+              <td className="num">{dailyMoney(day.entry.total_cost_usd ?? day.entry.total_cost, 'USD')}</td>
+            </tr>)}<tr className="ps-total"><th colSpan={3}>Period total · this AFE only</th><td className="num">{sum('services_total')}</td><td className="num">{sum('consumables_total')}</td><td className="num">{sum('tangibles_total')}</td><td className="num">{sum('other_expenses_total')}</td><td className="num">{sum('total_cost')}</td><td className="num">{dailyMoney(days.reduce((total, day) => total + Number(day.entry.total_cost_usd ?? day.entry.total_cost), 0), 'USD')}</td></tr></tbody>
           </table>
         </Fragment>
       })}
@@ -53,6 +56,7 @@ function DailySections({ day }: { day: DailyCostDay }) {
     <table><tbody>
       <tr><th>Well</th><td>{entry.well_code} · {entry.well_name}</td><th>Rig</th><td>{entry.rig_code} · {entry.rig_name}</td></tr>
       <tr><th>AFE</th><td>{entry.afe_code} · {entry.afe_name} ({entry.afe_status})</td><th>Sheet status</th><td>{entry.status} · {entry.standard_currency}{entry.is_deleted ? ` · Deleted ${entry.deleted_at}` : ''}</td></tr>
+      <tr><th>Actual depth (standardized)</th><td>{formatDepthMeters(entry.actual_depth, 'm')}</td><th>USD total (FX {entry.usd_exchange_rate ?? '1'})</th><td>{dailyMoney(entry.total_cost_usd ?? entry.total_cost, 'USD')}</td></tr>
       <tr><th>Budget locked</th><td>{entry.budget_baseline_locked_at}</td><th>Rates locked</th><td>{entry.rate_baseline_locked_at}</td></tr>
       <tr><th>Created</th><td>{entry.created_at} · {entry.created_by}</td><th>Updated</th><td>{entry.updated_at} · {entry.updated_by}</td></tr>
       <tr><th>Submitted</th><td>{entry.submitted_at || '—'} · {entry.submitted_by || '—'}</td><th>Status remarks</th><td>{entry.status_remarks || '—'}</td></tr>
@@ -91,16 +95,17 @@ function PrintLines({ title, lines, names, standard, remarkRequired }: {
   return <>
     <h3>{title} ({lines.length})</h3>
     {!lines.length ? <p className="ps-empty">No lines recorded.</p> : <table>
-      <thead><tr><th>Item / service and classification</th><th>Section / phase</th><th>Activity / sub activity</th><th>Quantity</th><th>Rate</th><th>Native amount</th><th>Standard amount</th></tr></thead>
+      <thead><tr><th>Item / service and classification</th><th>Section / phase</th><th>Actual depth (m)</th><th>Activity / sub activity</th><th>Quantity</th><th>Rate</th><th>Native amount</th><th>Standard amount</th></tr></thead>
       <tbody>{lines.map((line, index) => <Fragment key={line.id}>
         <tr><td>{names[index]}<div className="ps-sub">{line.classification}</div></td>
           <td>{line.section_code} · {line.section_name}<div className="ps-sub">{line.phase_code} · {line.phase_name}</div></td>
+          <td className="num">{formatDepthMeters(line.actual_depth, 'm')}</td>
           <td>{line.activity_code} · {line.activity_name}<div className="ps-sub">{line.sub_activity_code} · {line.sub_activity_name}</div></td>
           <td>{line.quantity} {line.quantity_unit}</td><td className="num">{dailyMoney(line.effective_rate, line.currency)}</td>
           <td className="num">{dailyMoney(line.amount, line.currency)}</td><td className="num">{dailyMoney(line.standard_amount, standard)}</td></tr>
-        <tr className="ps-component"><td colSpan={7}>
+        <tr className="ps-component"><td colSpan={8}>
           <strong>Responsible party:</strong> {line.party_name || line.vendor_name || '—'} · Vendor {line.vendor_code} {line.vendor_name} · Sub activity party {line.sub_activity_party || '—'}<br/>
-          <strong>Rate trace:</strong> {line.rate_source} · captured {dailyMoney(line.captured_rate, line.currency)} · FX {line.exchange_rate} to {standard} · revision {line.rate_revision_number ?? '—'} · effective {displayDate(line.rate_effective_date)}<br/>
+          <strong>Rate trace:</strong> {line.rate_source} · captured {dailyMoney(line.captured_rate, line.currency)} · FX {line.exchange_rate} to {standard} · USD {dailyMoney(line.usd_amount ?? line.standard_amount, 'USD')} · revision {line.rate_revision_number ?? '—'} · effective {displayDate(line.rate_effective_date)}<br/>
           <strong>Override:</strong> {line.override_rate === null ? 'None' : dailyMoney(line.override_rate, line.currency)} · {line.override_reason || '—'}<br/>
           <strong>Budget:</strong> {line.budget_name || 'Unbudgeted'} · {line.budget_key}<br/>
           <strong>Remarks{remarkRequired ? ' (mandatory)' : ''}:</strong> <span className="ps-notes">{line.remarks || '—'}</span>

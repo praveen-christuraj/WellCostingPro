@@ -28,6 +28,8 @@ from typing import Any
 from fastapi import HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+
+from app.core.units import depth_to_meters
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.domain import afe_costing as engine
@@ -958,6 +960,8 @@ def _price(
 
 def _well_scope_out(well: Well, configuration_scope: str = "drilling") -> WellScopeOut:
     sections = sorted(well.sections_for_scope(configuration_scope), key=lambda row: row.sort_order)
+    scope_unit = well.scope_value(configuration_scope, "depth_unit")
+    total_depth = sections[-1].to_depth if sections else None
     return WellScopeOut(
         scope=configuration_scope,
         well_id=well.id,
@@ -968,10 +972,12 @@ def _well_scope_out(well: Well, configuration_scope: str = "drilling") -> WellSc
         objective=well.objective,
         rig_code=well.rig.rig_code if well.rig else "",
         rig_name=well.rig.rig_name if well.rig else "",
-        depth_unit=well.scope_value(configuration_scope, "depth_unit"),
+        depth_unit=scope_unit,
+        standard_depth_unit="m",
         status=well.scope_value(configuration_scope, "status"),
         config_status=well.scope_value(configuration_scope, "config_status"),
-        total_depth=sections[-1].to_depth if sections else None,
+        total_depth=total_depth,
+        total_depth_m=depth_to_meters(total_depth, scope_unit),
         total_days=sum((phase.days for section in sections for phase in section.phases), Decimal("0")),
         sections=[
             ScopeSectionOut(
@@ -980,6 +986,8 @@ def _well_scope_out(well: Well, configuration_scope: str = "drilling") -> WellSc
                 section_name=section.hole_section.section_name,
                 from_depth=section.from_depth,
                 to_depth=section.to_depth,
+                from_depth_m=depth_to_meters(section.from_depth, scope_unit),
+                to_depth_m=depth_to_meters(section.to_depth, scope_unit),
                 total_days=sum((phase.days for phase in section.phases), Decimal("0")),
                 phases=[
                     ScopePhaseOut(

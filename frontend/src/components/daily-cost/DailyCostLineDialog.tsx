@@ -14,6 +14,7 @@ import {
 import { AddRounded, DeleteOutlineRounded, TuneRounded } from '@mui/icons-material'
 import { FormDialog, Tag } from '../Common'
 import {
+  DAILY_CONSUMABLE_CATEGORIES,
   OTHER_EXPENSE_MIN_REMARKS,
   OTHER_EXPENSE_TYPES,
   dailyMoney,
@@ -32,6 +33,7 @@ import {
   type DailyQuantityUnit,
   type OtherExpenseType,
 } from '../../lib/dailyCost'
+import { formatDepthMeters, normalizeDepthUnit, type DepthUnit } from '../../lib/units'
 
 export type DailyCostLineKind = 'service' | 'consumable' | 'tangible' | 'other'
 export type EditableDailyCostLine =
@@ -77,6 +79,7 @@ type ServiceEntryRow = {
   charging_basis: ChargingBasis | null
   charge_category: ChargeCategory | null
   currency: string
+  exchange_rate: string
   override_rate: string | null
   override_reason: string
   remarks: string
@@ -86,6 +89,15 @@ type ServiceEntryRow = {
   customQuantity: boolean
   custom_quantity: string
   custom_quantity_unit: DailyQuantityUnit
+}
+
+function defaultUsdRateForCurrency(currency: string, baseline: DailyCostBaseline): string {
+  const code = (currency || '').trim().toUpperCase()
+  if (!code || code === 'USD') return '1'
+  if (baseline.standard_currency.toUpperCase() === 'USD' && baseline.exchange_rates[code]) {
+    return baseline.exchange_rates[code]
+  }
+  return ''
 }
 
 function optionsForKind(
@@ -138,11 +150,13 @@ export function DailyCostLineDialog({
   onClose,
   onSave,
 }: Props) {
-  // Common Criteria State for Services
+  // Common Criteria State
   const [commonActivityId, setCommonActivityId] = useState('')
   const [commonSubActivityId, setCommonSubActivityId] = useState<string | null>(null)
   const [commonHoleSectionId, setCommonHoleSectionId] = useState<string | null>(null)
   const [commonPhaseId, setCommonPhaseId] = useState<string | null>(null)
+  const [commonActualDepth, setCommonActualDepth] = useState('')
+  const [commonDepthUnit, setCommonDepthUnit] = useState<DepthUnit>('m')
   const [commonQuantity, setCommonQuantity] = useState('24')
   const [commonQuantityUnit, setCommonQuantityUnit] = useState<DailyQuantityUnit>('hours')
   const [commonVendorId, setCommonVendorId] = useState<string | null>(null)
@@ -159,6 +173,13 @@ export function DailyCostLineDialog({
   const [saving, setSaving] = useState(false)
   const [submitted, setSubmitted] = useState(false)
 
+  const currencyChoices = useMemo(() => {
+    const merged = new Set<string>(['USD', baseline.standard_currency?.toUpperCase() || 'USD'])
+    for (const c of reference.currencies || []) if (c) merged.add(c.toUpperCase())
+    for (const c of Object.keys(baseline.exchange_rates || {})) if (c) merged.add(c.toUpperCase())
+    return ['USD', ...[...merged].filter(c => c !== 'USD').sort()]
+  }, [reference.currencies, baseline.standard_currency, baseline.exchange_rates])
+
   // Initialization
   useEffect(() => {
     if (!open || !kind) return
@@ -172,11 +193,17 @@ export function DailyCostLineDialog({
     const initialSubId = initialLine?.sub_activity_id || eligibleSubs[0]?.id || null
     const initialSub = reference.sub_activities.find(s => s.id === initialSubId)
 
-    // Set common criteria
     setCommonActivityId(initialActivity)
     setCommonSubActivityId(initialSubId)
     setCommonHoleSectionId(initialLine ? initialLine.hole_section_id : defaultSection?.hole_section_id ?? null)
     setCommonPhaseId(initialLine ? initialLine.phase_id : defaultSection?.phases[0]?.phase_id ?? null)
+    setCommonActualDepth(
+      initialLine?.actual_depth !== null && initialLine?.actual_depth !== undefined
+        ? String(initialLine.actual_depth)
+        : '',
+    )
+    setCommonDepthUnit(normalizeDepthUnit(initialLine?.actual_depth_unit || 'm'))
+    setBaselineState('')
 
     if (initialClassification === 'Planned') {
       setCommonPartyName('Not Applicable')
@@ -190,6 +217,7 @@ export function DailyCostLineDialog({
       if (initialLine && isService(initialLine)) {
         setCommonQuantity(initialLine.quantity)
         setCommonQuantityUnit(initialLine.quantity_unit)
+        const cur = (initialLine.currency || baseline.standard_currency || 'USD').toUpperCase()
         setServiceRows([
           {
             id: initialLine.id || 'service-0',
@@ -197,7 +225,8 @@ export function DailyCostLineDialog({
             baseline_service_rate_id: initialLine.baseline_service_rate_id,
             charging_basis: initialLine.charging_basis,
             charge_category: initialLine.charge_category,
-            currency: initialLine.currency,
+            currency: cur,
+            exchange_rate: initialLine.exchange_rate || defaultUsdRateForCurrency(cur, baseline),
             override_rate: initialLine.override_rate,
             override_reason: initialLine.override_reason,
             remarks: initialLine.remarks,
@@ -216,6 +245,7 @@ export function DailyCostLineDialog({
         const firstService = reference.services.find(s => s.id === firstRate?.service_id) || reference.services[0]
         const basis = (firstRate?.charging_basis || 'Day Rate') as ChargingBasis
         const category = (firstRate?.charge_category || 'Operation') as ChargeCategory
+        const cur = (firstRate?.currency || baseline.standard_currency || 'USD').toUpperCase()
         setServiceRows([
           {
             id: 'service-0',
@@ -223,7 +253,8 @@ export function DailyCostLineDialog({
             baseline_service_rate_id: firstRate?.id || null,
             charging_basis: basis,
             charge_category: category,
-            currency: firstRate?.currency || baseline.standard_currency,
+            currency: cur,
+            exchange_rate: defaultUsdRateForCurrency(cur, baseline),
             override_rate: null,
             override_reason: '',
             remarks: '',
@@ -237,70 +268,78 @@ export function DailyCostLineDialog({
         ])
       }
       setNonServiceForm(null)
+    } else if (initialLine) {
+      const cur = (initialLine.currency || baseline.standard_currency || 'USD').toUpperCase()
+      setNonServiceForm({
+        ...initialLine,
+        currency: cur,
+        exchange_rate: initialLine.exchange_rate || defaultUsdRateForCurrency(cur, baseline),
+      })
+    } else if (kind === 'other') {
+      const expType = (reference.other_expense_types?.[0]?.code ?? OTHER_EXPENSE_TYPES[0].code) as OtherExpenseType
+      const cur = 'USD'
+      setNonServiceForm({
+        id: null,
+        activity_id: initialActivity,
+        sub_activity_id: initialSubId,
+        hole_section_id: defaultSection?.hole_section_id ?? null,
+        phase_id: defaultSection?.phases[0]?.phase_id ?? null,
+        vendor_id: null,
+        party_name: initialClassification === 'Planned' ? 'Not Applicable' : initialSub?.responsible_party || '',
+        quantity: '1',
+        quantity_unit: 'unit',
+        unit_rate: '',
+        currency: cur,
+        exchange_rate: defaultUsdRateForCurrency(cur, baseline),
+        override_rate: null,
+        override_reason: '',
+        remarks: '',
+        expense_type: expType,
+        expense_description: '',
+      })
+    } else if (kind === 'tangible') {
+      const item = reference.catalogue_items.find(option => option.item_kind === 'tangible')
+      const snapshot = baseline.catalogue_rates.find(option => option.item_kind === 'tangible' && option.id === item?.id)
+      const cur = (snapshot?.currency || item?.currency || baseline.standard_currency || 'USD').toUpperCase()
+      setNonServiceForm({
+        id: null,
+        activity_id: initialActivity,
+        sub_activity_id: initialSubId,
+        hole_section_id: defaultSection?.hole_section_id ?? null,
+        phase_id: defaultSection?.phases[0]?.phase_id ?? null,
+        vendor_id: null,
+        party_name: initialClassification === 'Planned' ? 'Not Applicable' : initialSub?.responsible_party || '',
+        quantity: '1',
+        currency: cur,
+        exchange_rate: defaultUsdRateForCurrency(cur, baseline),
+        override_rate: null,
+        override_reason: '',
+        remarks: '',
+        tangible_id: item?.id ?? '',
+      })
     } else {
-      // Non-service line setup
-      if (initialLine) {
-        setNonServiceForm(initialLine)
-      } else if (kind === 'other') {
-        const expType = (reference.other_expense_types?.[0]?.code ?? OTHER_EXPENSE_TYPES[0].code) as OtherExpenseType
-        setNonServiceForm({
-          id: null,
-          activity_id: initialActivity,
-          sub_activity_id: initialSubId,
-          hole_section_id: defaultSection?.hole_section_id ?? null,
-          phase_id: defaultSection?.phases[0]?.phase_id ?? null,
-          vendor_id: initialClassification === 'Planned' ? null : null,
-          party_name: initialClassification === 'Planned' ? 'Not Applicable' : initialSub?.responsible_party || '',
-          quantity: '1',
-          quantity_unit: 'unit',
-          unit_rate: '',
-          currency: baseline.standard_currency,
-          override_rate: null,
-          override_reason: '',
-          remarks: '',
-          expense_type: expType,
-          expense_description: '',
-        })
-      } else if (kind === 'tangible') {
-        const item = reference.catalogue_items.find(option => option.item_kind === 'tangible')
-        const snapshot = baseline.catalogue_rates.find(option => option.item_kind === 'tangible' && option.id === item?.id)
-        setNonServiceForm({
-          id: null,
-          activity_id: initialActivity,
-          sub_activity_id: initialSubId,
-          hole_section_id: defaultSection?.hole_section_id ?? null,
-          phase_id: defaultSection?.phases[0]?.phase_id ?? null,
-          vendor_id: initialClassification === 'Planned' ? null : null,
-          party_name: initialClassification === 'Planned' ? 'Not Applicable' : initialSub?.responsible_party || '',
-          quantity: '1',
-          currency: snapshot?.currency || item?.currency || baseline.standard_currency,
-          override_rate: null,
-          override_reason: '',
-          remarks: '',
-          tangible_id: item?.id ?? '',
-        })
-      } else {
-        const cat: ConsumableCategory = 'Mud Chemicals'
-        const item = reference.catalogue_items.find(option => option.item_kind === KIND_BY_CATEGORY[cat])
-        const snapshot = baseline.catalogue_rates.find(option => option.item_kind === item?.item_kind && option.id === item?.id)
-        setNonServiceForm({
-          id: null,
-          activity_id: initialActivity,
-          sub_activity_id: initialSubId,
-          hole_section_id: defaultSection?.hole_section_id ?? null,
-          phase_id: defaultSection?.phases[0]?.phase_id ?? null,
-          vendor_id: initialClassification === 'Planned' ? null : null,
-          party_name: initialClassification === 'Planned' ? 'Not Applicable' : initialSub?.responsible_party || '',
-          quantity: '1',
-          currency: snapshot?.currency || item?.currency || baseline.standard_currency,
-          override_rate: null,
-          override_reason: '',
-          remarks: '',
-          category: cat,
-          item_kind: KIND_BY_CATEGORY[cat],
-          item_id: item?.id ?? '',
-        })
-      }
+      const cat: ConsumableCategory = 'Mud Chemicals'
+      const item = reference.catalogue_items.find(option => option.item_kind === KIND_BY_CATEGORY[cat])
+      const snapshot = baseline.catalogue_rates.find(option => option.item_kind === item?.item_kind && option.id === item?.id)
+      const cur = (snapshot?.currency || item?.currency || baseline.standard_currency || 'USD').toUpperCase()
+      setNonServiceForm({
+        id: null,
+        activity_id: initialActivity,
+        sub_activity_id: initialSubId,
+        hole_section_id: defaultSection?.hole_section_id ?? null,
+        phase_id: defaultSection?.phases[0]?.phase_id ?? null,
+        vendor_id: null,
+        party_name: initialClassification === 'Planned' ? 'Not Applicable' : initialSub?.responsible_party || '',
+        quantity: '1',
+        currency: cur,
+        exchange_rate: defaultUsdRateForCurrency(cur, baseline),
+        override_rate: null,
+        override_reason: '',
+        remarks: '',
+        category: cat,
+        item_kind: KIND_BY_CATEGORY[cat],
+        item_id: item?.id ?? '',
+      })
     }
 
     setError('')
@@ -316,6 +355,8 @@ export function DailyCostLineDialog({
           commonSubActivityId,
           commonHoleSectionId,
           commonPhaseId,
+          commonActualDepth,
+          commonDepthUnit,
           commonQuantity,
           commonQuantityUnit,
           commonVendorId,
@@ -332,6 +373,8 @@ export function DailyCostLineDialog({
     commonSubActivityId,
     commonHoleSectionId,
     commonPhaseId,
+    commonActualDepth,
+    commonDepthUnit,
     commonQuantity,
     commonQuantityUnit,
     commonVendorId,
@@ -345,6 +388,8 @@ export function DailyCostLineDialog({
     commonSubActivityId,
     commonHoleSectionId,
     commonPhaseId,
+    commonActualDepth,
+    commonDepthUnit,
     commonQuantity,
     commonQuantityUnit,
     commonVendorId,
@@ -364,7 +409,6 @@ export function DailyCostLineDialog({
 
   if (!open || !kind) return null
 
-  // Activity change handler (common)
   const handleActivityChange = (activityId: string) => {
     setCommonActivityId(activityId)
     const nextClassification = deriveClassification(reference.activities.find(item => item.id === activityId))
@@ -393,7 +437,6 @@ export function DailyCostLineDialog({
     }
   }
 
-  // Sub Activity change handler (common)
   const handleSubActivityChange = (subId: string | null) => {
     setCommonSubActivityId(subId)
     const sub = reference.sub_activities.find(item => item.id === subId)
@@ -409,9 +452,9 @@ export function DailyCostLineDialog({
     }
   }
 
-  // Service row manipulation
   const addServiceRow = () => {
     const defaultSection = baseline.sections[0]
+    const cur = (baseline.standard_currency || 'USD').toUpperCase()
     setServiceRows(prev => [
       ...prev,
       {
@@ -420,7 +463,8 @@ export function DailyCostLineDialog({
         baseline_service_rate_id: null,
         charging_basis: 'Day Rate',
         charge_category: 'Operation',
-        currency: baseline.standard_currency,
+        currency: cur,
+        exchange_rate: defaultUsdRateForCurrency(cur, baseline),
         override_rate: null,
         override_reason: '',
         remarks: '',
@@ -444,10 +488,14 @@ export function DailyCostLineDialog({
           updated.baseline_service_rate_id = rate.id
           updated.charging_basis = rate.charging_basis
           updated.charge_category = (rate.charge_category || 'Operation') as ChargeCategory
-          updated.currency = rate.currency
+          updated.currency = rate.currency.toUpperCase()
+          updated.exchange_rate = defaultUsdRateForCurrency(rate.currency, baseline)
         } else {
           updated.baseline_service_rate_id = null
         }
+      }
+      if (patch.currency && patch.currency !== row.currency && patch.exchange_rate === undefined) {
+        updated.exchange_rate = defaultUsdRateForCurrency(patch.currency, baseline)
       }
       return updated
     }))
@@ -458,12 +506,17 @@ export function DailyCostLineDialog({
     setServiceRows(prev => prev.filter(r => r.id !== rowId))
   }
 
-  // Validation
   const validate = (): string[] => {
     const problems: string[] = []
 
     if (!commonActivityId) problems.push('Select a Master Data Activity.')
     if (!commonSubActivityId) problems.push('Select a well sub activity configured for this well.')
+    if (commonActualDepth.trim() !== '') {
+      const depthVal = Number(commonActualDepth)
+      if (!Number.isFinite(depthVal) || depthVal < 0) {
+        problems.push('Enter a valid non-negative actual depth.')
+      }
+    }
 
     if (derivedClassification !== 'Planned' && !commonVendorId && !commonPartyName.trim()) {
       problems.push('UPA and NPT lines require a responsible vendor or party.')
@@ -488,7 +541,6 @@ export function DailyCostLineDialog({
           return
         }
 
-        // Duplicate service on same sub activity
         const subId = commonSubActivityId || ''
         const dupKey = `${row.service_id}:${subId}`
         if (duplicateCheck.has(dupKey)) {
@@ -497,7 +549,6 @@ export function DailyCostLineDialog({
         }
         duplicateCheck.add(dupKey)
 
-        // Existing services duplicate check
         const existingDup = serviceLines.some(
           (sLine, sIdx) => sIdx !== lineIndex && sLine.service_id === row.service_id && (sLine.sub_activity_id || '') === subId,
         )
@@ -532,11 +583,29 @@ export function DailyCostLineDialog({
           }
         }
 
-        if (!baseline.exchange_rates[row.currency]) {
-          problems.push(`${rowLabel}: Currency ${row.currency} has no conversion factor in the locked AFE.`)
+        const cur = (row.currency || 'USD').toUpperCase()
+        if (cur !== 'USD') {
+          const fxVal = Number(row.exchange_rate)
+          if (!row.exchange_rate || !Number.isFinite(fxVal) || fxVal <= 0) {
+            problems.push(`${rowLabel}: Enter the USD conversion rate (1 ${cur} = ? USD).`)
+          }
         }
       })
     } else if (nonServiceForm) {
+      const cur = (nonServiceForm.currency || 'USD').toUpperCase()
+      if (cur !== 'USD') {
+        const fxVal = Number(nonServiceForm.exchange_rate)
+        if (!nonServiceForm.exchange_rate || !Number.isFinite(fxVal) || fxVal <= 0) {
+          problems.push(`Enter the USD conversion rate (1 ${cur} = ? USD) so USD totals remain standardized across all wells.`)
+        }
+      }
+      if (nonServiceForm.override_rate !== null) {
+        const ovNum = Number(nonServiceForm.override_rate)
+        if (isNaN(ovNum) || ovNum < 0) problems.push('Enter a valid daily override rate.')
+        if (nonServiceForm.override_reason.trim().length < 3) {
+          problems.push('Explain the daily rate override (at least 3 characters).')
+        }
+      }
       if (isOther(nonServiceForm)) {
         if (!nonServiceForm.expense_type) problems.push('Choose the type of other expense.')
         if (!nonServiceForm.unit_rate || Number(nonServiceForm.unit_rate) <= 0) problems.push('Enter a valid unit rate.')
@@ -544,6 +613,7 @@ export function DailyCostLineDialog({
           problems.push(`Remarks are mandatory on other expense (at least ${OTHER_EXPENSE_MIN_REMARKS} characters).`)
         }
       } else if (isConsumable(nonServiceForm)) {
+        if (!commonHoleSectionId) problems.push('Select a hole section for this consumable line.')
         if (!nonServiceForm.item_id) problems.push('Select a consumable item.')
       } else {
         if (!('tangible_id' in nonServiceForm) || !nonServiceForm.tangible_id) problems.push('Select a tangible item.')
@@ -561,6 +631,8 @@ export function DailyCostLineDialog({
       return
     }
 
+    const parsedDepth = commonActualDepth.trim() === '' ? null : commonActualDepth.trim()
+
     setSaving(true)
     try {
       if (kind === 'service') {
@@ -569,6 +641,7 @@ export function DailyCostLineDialog({
           const phId = row.customScope ? row.custom_phase_id : commonPhaseId
           const qty = row.customQuantity ? row.custom_quantity : commonQuantity
           const unit = row.customQuantity ? row.custom_quantity_unit : commonQuantityUnit
+          const cur = (row.currency || baseline.standard_currency || 'USD').toUpperCase()
           return {
             id: initialLine && serviceRows.length === 1 ? initialLine.id : null,
             activity_id: commonActivityId,
@@ -577,13 +650,16 @@ export function DailyCostLineDialog({
             party_name: derivedClassification === 'Planned' ? 'Not Applicable' : commonPartyName.trim(),
             hole_section_id: secId,
             phase_id: secId ? phId : null,
+            actual_depth: parsedDepth,
+            actual_depth_unit: commonDepthUnit,
             quantity: qty,
             quantity_unit: unit,
             service_id: row.service_id,
             baseline_service_rate_id: row.baseline_service_rate_id,
             charging_basis: row.charging_basis,
             charge_category: (row.charge_category || 'Operation') as ChargeCategory,
-            currency: row.currency || baseline.standard_currency,
+            currency: cur,
+            exchange_rate: cur !== 'USD' && row.exchange_rate ? row.exchange_rate : null,
             override_rate: row.override_rate || null,
             override_reason: row.override_rate ? row.override_reason.trim() : '',
             remarks: row.remarks.trim(),
@@ -591,12 +667,17 @@ export function DailyCostLineDialog({
         })
         onSave(results)
       } else if (nonServiceForm) {
+        const cur = (nonServiceForm.currency || baseline.standard_currency || 'USD').toUpperCase()
         const prepared: EditableDailyCostLine = {
           ...nonServiceForm,
           activity_id: commonActivityId,
           sub_activity_id: commonSubActivityId,
           hole_section_id: commonHoleSectionId,
           phase_id: commonHoleSectionId ? commonPhaseId : null,
+          actual_depth: parsedDepth,
+          actual_depth_unit: commonDepthUnit,
+          currency: cur,
+          exchange_rate: cur !== 'USD' && nonServiceForm.exchange_rate ? nonServiceForm.exchange_rate : null,
           vendor_id: derivedClassification === 'Planned' ? null : commonVendorId,
           party_name: derivedClassification === 'Planned' ? 'Not Applicable' : commonPartyName.trim(),
           remarks: nonServiceForm.remarks.trim(),
@@ -621,13 +702,20 @@ export function DailyCostLineDialog({
         : 'Add service'
       : 'Add line'
 
-  const sectionLabel = (sec: typeof sections[number]) => `${sec.section_code} · ${sec.section_name}`
+  const sectionLabel = (sec: typeof sections[number]) =>
+    `${sec.section_code} · ${sec.section_name} (${Number(sec.from_depth).toFixed(0)}–${Number(sec.to_depth).toFixed(0)} m)`
+
+  const depthHelperText = commonActualDepth.trim()
+    ? commonDepthUnit === 'ft'
+      ? `Standardized depth: ${formatDepthMeters(commonActualDepth, 'ft')} (feet ÷ 3.281). Last entered value governs this date & section.`
+      : `Standardized depth: ${formatDepthMeters(commonActualDepth, 'm')}. Last entered value governs this date & section.`
+    : 'Actual depth reached on this date/section (last entered value in register wins; feet auto-convert via ÷ 3.281).'
 
   return (
     <FormDialog
       open={open}
       title={dialogTitle}
-      subtitle="Dropdowns and charged quantity apply commonly across services. Individual services can be added under these criteria with service-scoped overrides."
+      subtitle="Dropdowns, actual depth (standardized to metres via feet ÷ 3.281), and currency conversion apply cleanly across the daily cost register."
       onClose={onClose}
       onSubmit={handleSave}
       busy={saving}
@@ -730,6 +818,27 @@ export function DailyCostLineDialog({
               ))}
             </TextField>
 
+            {/* Actual Depth + Standardized Unit Selector */}
+            <TextField
+              label="Actual depth"
+              type="number"
+              value={commonActualDepth}
+              onChange={e => setCommonActualDepth(e.target.value)}
+              inputProps={{ min: 0, step: 'any' }}
+              helperText={depthHelperText}
+            />
+
+            <TextField
+              select
+              label="Depth unit"
+              value={commonDepthUnit}
+              onChange={e => setCommonDepthUnit(e.target.value as DepthUnit)}
+              helperText="All depths standardize to metres (m = ft ÷ 3.281)."
+            >
+              <MenuItem value="m">Metres (m) — Standard</MenuItem>
+              <MenuItem value="ft">Feet (ft ÷ 3.281 → m)</MenuItem>
+            </TextField>
+
             {/* Charged Quantity & Unit (Common) */}
             {kind === 'service' && (
               <>
@@ -758,7 +867,7 @@ export function DailyCostLineDialog({
               </>
             )}
 
-            {/* Responsibility (Sub Activity Scoped - Requirement 5) */}
+            {/* Responsibility */}
             {derivedClassification === 'Planned' ? (
               <Box sx={{ gridColumn: '1 / -1' }}>
                 <TextField
@@ -801,7 +910,7 @@ export function DailyCostLineDialog({
           </Box>
         </Paper>
 
-        {/* SERVICES LIST (Criteria based - Requirement 3 & 4) */}
+        {/* SERVICES LIST */}
         {kind === 'service' && (
           <Box>
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
@@ -820,6 +929,8 @@ export function DailyCostLineDialog({
                 const sObj = reference.services.find(s => s.id === row.service_id)
                 const rate = baseline.service_rates.find(r => r.id === row.baseline_service_rate_id)
                 const rateMatches = baseline.service_rates.filter(r => r.service_id === row.service_id)
+                const rowCurrency = (row.currency || 'USD').toUpperCase()
+                const canChangeCurrency = row.override_rate !== null || !rate
                 return (
                   <Paper key={row.id} variant="outlined" sx={{ p: 1.8, borderRadius: 1.5 }}>
                     <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.2}>
@@ -839,7 +950,6 @@ export function DailyCostLineDialog({
                     </Box>
 
                     <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
-                      {/* Service Picker */}
                       <TextField
                         select
                         size="small"
@@ -859,7 +969,6 @@ export function DailyCostLineDialog({
                         ))}
                       </TextField>
 
-                      {/* Baseline Rate Info / Selector if multiple */}
                       {row.service_id && (
                         <Box sx={{ gridColumn: '1 / -1' }}>
                           {rateMatches.length > 1 ? (
@@ -874,7 +983,7 @@ export function DailyCostLineDialog({
                                   baseline_service_rate_id: e.target.value || null,
                                   charging_basis: pickedRate?.charging_basis || row.charging_basis,
                                   charge_category: (pickedRate?.charge_category || row.charge_category) as ChargeCategory,
-                                  currency: pickedRate?.currency || row.currency,
+                                  currency: (pickedRate?.currency || row.currency).toUpperCase(),
                                 })
                               }}
                               fullWidth
@@ -902,13 +1011,18 @@ export function DailyCostLineDialog({
                         </Box>
                       )}
 
-                      {/* Service Scoped Override (Requirement 4) */}
                       <TextField
                         size="small"
                         label="Daily rate override (optional)"
                         type="number"
                         value={row.override_rate ?? ''}
-                        onChange={e => updateServiceRow(row.id, { override_rate: e.target.value === '' ? null : e.target.value })}
+                        onChange={e => {
+                          const nextOv = e.target.value === '' ? null : e.target.value
+                          updateServiceRow(row.id, {
+                            override_rate: nextOv,
+                            currency: nextOv === null && rate ? rate.currency.toUpperCase() : row.currency,
+                          })
+                        }}
                         inputProps={{ min: 0, step: 'any' }}
                         helperText="Service-scoped override; locked baseline rate remains unchanged."
                       />
@@ -923,7 +1037,35 @@ export function DailyCostLineDialog({
                         helperText={row.override_rate !== null ? 'Required when override is entered.' : 'Leave empty if no override.'}
                       />
 
-                      {/* Customize scope/quantity toggle for this service (Requirement 3) */}
+                      <TextField
+                        select
+                        size="small"
+                        label="Currency (USD standard)"
+                        value={rowCurrency}
+                        disabled={!canChangeCurrency}
+                        onChange={e => updateServiceRow(row.id, { currency: e.target.value })}
+                        helperText={canChangeCurrency ? 'USD is the default & standard currency.' : 'Matches locked AFE rate currency unless overridden.'}
+                      >
+                        {currencyChoices.map(c => (
+                          <MenuItem key={c} value={c}>
+                            {c === 'USD' ? 'USD (Default Standard)' : c}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+
+                      {rowCurrency !== 'USD' && (
+                        <TextField
+                          size="small"
+                          type="number"
+                          required
+                          label={`USD conversion rate (1 ${rowCurrency} = ? USD)`}
+                          value={row.exchange_rate}
+                          onChange={e => updateServiceRow(row.id, { exchange_rate: e.target.value })}
+                          inputProps={{ min: 0.000001, step: 'any' }}
+                          helperText={`Required for non-USD currency so USD values stay standardized across all wells.`}
+                        />
+                      )}
+
                       <Box sx={{ gridColumn: '1 / -1' }}>
                         <Button
                           size="small"
@@ -1050,12 +1192,51 @@ export function DailyCostLineDialog({
 
                 <TextField
                   size="small"
-                  label={`Unit rate (${nonServiceForm.currency})`}
+                  label={`Unit rate (${(nonServiceForm.currency || 'USD').toUpperCase()})`}
                   type="number"
                   required
                   value={nonServiceForm.unit_rate}
                   onChange={e => setNonServiceForm(prev => (prev && isOther(prev) ? { ...prev, unit_rate: e.target.value } : prev))}
                 />
+
+                <TextField
+                  select
+                  size="small"
+                  label="Currency (USD standard)"
+                  value={(nonServiceForm.currency || 'USD').toUpperCase()}
+                  onChange={e => {
+                    const nextCur = e.target.value.toUpperCase()
+                    setNonServiceForm(prev => (prev ? {
+                      ...prev,
+                      currency: nextCur,
+                      exchange_rate: defaultUsdRateForCurrency(nextCur, baseline),
+                    } : prev))
+                  }}
+                  helperText="USD is the default & standard currency."
+                >
+                  {currencyChoices.map(c => (
+                    <MenuItem key={c} value={c}>
+                      {c === 'USD' ? 'USD (Default Standard)' : c}
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                {(nonServiceForm.currency || 'USD').toUpperCase() !== 'USD' && (
+                  <TextField
+                    size="small"
+                    type="number"
+                    required
+                    label={`USD conversion rate (1 ${(nonServiceForm.currency || '').toUpperCase()} = ? USD)`}
+                    value={nonServiceForm.exchange_rate ?? ''}
+                    onChange={e => setNonServiceForm(prev => (prev ? { ...prev, exchange_rate: e.target.value } : prev))}
+                    inputProps={{ min: 0.000001, step: 'any' }}
+                    helperText={
+                      nonServiceForm.exchange_rate && Number(nonServiceForm.exchange_rate) > 0 && Number(nonServiceForm.unit_rate) > 0
+                        ? `Converted to USD: ${dailyMoney(Number(nonServiceForm.quantity || 1) * Number(nonServiceForm.unit_rate) * Number(nonServiceForm.exchange_rate), 'USD')}`
+                        : 'Enter USD conversion rate so USD values are recorded across all wells.'
+                    }
+                  />
+                )}
 
                 <TextField
                   size="small"
@@ -1075,19 +1256,48 @@ export function DailyCostLineDialog({
                 <TextField
                   select
                   size="small"
+                  label="Consumable category"
+                  value={nonServiceForm.category}
+                  onChange={e => {
+                    const cat = e.target.value as ConsumableCategory
+                    const nextKind = KIND_BY_CATEGORY[cat]
+                    const first = optionsForKind(nextKind, reference, baseline, null)[0]
+                    const snap = itemSnapshot(first, baseline)
+                    const cur = (snap?.currency || first?.currency || baseline.standard_currency || 'USD').toUpperCase()
+                    setNonServiceForm(prev => (prev && isConsumable(prev) ? {
+                      ...prev,
+                      category: cat,
+                      item_kind: nextKind,
+                      item_id: first?.id ?? '',
+                      currency: cur,
+                      exchange_rate: defaultUsdRateForCurrency(cur, baseline),
+                    } : prev))
+                  }}
+                >
+                  {(reference.consumable_categories?.length ? reference.consumable_categories : DAILY_CONSUMABLE_CATEGORIES).map(cat => (
+                    <MenuItem key={cat} value={cat}>
+                      {cat}
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                <TextField
+                  select
+                  size="small"
                   label="Consumable item"
                   required
                   value={nonServiceForm.item_id}
                   onChange={e => {
                     const item = reference.catalogue_items.find(opt => opt.id === e.target.value)
                     const snap = itemSnapshot(item, baseline)
+                    const cur = (snap?.currency || item?.currency || baseline.standard_currency || 'USD').toUpperCase()
                     setNonServiceForm(prev => (prev && isConsumable(prev) ? {
                       ...prev,
                       item_id: e.target.value,
-                      currency: snap?.currency || item?.currency || baseline.standard_currency,
+                      currency: cur,
+                      exchange_rate: defaultUsdRateForCurrency(cur, baseline),
                     } : prev))
                   }}
-                  sx={{ gridColumn: '1 / -1' }}
                 >
                   {optionsForKind(nonServiceForm.item_kind, reference, baseline, nonServiceForm.item_id).map(opt => (
                     <MenuItem key={opt.id} value={opt.id}>
@@ -1113,6 +1323,53 @@ export function DailyCostLineDialog({
                   onChange={e => setNonServiceForm(prev => (prev ? { ...prev, override_rate: e.target.value === '' ? null : e.target.value } : prev))}
                 />
 
+                {nonServiceForm.override_rate !== null && (
+                  <TextField
+                    size="small"
+                    label="Override reason"
+                    required
+                    value={nonServiceForm.override_reason}
+                    onChange={e => setNonServiceForm(prev => (prev ? { ...prev, override_reason: e.target.value } : prev))}
+                    sx={{ gridColumn: '1 / -1' }}
+                  />
+                )}
+
+                <TextField
+                  select
+                  size="small"
+                  label="Currency (USD standard)"
+                  value={(nonServiceForm.currency || 'USD').toUpperCase()}
+                  disabled={nonServiceForm.override_rate === null}
+                  onChange={e => {
+                    const nextCur = e.target.value.toUpperCase()
+                    setNonServiceForm(prev => (prev ? {
+                      ...prev,
+                      currency: nextCur,
+                      exchange_rate: defaultUsdRateForCurrency(nextCur, baseline),
+                    } : prev))
+                  }}
+                  helperText={nonServiceForm.override_rate !== null ? 'USD is the default & standard currency.' : 'Matches locked catalogue currency unless rate is overridden.'}
+                >
+                  {currencyChoices.map(c => (
+                    <MenuItem key={c} value={c}>
+                      {c === 'USD' ? 'USD (Default Standard)' : c}
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                {(nonServiceForm.currency || 'USD').toUpperCase() !== 'USD' && (
+                  <TextField
+                    size="small"
+                    type="number"
+                    required
+                    label={`USD conversion rate (1 ${(nonServiceForm.currency || '').toUpperCase()} = ? USD)`}
+                    value={nonServiceForm.exchange_rate ?? ''}
+                    onChange={e => setNonServiceForm(prev => (prev ? { ...prev, exchange_rate: e.target.value } : prev))}
+                    inputProps={{ min: 0.000001, step: 'any' }}
+                    helperText="Required for non-USD currency so USD values are recorded across all wells."
+                  />
+                )}
+
                 <TextField
                   size="small"
                   label="Remarks"
@@ -1134,10 +1391,12 @@ export function DailyCostLineDialog({
                   onChange={e => {
                     const item = reference.catalogue_items.find(opt => opt.id === e.target.value)
                     const snap = itemSnapshot(item, baseline)
+                    const cur = (snap?.currency || item?.currency || baseline.standard_currency || 'USD').toUpperCase()
                     setNonServiceForm(prev => (prev && 'tangible_id' in prev ? {
                       ...prev,
                       tangible_id: e.target.value,
-                      currency: snap?.currency || item?.currency || baseline.standard_currency,
+                      currency: cur,
+                      exchange_rate: defaultUsdRateForCurrency(cur, baseline),
                     } : prev))
                   }}
                   sx={{ gridColumn: '1 / -1' }}
@@ -1166,6 +1425,53 @@ export function DailyCostLineDialog({
                   onChange={e => setNonServiceForm(prev => (prev ? { ...prev, override_rate: e.target.value === '' ? null : e.target.value } : prev))}
                 />
 
+                {nonServiceForm.override_rate !== null && (
+                  <TextField
+                    size="small"
+                    label="Override reason"
+                    required
+                    value={nonServiceForm.override_reason}
+                    onChange={e => setNonServiceForm(prev => (prev ? { ...prev, override_reason: e.target.value } : prev))}
+                    sx={{ gridColumn: '1 / -1' }}
+                  />
+                )}
+
+                <TextField
+                  select
+                  size="small"
+                  label="Currency (USD standard)"
+                  value={(nonServiceForm.currency || 'USD').toUpperCase()}
+                  disabled={nonServiceForm.override_rate === null}
+                  onChange={e => {
+                    const nextCur = e.target.value.toUpperCase()
+                    setNonServiceForm(prev => (prev ? {
+                      ...prev,
+                      currency: nextCur,
+                      exchange_rate: defaultUsdRateForCurrency(nextCur, baseline),
+                    } : prev))
+                  }}
+                  helperText={nonServiceForm.override_rate !== null ? 'USD is the default & standard currency.' : 'Matches locked catalogue currency unless rate is overridden.'}
+                >
+                  {currencyChoices.map(c => (
+                    <MenuItem key={c} value={c}>
+                      {c === 'USD' ? 'USD (Default Standard)' : c}
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                {(nonServiceForm.currency || 'USD').toUpperCase() !== 'USD' && (
+                  <TextField
+                    size="small"
+                    type="number"
+                    required
+                    label={`USD conversion rate (1 ${(nonServiceForm.currency || '').toUpperCase()} = ? USD)`}
+                    value={nonServiceForm.exchange_rate ?? ''}
+                    onChange={e => setNonServiceForm(prev => (prev ? { ...prev, exchange_rate: e.target.value } : prev))}
+                    inputProps={{ min: 0.000001, step: 'any' }}
+                    helperText="Required for non-USD currency so USD values are recorded across all wells."
+                  />
+                )}
+
                 <TextField
                   size="small"
                   label="Remarks"
@@ -1182,7 +1488,7 @@ export function DailyCostLineDialog({
 
         <Divider />
         <Typography fontSize={11.5} color="text.secondary">
-          All services and items entered above will be saved as separate, individual line items in this daily sheet.
+          All depths are standardized to metres (feet ÷ 3.281), and non-USD lines convert automatically to USD.
         </Typography>
       </Box>
     </FormDialog>

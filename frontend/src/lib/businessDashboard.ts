@@ -70,6 +70,7 @@ export type DashboardWellRow = {
   status: string
   config_status: string
   depth_unit: string
+  configured_depth_unit?: string
   rig_id: string
   rig_code: string
   rig_name: string
@@ -193,6 +194,8 @@ export type DashboardSectionRow = {
   scope: string
   from_depth: Money
   to_depth: Money
+  actual_depth?: Money
+  depth_unit?: string
   planned_days: Money
   active_days: number | null
   amount: Money
@@ -253,6 +256,8 @@ export type DashboardDaySheet = {
   total: string
   npt: string
   upa: string
+  actual_depth?: Money
+  depth_unit?: string
   warning_count: number
 }
 

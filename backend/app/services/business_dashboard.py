@@ -33,6 +33,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Sequence
 
 from fastapi import HTTPException, Request
+
+from app.core.units import depth_to_meters
 from sqlalchemy import case, func, literal, select, union_all
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -166,7 +168,7 @@ def _default_currency(db: Session, organization_id: str) -> str:
             Currency.is_default.is_(True),
         )
     )
-    return str(code or "")
+    return str(code or "USD")
 
 
 def _plan_map(
@@ -200,13 +202,17 @@ def _plan_map(
 
 
 def _scope_plan(well: Well, scope: str) -> tuple[Decimal, Decimal, int]:
-    """(planned days, deepest planned depth, section count) for one scope."""
+    """(planned days, deepest planned depth in standardized metres, section count)."""
     sections = well.sections_for_scope(scope)
+    scope_unit = well.scope_value(scope, "depth_unit")
     days = sum(
         (Decimal(phase.days) for section in sections for phase in section.phases),
         Decimal("0"),
     )
-    depth = max((Decimal(section.to_depth) for section in sections), default=Decimal("0"))
+    depth = max(
+        (depth_to_meters(section.to_depth, scope_unit) or Decimal("0") for section in sections),
+        default=Decimal("0"),
+    )
     return days, depth, len(sections)
 
 
@@ -249,7 +255,9 @@ def _line_subquery(
     from app.services.daily_cost import LINE_MODELS
 
     parts = []
+    use_usd_amounts = currency.upper() == "USD"
     for model, group in LINE_MODELS:
+        amount_col = model.usd_amount if use_usd_amounts else model.standard_amount
         statement = (
             select(
                 DailyCostEntry.well_id.label("well_id"),
@@ -264,7 +272,7 @@ def _line_subquery(
                 model.activity_code_snapshot.label("activity_code"),
                 model.activity_name_snapshot.label("activity_name"),
                 model.classification.label("classification"),
-                model.standard_amount.label("standard_amount"),
+                amount_col.label("standard_amount"),
             )
             .select_from(model)
             .join(DailyCostEntry, model.entry_id == DailyCostEntry.id)
@@ -281,7 +289,7 @@ def _line_subquery(
             statement = statement.where(DailyCostEntry.cost_date >= date_from)
         if date_to is not None:
             statement = statement.where(DailyCostEntry.cost_date <= date_to)
-        if currency:
+        if currency and not use_usd_amounts:
             statement = statement.where(DailyCostEntry.standard_currency == currency)
         parts.append(statement)
     return union_all(*parts).subquery("dashboard_daily_lines")
@@ -343,6 +351,14 @@ def _entry_totals(
                 func.sum(DailyCostEntry.total_cost),
                 func.sum(DailyCostEntry.upa_total),
                 func.sum(DailyCostEntry.npt_total),
+                func.sum(DailyCostEntry.services_total_usd),
+                func.sum(DailyCostEntry.consumables_total_usd),
+                func.sum(DailyCostEntry.tangibles_total_usd),
+                func.sum(DailyCostEntry.other_expenses_total_usd),
+                func.sum(DailyCostEntry.total_cost_usd),
+                func.sum(DailyCostEntry.upa_total_usd),
+                func.sum(DailyCostEntry.npt_total_usd),
+                func.max(DailyCostEntry.usd_exchange_rate),
             )
             .where(*_entry_conditions(
                 organization_id, well_ids,
@@ -517,6 +533,7 @@ def dashboard(
     # ---- actuals ---------------------------------------------------------------
     per_well: dict[str, dict[str, Any]] = {}
     per_afe: dict[str, dict[str, Any]] = {}
+    afe_usd_rate_hint: dict[str, Decimal] = {}
     excluded_entry_count = 0
     sheets_by_day: dict[date, int] = {}
     if caps.actuals and well_ids:
@@ -525,9 +542,19 @@ def dashboard(
             date_from=date_from, date_to=date_to, include_draft=include_draft, afe_id=afe_id,
         ):
             code = str(row[2] or "")
-            if code != selected:
+            use_usd_cols = selected == "USD"
+            if code != selected and not use_usd_cols:
                 excluded_entry_count += int(row[6] or 0)
                 continue
+            if row[22] is not None and Decimal(row[22]) > 0:
+                afe_usd_rate_hint[row[1]] = Decimal(row[22])
+            s_amt = Decimal(row[15] or 0) if use_usd_cols else Decimal(row[8] or 0)
+            c_amt = Decimal(row[16] or 0) if use_usd_cols else Decimal(row[9] or 0)
+            t_amt = Decimal(row[17] or 0) if use_usd_cols else Decimal(row[10] or 0)
+            o_amt = Decimal(row[18] or 0) if use_usd_cols else Decimal(row[11] or 0)
+            tot_amt = Decimal(row[19] or 0) if use_usd_cols else Decimal(row[12] or 0)
+            upa_amt = Decimal(row[20] or 0) if use_usd_cols else Decimal(row[13] or 0)
+            npt_amt = Decimal(row[21] or 0) if use_usd_cols else Decimal(row[14] or 0)
             well_bucket = per_well.setdefault(row[0], {
                 "first": None, "last": None, "recorded_days": 0, "sheets": 0, "draft_sheets": 0,
                 "services": Decimal("0"), "consumables": Decimal("0"), "tangibles": Decimal("0"),
@@ -538,13 +565,13 @@ def dashboard(
             well_bucket["recorded_days"] += int(row[5] or 0)
             well_bucket["sheets"] += int(row[6] or 0)
             well_bucket["draft_sheets"] += int(row[7] or 0)
-            well_bucket["services"] += Decimal(row[8] or 0)
-            well_bucket["consumables"] += Decimal(row[9] or 0)
-            well_bucket["tangibles"] += Decimal(row[10] or 0)
-            well_bucket["other"] += Decimal(row[11] or 0)
-            well_bucket["total"] += Decimal(row[12] or 0)
-            well_bucket["upa"] += Decimal(row[13] or 0)
-            well_bucket["npt"] += Decimal(row[14] or 0)
+            well_bucket["services"] += s_amt
+            well_bucket["consumables"] += c_amt
+            well_bucket["tangibles"] += t_amt
+            well_bucket["other"] += o_amt
+            well_bucket["total"] += tot_amt
+            well_bucket["upa"] += upa_amt
+            well_bucket["npt"] += npt_amt
             afe_bucket = per_afe.setdefault(row[1], {
                 "first": None, "last": None, "recorded_days": 0, "sheets": 0,
                 "total": Decimal("0"), "upa": Decimal("0"), "npt": Decimal("0"),
@@ -553,9 +580,9 @@ def dashboard(
             afe_bucket["last"] = max(filter(None, [afe_bucket["last"], row[4]]), default=None)
             afe_bucket["recorded_days"] += int(row[5] or 0)
             afe_bucket["sheets"] += int(row[6] or 0)
-            afe_bucket["total"] += Decimal(row[12] or 0)
-            afe_bucket["upa"] += Decimal(row[13] or 0)
-            afe_bucket["npt"] += Decimal(row[14] or 0)
+            afe_bucket["total"] += tot_amt
+            afe_bucket["upa"] += upa_amt
+            afe_bucket["npt"] += npt_amt
         sheets_by_day = _daily_sheets(
             db, organization_id, well_ids,
             date_from=date_from, date_to=date_to, include_draft=include_draft, afe_id=afe_id,
@@ -646,14 +673,20 @@ def dashboard(
         out = afe_outs.get(afe.id)
         code = str(getattr(out, "standard_currency", "") or afe.standard_currency or "")
         pending = out is None or getattr(out, "total_cost", None) is None
+        afe_fx = Decimal("1")
+        row_currency = code
         if out is not None and code != selected:
-            excluded_afe_count += 1
-        amount = None if pending else _money(getattr(out, "total_cost", None))
+            if selected == "USD" and afe.id in afe_usd_rate_hint:
+                afe_fx = afe_usd_rate_hint[afe.id]
+                row_currency = "USD"
+            else:
+                excluded_afe_count += 1
+        amount = None if pending else _money(Decimal(getattr(out, "total_cost", 0)) * afe_fx)
         adjusted = None
         if out is not None and getattr(out, "has_sow_adjustment", False):
             adjustment = sow_map.get(afe.id)
             if adjustment is not None and str(adjustment.standard_currency or "") == code:
-                adjusted = _money(Decimal(adjustment.adjusted_total))
+                adjusted = _money(Decimal(adjustment.adjusted_total) * afe_fx)
         effective = adjusted if adjusted is not None else amount
         actual_bucket = per_afe.get(afe.id)
         actual = _money(actual_bucket["total"]) if actual_bucket else (
@@ -673,7 +706,7 @@ def dashboard(
             rig_id=afe.rig_id,
             rig_code=_rig_field(wells, afe.well_id, "rig_code"),
             rig_name=_rig_field(wells, afe.well_id, "rig_name"),
-            currency=code,
+            currency=row_currency,
             afe_amount=amount,
             sow_adjusted_amount=adjusted,
             has_sow_adjustment=adjusted is not None,
@@ -711,7 +744,19 @@ def dashboard(
             ("Consumables", getattr(out, "consumables_total", 0)),
             ("Tangibles", getattr(out, "tangibles_total", 0)),
         ):
-            planned_by_group[group] += Decimal(value or 0)
+            planned_by_group[group] += Decimal(value or 0) * afe_fx
+
+    # ---- standardized actual depths from daily cost register -------------------
+    latest_section_depths: dict[tuple[str, str | None], Any] = {}
+    if caps.actuals and well_ids:
+        from app.services.daily_cost import resolve_actual_depths
+        _, _, latest_section_depths = resolve_actual_depths(
+            db,
+            organization_id,
+            well_ids=well_ids,
+            date_from=date_from,
+            date_to=date_to,
+        )
 
     # ---- well rows -------------------------------------------------------------
     well_rows: list[DashboardWellRow] = []
@@ -729,11 +774,18 @@ def dashboard(
         actual_depth = None
         if caps.plan and caps.actuals:
             depths = _section_depths(well)
-            reached = [
-                depths[section_id]
-                for (well_key, section_id), values in section_facts.items()
-                if well_key == well.id and section_id in depths and values["active_days"]
-            ]
+            reached: list[Decimal] = []
+            unsectioned = latest_section_depths.get((well.id, None))
+            if unsectioned is not None:
+                reached.append(Decimal(unsectioned.actual_depth))
+            for (well_key, section_id), values in section_facts.items():
+                if well_key != well.id or not values["active_days"]:
+                    continue
+                entered_sec = latest_section_depths.get((well.id, section_id))
+                if entered_sec is not None:
+                    reached.append(Decimal(entered_sec.actual_depth))
+                elif section_id in depths:
+                    reached.append(depths[section_id])
             actual_depth = _money(max(reached)) if reached else _money(Decimal("0"))
         planned_depth = _money(plan["depth"]) if caps.plan else None
         progress = (
@@ -748,7 +800,8 @@ def dashboard(
             block=well.block,
             status=well.status,
             config_status=well.config_status,
-            depth_unit=well.depth_unit,
+            depth_unit="m",
+            configured_depth_unit=well.depth_unit,
             rig_id=well.rig_id,
             rig_code=well.rig.rig_code if well.rig else "",
             rig_name=well.rig.rig_name if well.rig else "",
@@ -827,12 +880,11 @@ def dashboard(
     sow_adjusted_total = sum((row.sow_adjusted_amount or Decimal("0") for row in well_rows), Decimal("0"))
     effective_total = sum((row.effective_afe_amount or Decimal("0") for row in well_rows), Decimal("0"))
     actual_total = sum((row.actual_amount or Decimal("0") for row in well_rows), Decimal("0"))
-    # Depth is only additive when every well uses the same unit.
-    depth_units = {row.depth_unit for row in well_rows}
-    depth_unit = depth_units.pop() if len(depth_units) == 1 else ("mixed" if depth_units else "")
-    depths_comparable = depth_unit != "mixed"
-    planned_depth_total = sum((row.planned_depth or Decimal("0") for row in well_rows), Decimal("0")) if depths_comparable else Decimal("0")
-    actual_depth_total = sum((row.actual_depth or Decimal("0") for row in well_rows), Decimal("0")) if depths_comparable else Decimal("0")
+    # All depths are standardized to metres (feet / 3.281), so totals always reconcile cleanly.
+    depth_unit = "m" if well_rows else ""
+    depths_comparable = True
+    planned_depth_total = sum((row.planned_depth or Decimal("0") for row in well_rows), Decimal("0"))
+    actual_depth_total = sum((row.actual_depth or Decimal("0") for row in well_rows), Decimal("0"))
 
     kpis = DashboardKpis(
         rigs=len(rig_rows),
@@ -986,13 +1038,6 @@ def dashboard(
                 title=f"{len(tracking_without_plan)} tracked well{'s' if len(tracking_without_plan) != 1 else ''} without planned days",
                 detail="Cost is being recorded but the well configuration has no planned days, so day variance cannot be measured.",
             ))
-    if not depths_comparable:
-        alerts.append(DashboardAlert(
-            kind="mixed_depth_units",
-            severity="warning",
-            title="Wells use different depth units",
-            detail="Depth totals are hidden because metres and feet are never added together; each well row keeps its own unit.",
-        ))
     if excluded_afe_count or excluded_entry_count:
         alerts.append(DashboardAlert(
             kind="currency_excluded",
@@ -1082,11 +1127,12 @@ def _span(bucket: dict[str, Any] | None) -> int:
 
 
 def _section_depths(well: Well) -> dict[str | None, Decimal]:
-    """Deepest reachable depth for each configured hole section of one well."""
+    """Deepest reachable depth in standardized metres for each configured hole section."""
     depths: dict[str | None, Decimal] = {}
     for scope in ("drilling", "completion"):
+        scope_unit = well.scope_value(scope, "depth_unit")
         for section in well.sections_for_scope(scope):
-            depth = Decimal(section.to_depth)
+            depth = depth_to_meters(section.to_depth, scope_unit) or Decimal("0.00")
             if section.hole_section_id not in depths or depth > depths[section.hole_section_id]:
                 depths[section.hole_section_id] = depth
     return depths
@@ -1191,29 +1237,53 @@ def well_detail(
         ).all()
         total_section = sum((Decimal(values[4] or 0) for values in section_totals), Decimal("0"))
         used = {values[0]: values for values in section_totals}
+        from app.services.daily_cost import resolve_actual_depths
+        _, detail_day_depths, detail_latest_sections = resolve_actual_depths(
+            db,
+            organization_id,
+            well_ids=[well_id],
+            date_from=date_from,
+            date_to=date_to,
+        )
         depths = _section_depths(well)
         reached_depth = max(
-            (depths.get(section_id, Decimal("0")) for section_id, values in used.items() if values[3]),
+            (
+                Decimal(detail_latest_sections[(well_id, section_id)].actual_depth)
+                if (well_id, section_id) in detail_latest_sections
+                else depths.get(section_id, Decimal("0"))
+                for section_id, values in used.items() if values[3]
+            ),
             default=Decimal("0"),
         )
         for scope in ("drilling", "completion"):
+            scope_unit = well.scope_value(scope, "depth_unit")
             for section in well.sections_for_scope(scope):
                 values = used.get(section.hole_section_id)
                 amount = Decimal(values[4] or 0) if values else Decimal("0")
                 active_days = int(values[3] or 0) if values else 0
                 planned_days = sum((Decimal(phase.days) for phase in section.phases), Decimal("0"))
+                from_m = depth_to_meters(section.from_depth, scope_unit) or Decimal("0.00")
+                to_m = depth_to_meters(section.to_depth, scope_unit) or Decimal("0.00")
+                sec_entered = detail_latest_sections.get((well_id, section.hole_section_id))
+                sec_actual = (
+                    _money(sec_entered.actual_depth)
+                    if sec_entered is not None
+                    else (_money(to_m) if active_days else None)
+                )
                 sections.append(DashboardSectionRow(
                     hole_section_id=section.hole_section_id,
                     section_code=section.hole_section.section_code if section.hole_section else "",
                     section_name=section.hole_section.section_name if section.hole_section else "",
                     scope=scope,
-                    from_depth=_money(section.from_depth),
-                    to_depth=_money(section.to_depth),
+                    from_depth=_money(from_m),
+                    to_depth=_money(to_m),
+                    actual_depth=sec_actual,
+                    depth_unit="m",
                     planned_days=_money(planned_days),
                     active_days=active_days,
                     amount=_money(amount),
                     share=_percent(amount, total_section) if total_section else None,
-                    reached=bool(active_days) or (reached_depth > 0 and Decimal(section.to_depth) <= reached_depth),
+                    reached=bool(active_days) or (reached_depth > 0 and to_m <= reached_depth),
                     planned_phase_count=len(section.phases),
                 ))
         # Cost booked to a section that has since left the configuration stays visible.
@@ -1226,42 +1296,49 @@ def well_detail(
             if section_id in configured:
                 continue
             amount = Decimal(values[4] or 0)
+            sec_entered = detail_latest_sections.get((well_id, section_id))
             sections.append(DashboardSectionRow(
                 hole_section_id=section_id,
                 section_code=str(values[1] or "Unassigned"),
                 section_name=str(values[2] or "Section no longer in the configuration"),
                 scope="",
+                actual_depth=_money(sec_entered.actual_depth) if sec_entered is not None else None,
+                depth_unit="m",
                 active_days=int(values[3] or 0),
                 amount=_money(amount),
                 share=_percent(amount, total_section) if total_section else None,
                 reached=True,
             ))
         notes.append(
-            "Actual depth progress uses the deepest configured hole section that carries recorded daily cost; "
-            "sections at or above that depth are shown as reached."
+            "All depths are standardized to metres (feet / 3.281), and each section's actual depth "
+            "uses the last depth value entered in the daily cost register."
         )
     else:
+        detail_day_depths = {}
         notes.append("Actual cost figures are hidden because daily cost read access is not granted.")
 
     day_sheets: list[DashboardDaySheet] = []
     if caps.actuals:
+        use_usd_sheet = payload.currency == "USD"
+        entry_conditions = [
+            DailyCostEntry.organization_id == organization_id,
+            DailyCostEntry.well_id == well_id,
+            DailyCostEntry.is_deleted.is_(False),
+        ]
+        if not use_usd_sheet:
+            entry_conditions.append(DailyCostEntry.standard_currency == payload.currency)
         entry_query = (
             select(
                 DailyCostEntry.id,
                 DailyCostEntry.cost_date,
                 DailyCostEntry.afe_code_snapshot,
                 DailyCostEntry.status,
-                DailyCostEntry.total_cost,
-                DailyCostEntry.npt_total,
-                DailyCostEntry.upa_total,
+                DailyCostEntry.total_cost_usd if use_usd_sheet else DailyCostEntry.total_cost,
+                DailyCostEntry.npt_total_usd if use_usd_sheet else DailyCostEntry.npt_total,
+                DailyCostEntry.upa_total_usd if use_usd_sheet else DailyCostEntry.upa_total,
                 DailyCostEntry.warning_count,
             )
-            .where(
-                DailyCostEntry.organization_id == organization_id,
-                DailyCostEntry.well_id == well_id,
-                DailyCostEntry.is_deleted.is_(False),
-                DailyCostEntry.standard_currency == payload.currency,
-            )
+            .where(*entry_conditions)
             .order_by(DailyCostEntry.cost_date.desc())
             .limit(180)
         )
@@ -1280,6 +1357,12 @@ def well_detail(
                 total=_money(values[4]),
                 npt=_money(values[5]),
                 upa=_money(values[6]),
+                actual_depth=(
+                    detail_day_depths[(well_id, values[1])].actual_depth
+                    if (well_id, values[1]) in detail_day_depths
+                    else None
+                ),
+                depth_unit="m",
                 warning_count=int(values[7] or 0),
             )
             for values in db.execute(entry_query).all()

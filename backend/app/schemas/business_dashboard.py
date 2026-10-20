@@ -108,7 +108,8 @@ class DashboardWellRow(BaseModel):
     block: str = ""
     status: str = ""
     config_status: str = ""
-    depth_unit: str = ""
+    depth_unit: str = "m"
+    configured_depth_unit: str = "m"
     rig_id: str
     rig_code: str
     rig_name: str
@@ -237,6 +238,8 @@ class DashboardSectionRow(BaseModel):
     scope: str = "drilling"
     from_depth: Decimal | None = None
     to_depth: Decimal | None = None
+    actual_depth: Decimal | None = None
+    depth_unit: str = "m"
     planned_days: Decimal | None = None
     active_days: int | None = None
     amount: Decimal | None = None
@@ -274,6 +277,8 @@ class DashboardDaySheet(BaseModel):
     total: Decimal = Decimal("0")
     npt: Decimal = Decimal("0")
     upa: Decimal = Decimal("0")
+    actual_depth: Decimal | None = None
+    depth_unit: str = "m"
     warning_count: int = 0
 
 

@@ -1,4 +1,6 @@
 import { createPortal } from 'react-dom'
+import { formatDepth } from '../../lib/rigWell'
+import { formatDepthMeters } from '../../lib/units'
 import { amountText, daysText, STATUS_LABEL, type AfeEstimate, type AfeStatusEvent, type ServiceLineOut } from '../../lib/afe'
 
 // Print layout for a saved AFE, in the fixed two-page AFE format:
@@ -101,7 +103,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
             <th>Well plan</th><td>{[well.config_status, well.status].filter(Boolean).join(' · ') || '—'}</td>
           </tr>
           <tr>
-            <th>Total depth</th><td>{well.total_depth ? `${Number(well.total_depth).toLocaleString()} ${well.depth_unit}` : '—'}</td>
+            <th>Total depth (m)</th><td>{well.total_depth ? formatDepth(well.total_depth, well.depth_unit) : '—'}</td>
             <th>Planned days</th><td>{daysText(well.total_days)}</td>
           </tr>
           <tr>
@@ -199,8 +201,8 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
             <thead>
               <tr>
                 <th>Section</th>
-                <th className="num">From ({well.depth_unit})</th>
-                <th className="num">To ({well.depth_unit})</th>
+                <th className="num">From (m)</th>
+                <th className="num">To (m)</th>
                 <th className="num">Days</th>
                 <th>Phases</th>
               </tr>
@@ -209,8 +211,8 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
               {well.sections.map(section => (
                 <tr key={section.hole_section_id}>
                   <td>{section.section_code} · {section.section_name}</td>
-                  <td className="num">{Number(section.from_depth).toLocaleString()}</td>
-                  <td className="num">{Number(section.to_depth).toLocaleString()}</td>
+                  <td className="num">{formatDepthMeters(section.from_depth, well.depth_unit)}</td>
+                  <td className="num">{formatDepthMeters(section.to_depth, well.depth_unit)}</td>
                   <td className="num">{daysText(section.total_days)}</td>
                   <td>{section.phases.length
                     ? section.phases.map(phase => `${phase.phase_code} · ${phase.phase_name} (${daysText(phase.days)})`).join(', ')
@@ -221,7 +223,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
             <tfoot>
               <tr className="ps-subtotal">
                 <td>Well plan · {well.sections.length} section(s)</td>
-                <td className="num" colSpan={2}>{well.total_depth ? `${Number(well.total_depth).toLocaleString()} ${well.depth_unit}` : '—'}</td>
+                <td className="num" colSpan={2}>{well.total_depth ? formatDepth(well.total_depth, well.depth_unit) : '—'}</td>
                 <td className="num">{daysText(well.total_days)}</td>
                 <td>{well.sections.reduce((total, section) => total + section.phases.length, 0)} phase(s)</td>
               </tr>

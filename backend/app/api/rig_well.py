@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.api.deps import Current, Db, granted, owner, require
+from app.core.units import depth_to_meters
 from app.models import (
     Activity,
     Afe,
@@ -296,7 +297,9 @@ def _well_out(well: Well, sub_activity_count: int = 0, *, plan_adjustment: Any |
         status=well.status,
         config_status=well.config_status,
         depth_unit=well.depth_unit,
+        standard_depth_unit="m",
         total_depth=total_depth,
+        total_depth_m=depth_to_meters(total_depth, well.depth_unit),
         total_days=total_days,
         section_count=len(well.sections),
         sub_activity_count=sub_activity_count,
@@ -312,6 +315,7 @@ def _well_out(well: Well, sub_activity_count: int = 0, *, plan_adjustment: Any |
 
 def _well_configuration_out(well: Well, scope: str = "drilling") -> WellConfigurationOut:
     scoped_sections = well.sections_for_scope(scope)
+    scope_unit = well.scope_value(scope, "depth_unit")
     total_depth = scoped_sections[-1].to_depth if scoped_sections else None
     total_days = sum((phase.days for section in scoped_sections for phase in section.phases), Decimal("0"))
     sections = []
@@ -336,6 +340,8 @@ def _well_configuration_out(well: Well, scope: str = "drilling") -> WellConfigur
                 "section_name": section.hole_section.section_name if section.hole_section else "",
                 "from_depth": section.from_depth,
                 "to_depth": section.to_depth,
+                "from_depth_m": depth_to_meters(section.from_depth, scope_unit),
+                "to_depth_m": depth_to_meters(section.to_depth, scope_unit),
                 "remarks": section.remarks or "",
                 "total_days": section_days,
                 "phases": phases,
@@ -350,8 +356,10 @@ def _well_configuration_out(well: Well, scope: str = "drilling") -> WellConfigur
         rig_name=well.rig.rig_name if well.rig else "",
         status=well.scope_value(scope, "status"),
         config_status=well.scope_value(scope, "config_status"),
-        depth_unit=well.scope_value(scope, "depth_unit"),
+        depth_unit=scope_unit,
+        standard_depth_unit="m",
         total_depth=total_depth,
+        total_depth_m=depth_to_meters(total_depth, scope_unit),
         total_days=total_days,
         sections=sections,
     )

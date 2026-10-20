@@ -494,6 +494,8 @@ class ScopeSectionOut(BaseModel):
     section_name: str
     from_depth: Decimal
     to_depth: Decimal
+    from_depth_m: Decimal | None = None
+    to_depth_m: Decimal | None = None
     total_days: Decimal
     phases: list[ScopePhaseOut]
 
@@ -509,9 +511,11 @@ class WellScopeOut(BaseModel):
     rig_code: str
     rig_name: str
     depth_unit: str
+    standard_depth_unit: Literal["m"] = "m"
     status: str
     config_status: str
     total_depth: Decimal | None
+    total_depth_m: Decimal | None = None
     total_days: Decimal
     sections: list[ScopeSectionOut]
 

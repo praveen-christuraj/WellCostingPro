@@ -67,7 +67,7 @@ function DepthCell({ row }: { row: DashboardWellRow }) {
     <Box display="flex" justifyContent="space-between" gap={1}>
       <Typography fontSize={11.5} fontWeight={700}>{percent(row.depth_progress_percent)}</Typography>
       <Typography fontSize={10.5} color="text.secondary">
-        {decimal(row.actual_depth, 0)} / {decimal(row.planned_depth, 0)} {row.depth_unit}
+        {decimal(row.actual_depth, 0)} / {decimal(row.planned_depth, 0)} m
       </Typography>
     </Box>
     <LinearProgress
@@ -318,7 +318,7 @@ export default function BusinessDashboard() {
           const items = params as { dataIndex: number }[]
           const row = rows[items[0]?.dataIndex ?? 0]
           if (!row) return ''
-          return `${row.well_code}<br/>${percent(row.depth_progress_percent)} · ${decimal(row.actual_depth, 0)} of ${decimal(row.planned_depth, 0)} ${row.depth_unit}`
+          return `${row.well_code}<br/>${percent(row.depth_progress_percent)} · ${decimal(row.actual_depth, 0)} of ${decimal(row.planned_depth, 0)} m`
         },
       },
       xAxis: { type: 'value', max: 100, axisLabel: { color: axis.text, fontSize: 10.5, formatter: '{value}%' }, splitLine: { lineStyle: { color: axis.line } } },
@@ -531,9 +531,9 @@ export default function BusinessDashboard() {
       cellRenderer: (params: ICellRendererParams<DashboardRigRow>) => params.data && <BalanceCell value={params.data.afe_balance} currency={currency}/>,
     })
     if (caps.plan && caps.actuals) columns.push({
-      headerName: 'DEPTH', field: 'planned_depth', minWidth: 160, flex: 0.85,
+      headerName: 'DEPTH (m)', field: 'planned_depth', minWidth: 160, flex: 0.85,
       cellRenderer: (params: ICellRendererParams<DashboardRigRow>) => params.data && <Typography fontSize={11.5}>
-        {decimal(params.data.actual_depth, 0)} / {decimal(params.data.planned_depth, 0)}
+        {decimal(params.data.actual_depth, 0)} / {decimal(params.data.planned_depth, 0)} m
       </Typography>,
     })
     return columns
@@ -726,9 +726,9 @@ export default function BusinessDashboard() {
         <KpiCard
           label="Depth progress"
           value={percent(data.kpis.depth_progress_percent)}
-          hint={data.kpis.depth_unit === 'mixed' ? 'Wells use different depth units' : `${decimal(data.kpis.actual_depth, 0)} of ${decimal(data.kpis.planned_depth, 0)} ${data.kpis.depth_unit || 'units'}`}
+          hint={`${decimal(data.kpis.actual_depth, 0)} of ${decimal(data.kpis.planned_depth, 0)} m`}
           icon={<TerrainOutlined fontSize="small"/>}
-          title="Deepest configured hole section carrying recorded daily cost, against the deepest planned section, summed across wells of the same unit."
+          title="Actual depth from the daily cost register (standardized in meters, ft ÷ 3.281) against planned well depth in meters across all wells."
         />
         <KpiCard
           label="Rigs in scope"

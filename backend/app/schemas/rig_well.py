@@ -159,7 +159,9 @@ class WellOut(BaseModel):
     status: Literal["active", "completed"]
     config_status: Literal["draft", "configured"]
     depth_unit: Literal["m", "ft"]
+    standard_depth_unit: Literal["m"] = "m"
     total_depth: Decimal | None = None
+    total_depth_m: Decimal | None = None
     total_days: Decimal = Decimal("0")
     section_count: int = 0
     sub_activity_count: int = 0
@@ -228,6 +230,8 @@ class ConfigurationSectionOut(BaseModel):
     section_name: str
     from_depth: Decimal
     to_depth: Decimal
+    from_depth_m: Decimal | None = None
+    to_depth_m: Decimal | None = None
     remarks: str
     total_days: Decimal
     phases: list[ConfigurationPhaseOut]
@@ -243,7 +247,9 @@ class WellConfigurationOut(BaseModel):
     status: Literal["active", "completed"]
     config_status: Literal["draft", "configured"]
     depth_unit: Literal["m", "ft"]
+    standard_depth_unit: Literal["m"] = "m"
     total_depth: Decimal | None = None
+    total_depth_m: Decimal | None = None
     total_days: Decimal
     sections: list[ConfigurationSectionOut]
 

@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.core.security import hash_password
-from app.models import Organization, Permission, Role, User
+from app.models import Currency, Organization, Permission, Role, User
 
 OWNER_ROLE = "Owner"
 SLUG_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -135,6 +135,38 @@ def owner_role(db: Session, organization_id: str) -> Role:
     return role
 
 
+def ensure_default_usd_currency(db: Session, organization_id: str) -> Currency:
+    """Ensure USD exists and is the workspace default currency unless another default is already set."""
+    has_default = db.scalar(
+        select(Currency.id).where(
+            Currency.organization_id == organization_id,
+            Currency.is_deleted.is_(False),
+            Currency.is_default.is_(True),
+        )
+    )
+    usd = db.scalar(
+        select(Currency).where(
+            Currency.organization_id == organization_id,
+            Currency.currency_code == "USD",
+        )
+    )
+    if usd is None:
+        usd = Currency(
+            organization_id=organization_id,
+            currency_code="USD",
+            currency_name="US Dollar",
+            currency_symbol="$",
+            description="Standard US Dollar currency",
+            is_default=has_default is None,
+        )
+        db.add(usd)
+        db.flush()
+    elif not usd.is_deleted and has_default is None:
+        usd.is_default = True
+        db.flush()
+    return usd
+
+
 def provision(slug: str, name: str, email: str, password: str, owner_name: str, db: Session | None = None, attach_existing: bool = False) -> User:
     """Create an organization, its owner role and the first administrator.
 
@@ -153,6 +185,7 @@ def provision(slug: str, name: str, email: str, password: str, owner_name: str, 
             organization = Organization(slug=slug, name=name)
             session.add(organization)
             session.flush()
+        ensure_default_usd_currency(session, organization.id)
         if session.scalar(select(User).where(User.organization_id == organization.id, User.email == email)):
             raise ProvisioningError(f"{email} already exists in workspace '{slug}'")
         user = User(organization_id=organization.id, email=email, full_name=owner_name, password_hash=hash_password(password), roles=[owner_role(session, organization.id)])

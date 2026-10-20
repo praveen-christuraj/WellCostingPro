@@ -52,12 +52,12 @@ export type DeletedMasterDataRecord = MasterDataRecord & {
 }
 
 // The workspace default currency, from a loaded list of master data records.
-// Every currency dropdown preloads this so users do not re-pick it each time.
+// Defaults to USD when no explicit default record is flagged yet.
 export function defaultCurrencyOf(records: Pick<MasterDataRecord, 'code' | 'is_default'>[]): string {
-  return records.find(record => record.is_default)?.code ?? ''
+  return records.find(record => record.is_default)?.code ?? 'USD'
 }
 
-// The workspace default currency from an AFE reference payload.
+// The workspace default currency from an AFE reference payload (defaults to USD).
 export function defaultCurrencyCode(currencies: { code: string; is_default?: boolean }[]): string {
-  return currencies.find(currency => currency.is_default)?.code ?? ''
+  return currencies.find(currency => currency.is_default)?.code ?? 'USD'
 }

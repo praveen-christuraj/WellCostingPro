@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.core.units import depth_to_meters
 from app.domain.mud_cost import (
     MUD_COST_LINE_SPECS,
     ZERO,
@@ -91,20 +92,22 @@ def _section_label(
     return f"{code} · {name} · {scope.title()}{interval}"
 
 
-def _section_option(row: WellSection, *, is_current: bool = True) -> MudCostSectionOption:
+def _section_option(row: WellSection, *, depth_unit: str = "m", is_current: bool = True) -> MudCostSectionOption:
     master = row.hole_section
     code = master.section_code if master else ""
     name = master.section_name if master else ""
+    from_m = depth_to_meters(row.from_depth, depth_unit) or Decimal("0.00")
+    to_m = depth_to_meters(row.to_depth, depth_unit) or Decimal("0.00")
     return MudCostSectionOption(
         id=row.id,
         hole_section_id=row.hole_section_id,
         section_code=code,
         section_name=name,
         scope=row.scope,
-        from_depth=Decimal(row.from_depth),
-        to_depth=Decimal(row.to_depth),
+        from_depth=from_m,
+        to_depth=to_m,
         is_current=is_current,
-        display_name=_section_label(row.scope, code, name, Decimal(row.from_depth), Decimal(row.to_depth)),
+        display_name=_section_label(row.scope, code, name, from_m, to_m),
     )
 
 
@@ -126,9 +129,12 @@ def reference_data(db: Session, organization_id: str) -> MudCostReference:
         .where(WellSection.organization_id == organization_id, WellSection.well_id.in_(well_ids or [""]))
         .order_by(WellSection.well_id, WellSection.scope, WellSection.sort_order)
     ).unique().all()
+    well_by_id = {well.id: well for well in wells}
     section_options: dict[str, dict[str, MudCostSectionOption]] = defaultdict(dict)
     for section in current_sections:
-        section_options[section.well_id][section.id] = _section_option(section)
+        well_obj = well_by_id.get(section.well_id)
+        unit = well_obj.scope_value(section.scope, "depth_unit") if well_obj else "m"
+        section_options[section.well_id][section.id] = _section_option(section, depth_unit=unit)
 
     historical = db.scalars(
         select(MudCostEntry).where(MudCostEntry.organization_id == organization_id)
@@ -485,8 +491,8 @@ def _create_entry_record(
         section_scope=section.scope,
         section_code_snapshot=section.hole_section.section_code,
         section_name_snapshot=section.hole_section.section_name,
-        section_from_depth=Decimal(section.from_depth),
-        section_to_depth=Decimal(section.to_depth),
+        section_from_depth=depth_to_meters(section.from_depth, well.scope_value(section.scope, "depth_unit")) or Decimal("0.00"),
+        section_to_depth=depth_to_meters(section.to_depth, well.scope_value(section.scope, "depth_unit")) or Decimal("0.00"),
         entry_date=data.entry_date,
         created_by=user.email,
         updated_by=user.email,
