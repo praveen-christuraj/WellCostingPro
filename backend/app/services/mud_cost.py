@@ -6,19 +6,31 @@ from typing import Any, Iterable, Mapping
 
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.units import depth_to_meters
 from app.domain.mud_cost import (
     MUD_COST_LINE_SPECS,
+    MUD_COST_MUD_TYPE_LABELS,
     ZERO,
     closing_stock,
     group_total,
     line_amounts,
+    reconcile_mud,
 )
-from app.models import MudCostEntry, MudCostEntryLine, Rig, Well, WellSection
+from app.models import (
+    Currency,
+    DailyCostConsumableLine,
+    DailyCostEntry,
+    MudCostEntry,
+    MudCostEntryLine,
+    MudCostSectionSetting,
+    Rig,
+    Well,
+    WellSection,
+)
 from app.models.rig_well import now
 from app.models.entities import User
 from app.schemas.mud_cost import (
@@ -31,8 +43,13 @@ from app.schemas.mud_cost import (
     MudCostImportResponse,
     MudCostLineOut,
     MudCostMaterialBalanceOut,
+    MudCostReconciliationOut,
+    MudCostReconciliationRowOut,
+    MudCostReconciliationSectionOut,
     MudCostReference,
     MudCostRigOption,
+    MudCostSectionSettingIn,
+    MudCostSectionSettingOut,
     MudCostSectionOption,
     MudCostWellOption,
 )
@@ -79,6 +96,14 @@ def _audit(
     )
 
 
+def _depth_text(value: Decimal | int | str) -> str:
+    """Plain depth text: 0E-10 becomes 0 and 1000.0000000000 becomes 1000."""
+    try:
+        return format(Decimal(value).normalize(), "f")
+    except (ArithmeticError, ValueError):
+        return str(value)
+
+
 def _section_label(
     scope: str,
     code: str,
@@ -88,7 +113,7 @@ def _section_label(
 ) -> str:
     interval = ""
     if from_depth is not None and to_depth is not None:
-        interval = f" · {from_depth:g}–{to_depth:g}"
+        interval = f" · {_depth_text(from_depth)}–{_depth_text(to_depth)}"
     return f"{code} · {name} · {scope.title()}{interval}"
 
 
@@ -1014,7 +1039,10 @@ def permanently_delete_entries(
 
 
 def record_export(db: Session, user: User, data: MudCostExportAudit, request: Request | None) -> None:
-    module_label = {"entries": "daily entries", "deleted": "deleted entries", "material_balance": "material balance"}[data.module]
+    module_label = {
+        "entries": "daily entries", "deleted": "deleted entries",
+        "material_balance": "material balance", "reconciliation": "mud cost reconciliation",
+    }[data.module]
     scope = ", ".join(value for value in (data.rig_id, data.well_id, data.section_id) if value) or "all scopes"
     _audit(
         db,
@@ -1036,3 +1064,582 @@ def record_print(db: Session, user: User, data: MudCostExportAudit, request: Req
     if data.format != "print":
         raise HTTPException(status_code=422, detail="Print audit requests must use the print format")
     record_export(db, user, data, request)
+
+
+# ---------------------------------------------------------------------------
+# Section-scoped mud configuration and reconciliation
+# ---------------------------------------------------------------------------
+RECONCILIATION_QUANT = Decimal("0.0000000001")
+MUD_CHEMICAL_CATEGORY = "Mud Chemicals"
+
+
+def _recon_amount(value: Any) -> Decimal:
+    return Decimal(str(value if value is not None else 0)).quantize(RECONCILIATION_QUANT)
+
+
+def _setting_key(scope: str, hole_section_id: str) -> tuple[str, str]:
+    return scope, hole_section_id
+
+
+def _setting_map(db: Session, organization_id: str, well_id: str) -> dict[tuple[str, str], MudCostSectionSetting]:
+    rows = db.scalars(
+        select(MudCostSectionSetting).where(
+            MudCostSectionSetting.organization_id == organization_id,
+            MudCostSectionSetting.well_id == well_id,
+        )
+    ).all()
+    return {_setting_key(row.section_scope, row.hole_section_id): row for row in rows}
+
+
+def _workspace_currency(db: Session, organization_id: str) -> str:
+    """The workspace default currency, then any active currency, then USD."""
+    default = db.scalar(select(Currency.currency_code).where(
+        Currency.organization_id == organization_id,
+        Currency.is_default.is_(True),
+        Currency.is_deleted.is_(False),
+    ))
+    if default:
+        return str(default)
+    fallback = db.scalar(select(Currency.currency_code).where(
+        Currency.organization_id == organization_id,
+        Currency.is_deleted.is_(False),
+    ).order_by(Currency.currency_code))
+    return str(fallback or "USD")
+
+
+def well_standard_currency(db: Session, organization_id: str, well_id: str, *, strict: bool = True) -> str:
+    """The AFE standard currency every daily sheet on this well uses.
+
+    Mud reconciliation values the actual mud chemicals in the same currency as
+    the daily register. A well whose AFEs use different standard currencies has
+    no single comparable figure, so the caller is told to fix that instead of
+    silently adding unlike amounts.
+    """
+    currencies = {
+        str(value) for value in db.scalars(select(DailyCostEntry.standard_currency).where(
+            DailyCostEntry.organization_id == organization_id,
+            DailyCostEntry.well_id == well_id,
+            DailyCostEntry.is_deleted.is_(False),
+        )).all()
+        if value
+    }
+    if len(currencies) > 1 and strict:
+        raise HTTPException(status_code=409, detail=(
+            "This well has daily cost sheets in different standard currencies. "
+            "Mud cost reconciliation cannot combine them; align the AFE standard currency first."
+        ))
+    if len(currencies) == 1:
+        return next(iter(currencies))
+    return _workspace_currency(db, organization_id)
+
+
+def section_settings(
+    db: Session,
+    organization_id: str,
+    rig_id: str,
+    well_id: str,
+) -> list[MudCostSectionSettingOut]:
+    """Every configured section plus current sections that still need setup."""
+    rig, well, _ = _scope_or_404(db, organization_id, rig_id, well_id, allow_deleted=True)
+    currency = well_standard_currency(db, organization_id, well_id, strict=False)
+    settings = _setting_map(db, organization_id, well_id)
+    current_sections = db.scalars(
+        select(WellSection)
+        .options(joinedload(WellSection.hole_section))
+        .where(WellSection.organization_id == organization_id, WellSection.well_id == well_id)
+        .order_by(WellSection.scope, WellSection.sort_order)
+    ).unique().all()
+    rows: list[MudCostSectionSettingOut] = []
+    seen: set[tuple[str, str]] = set()
+    for section in current_sections:
+        key = _setting_key(section.scope, section.hole_section_id)
+        seen.add(key)
+        master = section.hole_section
+        code = master.section_code if master else ""
+        name = master.section_name if master else ""
+        from_m = depth_to_meters(section.from_depth, well.scope_value(section.scope, "depth_unit")) or Decimal("0")
+        to_m = depth_to_meters(section.to_depth, well.scope_value(section.scope, "depth_unit")) or Decimal("0")
+        setting = settings.get(key)
+        rows.append(MudCostSectionSettingOut(
+            id=setting.id if setting else None,
+            rig_id=rig.id,
+            rig_code=rig.rig_code,
+            well_id=well.id,
+            well_code=well.well_code,
+            section_id=section.id,
+            hole_section_id=section.hole_section_id,
+            section_scope=section.scope,
+            section_code=code,
+            section_name=name,
+            section_label=_section_label(section.scope, code, name, from_m, to_m),
+            display_name=_section_label(section.scope, code, name, from_m, to_m),
+            mud_type=setting.mud_type if setting else None,
+            mud_type_label=MUD_COST_MUD_TYPE_LABELS.get(setting.mud_type, "Not configured") if setting else "Not configured",
+            remarks=setting.remarks if setting else "",
+            base_rate=_recon_amount(setting.base_rate if setting else 0),
+            currency=(setting.currency if setting and setting.currency else currency),
+            is_configured=setting is not None,
+            is_current=True,
+            created_by=setting.created_by if setting else "",
+            updated_by=setting.updated_by if setting else "",
+            created_at=setting.created_at if setting else None,
+            updated_at=setting.updated_at if setting else None,
+        ))
+    # Retain configuration for a section that a later well-plan edit replaced.
+    for key, setting in sorted(settings.items(), key=lambda item: (item[0][0], item[1].section_name_snapshot)):
+        if key in seen:
+            continue
+        rows.append(MudCostSectionSettingOut(
+            id=setting.id,
+            rig_id=rig.id,
+            rig_code=rig.rig_code,
+            well_id=well.id,
+            well_code=well.well_code,
+            section_id=setting.section_id,
+            hole_section_id=setting.hole_section_id,
+            section_scope=setting.section_scope,
+            section_code=setting.section_code_snapshot,
+            section_name=setting.section_name_snapshot,
+            section_label=_section_label(
+                setting.section_scope, setting.section_code_snapshot, setting.section_name_snapshot,
+            ),
+            display_name=_section_label(
+                setting.section_scope, setting.section_code_snapshot, setting.section_name_snapshot,
+            ) + " · historical",
+            mud_type=setting.mud_type,
+            mud_type_label=MUD_COST_MUD_TYPE_LABELS.get(setting.mud_type, setting.mud_type),
+            remarks=setting.remarks,
+            base_rate=_recon_amount(setting.base_rate),
+            currency=setting.currency or currency,
+            is_configured=True,
+            is_current=False,
+            created_by=setting.created_by,
+            updated_by=setting.updated_by,
+            created_at=setting.created_at,
+            updated_at=setting.updated_at,
+        ))
+    return rows
+
+
+def upsert_section_setting(
+    db: Session,
+    organization_id: str,
+    data: MudCostSectionSettingIn,
+    user: User,
+    request: Request | None,
+) -> MudCostSectionSettingOut:
+    """Create or update the one mud configuration that belongs to a section."""
+    rig, well, section = _scope_or_404(
+        db, organization_id, data.rig_id, data.well_id, data.section_id, require_current_section=True,
+    )
+    if section is None or section.hole_section is None:
+        raise HTTPException(status_code=422, detail="Choose a current section configured for this well")
+    if section.hole_section.is_deleted:
+        raise HTTPException(status_code=409, detail="Restore the section in Master Data before configuring its mud type")
+    currency = well_standard_currency(db, organization_id, well.id)
+    existing = db.scalar(select(MudCostSectionSetting).where(
+        MudCostSectionSetting.organization_id == organization_id,
+        MudCostSectionSetting.well_id == well.id,
+        MudCostSectionSetting.section_scope == section.scope,
+        MudCostSectionSetting.hole_section_id == section.hole_section_id,
+    ))
+    base_rate = data.base_rate if data.mud_type != "WBM" and data.base_rate is not None else Decimal("0")
+    if existing is None:
+        existing = MudCostSectionSetting(
+            organization_id=organization_id,
+            rig_id=rig.id,
+            well_id=well.id,
+            section_scope=section.scope,
+            hole_section_id=section.hole_section_id,
+            mud_type=data.mud_type,
+            created_by=user.email,
+        )
+        db.add(existing)
+        action = "create"
+    else:
+        action = "update"
+    existing.rig_id = rig.id
+    existing.section_id = section.id
+    existing.section_code_snapshot = section.hole_section.section_code
+    existing.section_name_snapshot = section.hole_section.section_name
+    existing.mud_type = data.mud_type
+    existing.remarks = data.remarks.strip()
+    existing.base_rate = base_rate
+    existing.currency = currency
+    existing.updated_by = user.email
+    existing.updated_at = now()
+    db.flush()
+    label = _section_label(
+        section.scope,
+        section.hole_section.section_code,
+        section.hole_section.section_name,
+    )
+    _audit(
+        db,
+        user=user,
+        action=action,
+        entity_type="mud_cost_section_setting",
+        entity_id=existing.id,
+        entity_label=label,
+        summary=(
+            f"{'Configured' if action == 'create' else 'Updated'} mud type {data.mud_type} "
+            f"({MUD_COST_MUD_TYPE_LABELS.get(data.mud_type, data.mud_type)}) for {label}; "
+            f"Cost/BBL base rate {currency} {base_rate:,.10f}"
+            + (f"; remarks: {existing.remarks}" if existing.remarks else "")
+        ),
+        request=request,
+    )
+    _commit(db)
+    return MudCostSectionSettingOut(
+        id=existing.id,
+        rig_id=rig.id,
+        rig_code=rig.rig_code,
+        well_id=well.id,
+        well_code=well.well_code,
+        section_id=section.id,
+        hole_section_id=section.hole_section_id,
+        section_scope=section.scope,
+        section_code=section.hole_section.section_code,
+        section_name=section.hole_section.section_name,
+        section_label=label,
+        display_name=label,
+        mud_type=existing.mud_type,
+        mud_type_label=MUD_COST_MUD_TYPE_LABELS.get(existing.mud_type, existing.mud_type),
+        remarks=existing.remarks,
+        base_rate=_recon_amount(existing.base_rate),
+        currency=existing.currency,
+        is_configured=True,
+        is_current=True,
+        created_by=existing.created_by,
+        updated_by=existing.updated_by,
+        created_at=existing.created_at,
+        updated_at=existing.updated_at,
+    )
+
+
+def _mud_actual_cost_map(
+    db: Session,
+    organization_id: str,
+    well_id: str,
+    *,
+    date_to: date,
+    include_draft: bool,
+) -> dict[tuple[str, date], Decimal]:
+    """Mud Chemicals cost from the Daily Cost register, by hole section and date."""
+    statement = select(
+        DailyCostEntry.cost_date,
+        DailyCostConsumableLine.hole_section_id,
+        func.sum(DailyCostConsumableLine.standard_amount),
+    ).join(
+        DailyCostEntry, DailyCostEntry.id == DailyCostConsumableLine.entry_id,
+    ).where(
+        DailyCostConsumableLine.organization_id == organization_id,
+        DailyCostEntry.organization_id == organization_id,
+        DailyCostEntry.well_id == well_id,
+        DailyCostEntry.is_deleted.is_(False),
+        DailyCostConsumableLine.category == MUD_CHEMICAL_CATEGORY,
+        DailyCostEntry.cost_date <= date_to,
+    )
+    if not include_draft:
+        statement = statement.where(DailyCostEntry.status == "submitted")
+    statement = statement.group_by(DailyCostEntry.cost_date, DailyCostConsumableLine.hole_section_id)
+    result: dict[tuple[str, date], Decimal] = {}
+    for cost_date, hole_section_id, amount in db.execute(statement).all():
+        if not hole_section_id:
+            continue
+        result[(str(hole_section_id), cost_date)] = _recon_amount(amount)
+    return result
+
+
+def reconcile_well(
+    db: Session,
+    organization_id: str,
+    well: Well,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    include_draft: bool = True,
+    section_id: str = "",
+) -> MudCostReconciliationOut:
+    """Reconcile mud cost section by section, day by day, to ``date_to``.
+
+    Every day carries the cumulative position to that date: total mud, ALPHA,
+    BETA and Cost/BBL. The cumulative reconciled cost applies that day's latest
+    Cost/BBL to the mud consumed to date, exactly as the well cost comparison
+    consumes it. Sections are never combined in a row.
+    """
+    effective_to = date_to or date.today()
+    if date_from and date_from > effective_to:
+        raise HTTPException(status_code=422, detail="The start date must not be after the end date")
+    currency = well_standard_currency(db, organization_id, well.id)
+    actuals = _mud_actual_cost_map(
+        db, organization_id, well.id, date_to=effective_to, include_draft=include_draft,
+    )
+    settings = _setting_map(db, organization_id, well.id)
+    for key, setting in settings.items():
+        if setting.currency and setting.currency != currency and any(
+            hole == key[1] for (hole, _date) in actuals
+        ):
+            raise HTTPException(status_code=409, detail=(
+                f"The Cost/BBL base rate for {setting.section_code_snapshot} {setting.section_name_snapshot} "
+                f"was saved in {setting.currency}, but this well's daily cost standard currency is {currency}. "
+                "Open the section mud configuration and save it again to use the current currency."
+            ))
+
+    entries = [
+        entry for entry in _entries_for_well(db, organization_id, well.id, deleted=False)
+        if entry.entry_date <= effective_to
+    ]
+    current_sections = db.scalars(
+        select(WellSection).where(
+            WellSection.organization_id == organization_id,
+            WellSection.well_id == well.id,
+        )
+    ).all()
+    current_by_key = {_setting_key(row.scope, row.hole_section_id): row for row in current_sections}
+
+    grouped: dict[tuple[str, str], list[MudCostEntry]] = defaultdict(list)
+    for entry in entries:
+        grouped[_setting_key(entry.section_scope, entry.hole_section_id)].append(entry)
+    if section_id:
+        matching = {
+            key for key, rows in grouped.items()
+            if section_id in {row.section_id for row in rows}
+            or (key in settings and settings[key].section_id == section_id)
+            or (key in current_by_key and current_by_key[key].id == section_id)
+        }
+        grouped = {key: grouped[key] for key in matching}
+
+    section_rows: list[MudCostReconciliationSectionOut] = []
+    daily_rows: list[MudCostReconciliationRowOut] = []
+    for key in sorted(grouped, key=lambda value: (value[0], value[1])):
+        section_entries = sorted(grouped[key], key=lambda row: (row.entry_date, row.id))
+        latest_entry = section_entries[-1]
+        scope, hole_section_id = key
+        setting = settings.get(key)
+        mud_type = setting.mud_type if setting else None
+        base_rate = _recon_amount(setting.base_rate if setting else 0)
+        is_wbm = mud_type == "WBM"
+        is_configured = setting is not None and mud_type is not None
+        current_section = current_by_key.get(key)
+        output_section_id = (
+            current_section.id if current_section is not None
+            else (setting.section_id if setting else latest_entry.section_id)
+        )
+        section_label = _section_label(
+            scope,
+            latest_entry.section_code_snapshot,
+            latest_entry.section_name_snapshot,
+            Decimal(latest_entry.section_from_depth),
+            Decimal(latest_entry.section_to_depth),
+        )
+        entries_by_date = {row.entry_date: row for row in section_entries}
+        dates = sorted(set(entries_by_date) | {day for (hole, day) in actuals if hole == hole_section_id})
+        cumulative_additions = ZERO
+        cumulative_extra = ZERO
+        cumulative_actual = ZERO
+        cumulative_consumption = ZERO
+        latest_rate: Decimal | None = None
+        section_daily_rows: list[MudCostReconciliationRowOut] = []
+        for cost_date in dates:
+            entry = entries_by_date.get(cost_date)
+            raw = _values_for_entry(entry) if entry is not None else line_amounts({})
+            additions = group_total(raw, "additions")
+            extra_obm = raw["extra_obm_received"]
+            consumption = group_total(raw, "consumption_losses")
+            actual = actuals.get((hole_section_id, cost_date), ZERO)
+            cumulative_additions += additions
+            cumulative_extra += extra_obm
+            cumulative_actual += actual
+            cumulative_consumption += consumption
+            calc = reconcile_mud(
+                mud_type=mud_type,
+                base_rate=base_rate if is_configured else None,
+                additions=cumulative_additions,
+                extra_obm_received=cumulative_extra,
+                actual_cost=cumulative_actual,
+                consumption_losses=cumulative_consumption,
+            )
+            if calc.cost_per_bbl is not None:
+                latest_rate = calc.cost_per_bbl
+            if not is_configured:
+                day_reconciled = None
+                cumulative_reconciled = None
+            elif is_wbm:
+                day_reconciled = _recon_amount(actual)
+                cumulative_reconciled = _recon_amount(cumulative_actual)
+            elif latest_rate is not None:
+                day_reconciled = _recon_amount(consumption * latest_rate)
+                cumulative_reconciled = _recon_amount(cumulative_consumption * latest_rate)
+            else:
+                day_reconciled = None
+                cumulative_reconciled = None
+            section_daily_rows.append(MudCostReconciliationRowOut(
+                id=f"{output_section_id}:{cost_date.isoformat()}",
+                rig_id=latest_entry.rig_id,
+                rig_code=latest_entry.rig_code_snapshot,
+                well_id=latest_entry.well_id,
+                well_code=latest_entry.well_code_snapshot,
+                section_id=output_section_id,
+                section_scope=scope,
+                section_code=latest_entry.section_code_snapshot,
+                section_name=latest_entry.section_name_snapshot,
+                section_label=section_label,
+                mud_type=mud_type,
+                mud_type_label=MUD_COST_MUD_TYPE_LABELS.get(mud_type or "", "Not configured"),
+                is_configured=is_configured,
+                is_wbm=is_wbm,
+                cost_date=cost_date,
+                currency=currency,
+                base_rate=base_rate,
+                additions=_recon_amount(additions),
+                extra_obm_received=_recon_amount(extra_obm),
+                actual_cost=_recon_amount(actual),
+                total_mud=calc.total_mud,
+                alpha=calc.alpha,
+                beta=calc.beta,
+                cost_per_bbl=latest_rate,
+                consumption_losses=_recon_amount(consumption),
+                reconciled_cost=day_reconciled,
+                cumulative_additions=_recon_amount(cumulative_additions),
+                cumulative_extra_obm_received=_recon_amount(cumulative_extra),
+                cumulative_actual_cost=_recon_amount(cumulative_actual),
+                cumulative_total_mud=calc.total_mud,
+                cumulative_alpha=calc.alpha,
+                cumulative_beta=calc.beta,
+                cumulative_consumption_losses=_recon_amount(cumulative_consumption),
+                cumulative_reconciled_cost=cumulative_reconciled,
+            ))
+        section_daily_rows.sort(key=lambda row: row.cost_date)
+        window = [
+            row for row in section_daily_rows
+            if (date_from is None or row.cost_date >= date_from)
+        ]
+        additions = sum((row.additions for row in window), ZERO)
+        extra_obm = sum((row.extra_obm_received for row in window), ZERO)
+        actual = sum((row.actual_cost for row in window), ZERO)
+        consumption = sum((row.consumption_losses for row in window), ZERO)
+        latest_rate = section_daily_rows[-1].cost_per_bbl if section_daily_rows else None
+        total_mud = _recon_amount(extra_obm + additions)
+        alpha = _recon_amount(extra_obm * base_rate) if is_configured and not is_wbm else None
+        beta = _recon_amount(alpha + actual) if alpha is not None else None
+        if not is_configured:
+            reconciled = None
+        elif is_wbm:
+            reconciled = _recon_amount(actual)
+        elif latest_rate is not None:
+            reconciled = _recon_amount(consumption * latest_rate)
+        else:
+            reconciled = None
+        section_rows.append(MudCostReconciliationSectionOut(
+            section_id=output_section_id,
+            hole_section_id=hole_section_id,
+            rig_id=latest_entry.rig_id,
+            rig_code=latest_entry.rig_code_snapshot,
+            well_id=latest_entry.well_id,
+            well_code=latest_entry.well_code_snapshot,
+            section_scope=scope,
+            section_code=latest_entry.section_code_snapshot,
+            section_name=latest_entry.section_name_snapshot,
+            section_label=section_label,
+            mud_type=mud_type,
+            mud_type_label=MUD_COST_MUD_TYPE_LABELS.get(mud_type or "", "Not configured"),
+            remarks=setting.remarks if setting else "",
+            is_configured=is_configured,
+            is_current=current_section is not None,
+            is_wbm=is_wbm,
+            currency=currency,
+            base_rate=base_rate,
+            first_date=window[0].cost_date if window else None,
+            last_date=window[-1].cost_date if window else None,
+            entry_count=len(window),
+            additions=_recon_amount(additions),
+            extra_obm_received=_recon_amount(extra_obm),
+            actual_cost=_recon_amount(actual),
+            total_mud=total_mud,
+            alpha=alpha,
+            beta=beta,
+            consumption_losses=_recon_amount(consumption),
+            cost_per_bbl=latest_rate,
+            reconciled_cost=reconciled,
+            adjustment=(
+                _recon_amount(reconciled - actual)
+                if reconciled is not None else None
+            ),
+        ))
+        daily_rows.extend(
+            row for row in section_daily_rows
+            if (date_from is None or row.cost_date >= date_from)
+        )
+
+    section_rows.sort(key=lambda row: (row.section_scope, row.section_code.casefold(), row.section_label))
+    daily_rows.sort(key=lambda row: (row.section_scope, row.section_label.casefold(), row.cost_date))
+    latest_row = next(
+        (row for row in sorted(
+            daily_rows,
+            key=lambda item: (item.cost_date, item.section_label.casefold()),
+            reverse=True,
+        ) if row.cost_per_bbl is not None),
+        None,
+    )
+    total_actual = sum((row.actual_cost for row in section_rows), ZERO)
+    reconciled_rows = [row for row in section_rows if row.reconciled_cost is not None]
+    total_reconciled = sum((row.reconciled_cost for row in reconciled_rows if row.reconciled_cost is not None), ZERO)
+    total_adjustment = sum(
+        (row.reconciled_cost - row.actual_cost for row in reconciled_rows if row.reconciled_cost is not None),
+        ZERO,
+    )
+    return MudCostReconciliationOut(
+        from_date=date_from,
+        to_date=effective_to,
+        currency=currency,
+        selected_section_count=len(section_rows),
+        configured_section_count=sum(1 for row in section_rows if row.is_configured),
+        unconfigured_section_count=sum(1 for row in section_rows if not row.is_configured),
+        entry_count=len(daily_rows),
+        latest_cost_per_bbl=latest_row.cost_per_bbl if latest_row else None,
+        latest_cost_per_bbl_section=latest_row.section_label if latest_row else "",
+        latest_cost_per_bbl_date=latest_row.cost_date if latest_row else None,
+        total_actual_cost=_recon_amount(total_actual),
+        total_reconciled_cost=_recon_amount(total_reconciled),
+        total_adjustment=_recon_amount(total_adjustment),
+        total_consumption_losses=_recon_amount(sum((row.consumption_losses for row in section_rows), ZERO)),
+        sections=section_rows,
+        rows=daily_rows,
+    )
+
+
+def mud_cost_reconciliation(
+    db: Session,
+    organization_id: str,
+    *,
+    rig_id: str,
+    well_id: str,
+    section_id: str = "",
+    date_from: date | None = None,
+    date_to: date | None = None,
+    include_draft: bool = True,
+) -> MudCostReconciliationOut:
+    _rig, well, _ = _scope_or_404(db, organization_id, rig_id, well_id)
+    if section_id:
+        current_section = db.scalar(select(WellSection.id).where(
+            WellSection.id == section_id,
+            WellSection.organization_id == organization_id,
+            WellSection.well_id == well_id,
+        ))
+        historical_section = db.scalar(select(MudCostEntry.id).where(
+            MudCostEntry.organization_id == organization_id,
+            MudCostEntry.well_id == well_id,
+            MudCostEntry.section_id == section_id,
+        ).limit(1))
+        configured_section = db.scalar(select(MudCostSectionSetting.id).where(
+            MudCostSectionSetting.organization_id == organization_id,
+            MudCostSectionSetting.well_id == well_id,
+            MudCostSectionSetting.section_id == section_id,
+        ).limit(1))
+        if not current_section and not historical_section and not configured_section:
+            raise HTTPException(status_code=404, detail="Section not found for this well")
+    return reconcile_well(
+        db, organization_id, well,
+        date_from=date_from, date_to=date_to, include_draft=include_draft, section_id=section_id,
+    )

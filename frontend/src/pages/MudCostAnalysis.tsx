@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import {
-  AddRounded, DeleteForeverOutlined, DeleteOutlineRounded, DownloadRounded, EventNoteOutlined, PrintOutlined,
-  RefreshRounded, RestoreRounded, WaterDropOutlined,
+  AddRounded, CalculateOutlined, DeleteForeverOutlined, DeleteOutlineRounded, DownloadRounded, EventNoteOutlined,
+  PrintOutlined, RefreshRounded, RestoreRounded, SettingsOutlined, WaterDropOutlined,
 } from '@mui/icons-material'
 import {
   Alert, Box, Button, CircularProgress, Menu, MenuItem, Paper, Tab, Tabs, TextField, Typography,
@@ -12,16 +12,20 @@ import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
 import { ImportDialog } from '../components/ImportDialog'
 import { MudCostEntryDialog, type MudCostEditorPayload } from '../components/mud-cost/MudCostEntryDialog'
+import { MudCostSectionSettingsDialog } from '../components/mud-cost/MudCostSectionSettingsDialog'
 import { useMudCostPrint } from '../components/mud-cost/MudCostPrintSheet'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import { exportCsv, exportXlsx, type ExportColumn } from '../lib/export'
+import { dailyMoney } from '../lib/dailyCost'
 import { radius, space } from '../designSystem'
 import {
   MUD_COST_BALANCE_VIEWS, MUD_COST_IMPORT_HEADERS, MUD_COST_IMPORT_OPTIONAL_HEADERS, MUD_COST_LINE_SPECS,
   MUD_COST_IMPORT_SAMPLE, mudQuantity,
   type MudCostBalanceRow, type MudCostBalanceView, type MudCostEntry, type MudCostExportPayload,
-  type MudCostMaterialBalance, type MudCostReference,
+  type MudCostMaterialBalance, type MudCostReconciliation,
+  type MudCostReconciliationRow, type MudCostReconciliationSection, type MudCostReference,
+  type MudCostSectionSetting, type MudCostSectionSettingPayload,
 } from '../lib/mudCost'
 
 const ALL_SECTIONS = '__all_sections__'
@@ -64,6 +68,17 @@ export default function MudCostAnalysis() {
   const [balanceView, setBalanceView] = useState<MudCostBalanceView>('daily')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [settings, setSettings] = useState<MudCostSectionSetting[]>([])
+  const [settingsLoading, setSettingsLoading] = useState(false)
+  const [settingsError, setSettingsError] = useState('')
+  const [configRow, setConfigRow] = useState<MudCostSectionSetting | null>(null)
+  const [reconciliation, setReconciliation] = useState<MudCostReconciliation | null>(null)
+  const [reconLoading, setReconLoading] = useState(false)
+  const [reconError, setReconError] = useState('')
+  const [reconSectionId, setReconSectionId] = useState(ALL_SECTIONS)
+  const [reconDateFrom, setReconDateFrom] = useState('')
+  const [reconDateTo, setReconDateTo] = useState('')
+  const [reconView, setReconView] = useState<'daily' | 'section'>('daily')
   const [notice, setNotice] = useState('')
   const [selectedRows, setSelectedRows] = useState<MudCostEntry[]>([])
   const [selectionResetKey, setSelectionResetKey] = useState(0)
@@ -79,6 +94,8 @@ export default function MudCostAnalysis() {
   const [actionError, setActionError] = useState('')
   const entriesRequest = useRef(0)
   const balanceRequest = useRef(0)
+  const reconciliationRequest = useRef(0)
+  const settingsRequest = useRef(0)
 
   const loadReference = useCallback(async () => {
     setReferenceLoading(true)
@@ -202,8 +219,60 @@ export default function MudCostAnalysis() {
     }
   }, [rigId, wellId, balanceSectionId, balanceView, dateFrom, dateTo])
 
+  const loadSettings = useCallback(async () => {
+    const version = ++settingsRequest.current
+    setSettingsError('')
+    if (!rigId || !wellId) {
+      setSettings([])
+      setSettingsLoading(false)
+      return
+    }
+    setSettingsLoading(true)
+    const params = new URLSearchParams({ rig_id: rigId, well_id: wellId })
+    try {
+      const result = await api<MudCostSectionSetting[]>(`/mud-cost/section-settings?${params}`)
+      if (version === settingsRequest.current) setSettings(result)
+    } catch (caught) {
+      if (version !== settingsRequest.current) return
+      setSettingsError(caught instanceof Error ? caught.message : 'Mud type configuration could not be loaded')
+    } finally {
+      if (version === settingsRequest.current) setSettingsLoading(false)
+    }
+  }, [rigId, wellId])
+
+  const loadReconciliation = useCallback(async () => {
+    const version = ++reconciliationRequest.current
+    setReconError('')
+    setReconciliation(null)
+    if (!rigId || !wellId) {
+      setReconLoading(false)
+      return
+    }
+    if (reconDateFrom && reconDateTo && reconDateFrom > reconDateTo) {
+      setReconError('The start date must not be after the end date.')
+      setReconLoading(false)
+      return
+    }
+    setReconLoading(true)
+    const params = new URLSearchParams({ rig_id: rigId, well_id: wellId, include_draft: 'true' })
+    if (reconSectionId !== ALL_SECTIONS) params.set('section_id', reconSectionId)
+    if (reconDateFrom) params.set('from', reconDateFrom)
+    if (reconDateTo) params.set('to', reconDateTo)
+    try {
+      const result = await api<MudCostReconciliation>(`/mud-cost/reconciliation?${params}`)
+      if (version === reconciliationRequest.current) setReconciliation(result)
+    } catch (caught) {
+      if (version !== reconciliationRequest.current) return
+      setReconError(caught instanceof Error ? caught.message : 'Mud cost reconciliation could not be calculated')
+    } finally {
+      if (version === reconciliationRequest.current) setReconLoading(false)
+    }
+  }, [rigId, wellId, reconSectionId, reconDateFrom, reconDateTo])
+
   useEffect(() => { void loadEntries() }, [loadEntries])
   useEffect(() => { void loadBalance() }, [loadBalance])
+  useEffect(() => { void loadSettings() }, [loadSettings])
+  useEffect(() => { void loadReconciliation() }, [loadReconciliation])
 
   const activeEntries = useMemo(() => entries
     .filter(entry => entry.rig_id === rigId && entry.well_id === wellId && !entry.is_deleted)
@@ -218,6 +287,22 @@ export default function MudCostAnalysis() {
   const hasScope = Boolean(selectedRig && selectedWell)
   const canCreateHere = Boolean(hasScope && selectedRig && !selectedRig.is_deleted && selectedWell && !selectedWell.is_deleted && entrySection?.is_current)
   const invalidBalanceDates = balanceView !== 'inception' && dateFrom && dateTo && dateFrom > dateTo
+  const currentSettings = settings.filter(row => row.is_current)
+  const unconfiguredSettings = currentSettings.filter(row => !row.is_configured)
+  const latestCost = reconciliation?.latest_cost_per_bbl ?? null
+  const latestCostHint = latestCost
+    ? `${reconciliation?.latest_cost_per_bbl_section ?? ''}${reconciliation?.latest_cost_per_bbl_date ? ` · ${dateLabel(reconciliation.latest_cost_per_bbl_date)}` : ''}`
+    : reconciliation && reconciliation.configured_section_count > 0
+      ? 'WBM and unconfigured sections have no derived rate'
+      : 'Configure a section mud type and Cost/BBL base rate'
+
+  const saveConfig = async (payload: MudCostSectionSettingPayload) => {
+    const saved = await api<MudCostSectionSetting>('/mud-cost/section-settings', { method: 'PUT', body: body(payload) })
+    setSettings(rows => rows.map(row => row.section_id === saved.section_id ? saved : row))
+    setNotice(`Mud type for ${saved.section_label} was saved.`)
+    setConfigRow(null)
+    await Promise.all([loadSettings(), loadReconciliation()])
+  }
 
   const auditExport = useCallback(async (payload: MudCostExportPayload) => {
     await api('/mud-cost/export-audit', { method: 'POST', body: body(payload) })
@@ -273,8 +358,74 @@ export default function MudCostAnalysis() {
     { headerName: 'ENTRY COUNT', field: 'entry_count', minWidth: 110 },
   ], [])
 
+  const mudTypeCell = (params: ICellRendererParams<{ mud_type: string | null; is_configured: boolean }>) => {
+    const row = params.data
+    if (!row) return null
+    return <Box display="flex" alignItems="center" height="100%">
+      <Tag tone={row.is_configured ? 'info' : 'warning'}>{row.mud_type ?? 'Not configured'}</Tag>
+    </Box>
+  }
+
+  const reconciliationColumns = useMemo<ColDef<MudCostReconciliationRow>[]>(() => [
+    { headerName: 'DATE', field: 'cost_date', minWidth: 118, width: 128, valueFormatter: params => dateLabel(String(params.value ?? '')) },
+    { headerName: 'SECTION', field: 'section_label', minWidth: 250, flex: 1.1 },
+    { headerName: 'MUD TYPE', field: 'mud_type', minWidth: 130, cellRenderer: mudTypeCell },
+    { headerName: 'ADDITIONS', field: 'additions', minWidth: 120, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'EXTRA OBM RECEIVED', field: 'extra_obm_received', minWidth: 170, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'ACTUAL MUD COST', field: 'actual_cost', minWidth: 155, valueFormatter: params => dailyMoney(String(params.value ?? '0'), reconciliation?.currency ?? '') },
+    { headerName: 'TOTAL MUD (CUM.)', field: 'total_mud', minWidth: 150, headerTooltip: 'Extra OBM received + additions, cumulative to this date', valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'ALPHA', field: 'alpha', minWidth: 130, headerTooltip: 'Extra OBM received × Cost/BBL base rate', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+    { headerName: 'BETA', field: 'beta', minWidth: 135, headerTooltip: 'ALPHA + actual mud chemicals cost', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+    {
+      headerName: 'COST / BBL', field: 'cost_per_bbl', minWidth: 140, headerTooltip: 'BETA ÷ total mud; the latest value drives cumulative reconciliation',
+      cellRenderer: (params: ICellRendererParams<MudCostReconciliationRow>) => {
+        if (params.value == null) return <Typography fontSize={12} color="text.secondary" sx={{ py: 1.2 }}>—</Typography>
+        return <Typography fontSize={12} fontWeight={800}>{dailyMoney(String(params.value), reconciliation?.currency ?? '')}</Typography>
+      },
+    },
+    { headerName: 'CONSUMPTION / LOSSES', field: 'consumption_losses', minWidth: 185, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'RECONCILED COST', field: 'reconciled_cost', minWidth: 155, headerTooltip: 'The day\'s Consumption/Losses × the latest Cost/BBL to that date', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+    { headerName: 'CUM. CONSUMPTION', field: 'cumulative_consumption_losses', minWidth: 165, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'CUM. RECONCILED (LATEST)', field: 'cumulative_reconciled_cost', minWidth: 205, headerTooltip: 'Cumulative consumption/losses × the latest Cost/BBL; this is the amount used in Well Cost Analysis', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+  ], [reconciliation?.currency])
+
+  const reconciliationSectionColumns = useMemo<ColDef<MudCostReconciliationSection>[]>(() => [
+    { headerName: 'SECTION', field: 'section_label', minWidth: 255, flex: 1.1 },
+    { headerName: 'MUD TYPE', field: 'mud_type', minWidth: 130, cellRenderer: mudTypeCell },
+    { headerName: 'BASE RATE', field: 'base_rate', minWidth: 135, valueFormatter: params => dailyMoney(String(params.value ?? '0'), reconciliation?.currency ?? '') },
+    { headerName: 'ADDITIONS', field: 'additions', minWidth: 120, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'EXTRA OBM RECEIVED', field: 'extra_obm_received', minWidth: 170, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'ACTUAL MUD COST', field: 'actual_cost', minWidth: 155, valueFormatter: params => dailyMoney(String(params.value ?? '0'), reconciliation?.currency ?? '') },
+    { headerName: 'TOTAL MUD', field: 'total_mud', minWidth: 135, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'ALPHA', field: 'alpha', minWidth: 130, valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+    { headerName: 'BETA', field: 'beta', minWidth: 135, valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+    { headerName: 'COST / BBL (LATEST)', field: 'cost_per_bbl', minWidth: 175, headerTooltip: 'Latest Cost/BBL from the section\'s cumulative figures to the To date; it prices the selected period\'s consumption/losses', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+    { headerName: 'CONSUMPTION / LOSSES', field: 'consumption_losses', minWidth: 180, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'RECONCILED COST', field: 'reconciled_cost', minWidth: 155, headerTooltip: 'Selected period Consumption/Losses × the latest Cost/BBL', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+    {
+      headerName: 'DIFFERENCE', field: 'adjustment', minWidth: 145, headerTooltip: 'Reconciled cost − actual mud chemicals cost for the selected period',
+      cellRenderer: (params: ICellRendererParams<MudCostReconciliationSection>) => {
+        if (params.value == null) return <Typography fontSize={12} color="text.secondary" sx={{ py: 1.2 }}>—</Typography>
+        const value = Number(params.value)
+        return <Typography fontSize={12} fontWeight={700} color={value < 0 ? 'error.main' : value > 0 ? 'warning.main' : 'text.secondary'}>{dailyMoney(value, reconciliation?.currency ?? '')}</Typography>
+      },
+    },
+    { headerName: 'REMARKS', field: 'remarks', minWidth: 200, flex: 1 },
+  ], [reconciliation?.currency])
+
+  const exportReconciliation = async (format: 'csv' | 'xlsx' | 'pdf', recordCount: number) => {
+    await auditExport({
+      module: 'reconciliation', format, record_count: recordCount,
+      rig_id: rigId, well_id: wellId,
+      section_id: reconSectionId === ALL_SECTIONS ? '' : reconSectionId,
+      view: reconView === 'daily' ? 'daily' : 'section',
+      date_from: reconDateFrom || undefined,
+      date_to: reconDateTo || undefined,
+    })
+  }
+
   const refresh = async () => {
-    await Promise.all([loadReference(), loadEntries(), loadBalance()])
+    await Promise.all([loadReference(), loadEntries(), loadBalance(), loadSettings(), loadReconciliation()])
   }
 
   const openCreate = () => {
@@ -308,7 +459,7 @@ export default function MudCostAnalysis() {
       }
       setEntryDialogOpen(false)
       setEditingEntry(null)
-      await Promise.all([loadEntries(), loadBalance()])
+      await Promise.all([loadEntries(), loadBalance(), loadSettings(), loadReconciliation()])
     } catch (caught) {
       setEntryError(caught instanceof Error ? caught.message : 'Mud Cost entry could not be saved')
     } finally {
@@ -324,7 +475,7 @@ export default function MudCostAnalysis() {
     })
     if (result.imported_count) {
       setNotice(`${result.imported_count} Mud Cost row(s) imported${result.error_count ? `; ${result.error_count} row(s) need correction` : ''}.`)
-      await Promise.all([loadEntries(), loadBalance()])
+      await Promise.all([loadEntries(), loadBalance(), loadSettings(), loadReconciliation()])
     }
     return result.errors
   }
@@ -351,7 +502,7 @@ export default function MudCostAnalysis() {
         setNotice(`${ids.length} Mud Cost entry/entries permanently deleted.`)
       }
       setPendingAction(null)
-      await Promise.all([loadEntries(), loadBalance()])
+      await Promise.all([loadEntries(), loadBalance(), loadSettings(), loadReconciliation()])
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : 'The requested action could not be completed')
     } finally {
@@ -472,6 +623,7 @@ export default function MudCostAnalysis() {
           setWellId('')
           setEntrySectionId('')
           setBalanceSectionId(ALL_SECTIONS)
+          setReconSectionId(ALL_SECTIONS)
         }} disabled={referenceLoading || !rigOptions.length}>
           <MenuItem value="" disabled>Select a rig</MenuItem>
           {rigOptions.map(rig => <MenuItem key={rig.id} value={rig.id}>{rig.display_name}</MenuItem>)}
@@ -480,6 +632,7 @@ export default function MudCostAnalysis() {
           setWellId(event.target.value)
           setEntrySectionId('')
           setBalanceSectionId(ALL_SECTIONS)
+          setReconSectionId(ALL_SECTIONS)
         }} disabled={referenceLoading || !rigId || !wellOptions.length}>
           <MenuItem value="" disabled>Select a well</MenuItem>
           {wellOptions.map(well => <MenuItem key={well.id} value={well.id}>{well.display_name}</MenuItem>)}
@@ -501,17 +654,64 @@ export default function MudCostAnalysis() {
     </Alert>}
 
     {hasScope && <>
-      {!deletedView && <Box className="stat-grid" sx={{ gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, mb: `${space[4]}px` }}>
+      <Paper variant="outlined" sx={{ p: `${space[4]}px`, borderRadius: `${radius.lg}px`, mb: `${space[4]}px` }}>
+        <Box display="flex" alignItems="flex-start" justifyContent="space-between" gap={1.5} flexWrap="wrap" mb={1.5}>
+          <Box display="flex" alignItems="flex-start" gap={1}>
+            <SettingsOutlined sx={{ color: 'text.secondary', fontSize: 19, mt: 0.2 }}/>
+            <Box>
+              <Typography fontWeight={800} fontSize={14}>Section mud type &amp; Cost/BBL</Typography>
+              <Typography color="text.secondary" fontSize={11.5} maxWidth={760}>
+                Configured once per section. WBM uses the Daily Cost mud chemicals actual directly. OBM, SOBM and OTHERS
+                apply the reconciliation formula; OTHERS additionally requires remarks. Changes recalculate every day of that section.
+              </Typography>
+            </Box>
+          </Box>
+          {currentSettings.length > 0 && <Tag tone={unconfiguredSettings.length ? 'warning' : 'success'}>
+            {currentSettings.length - unconfiguredSettings.length} of {currentSettings.length} sections configured
+          </Tag>}
+        </Box>
+        {settingsError && <ErrorMessage message={settingsError}/>}
+        {settingsLoading && !settings.length
+          ? <Box py={3} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={22}/></Box>
+          : currentSettings.length > 0
+            ? <Box sx={{ overflowX: 'auto' }}>
+                <Box component="table" sx={{
+                  borderCollapse: 'collapse', width: '100%', minWidth: 780,
+                  '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: 0.6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' },
+                  '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12, verticalAlign: 'top' },
+                }}>
+                  <thead><tr>
+                    <th>SECTION</th><th>MUD TYPE</th><th>COST/BBL BASE RATE</th><th>REMARKS</th><th>STATUS</th><th>ACTIONS</th>
+                  </tr></thead>
+                  <tbody>{currentSettings.map(row => <tr key={row.section_id}>
+                    <td><Typography fontSize={12} fontWeight={700}>{row.section_code} · {row.section_name}</Typography><Typography fontSize={10.5} color="text.secondary">{row.section_scope === 'completion' ? 'Completion' : 'Drilling'}</Typography></td>
+                    <td><Tag tone={row.is_configured ? 'info' : 'warning'}>{row.mud_type ?? 'Not configured'}</Tag>{row.mud_type && <Typography fontSize={10.5} color="text.secondary" mt={0.4}>{row.mud_type_label}</Typography>}</td>
+                    <td>{row.is_configured && row.mud_type && row.mud_type !== 'WBM' ? dailyMoney(row.base_rate, row.currency) : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
+                    <td>{row.remarks ? <Typography fontSize={11.5} title={row.remarks} sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>{row.remarks}</Typography> : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
+                    <td><Tag tone={row.is_configured ? 'success' : 'neutral'}>{row.is_configured ? 'Configured' : 'Pending'}</Tag></td>
+                    <td>{can('daily-cost:update') && <Button size="small" onClick={() => setConfigRow(row)} disabled={!selectedRig || selectedRig.is_deleted || !selectedWell || selectedWell.is_deleted}>{row.is_configured ? 'Edit' : 'Configure'}</Button>}</td>
+                  </tr>)}</tbody>
+                </Box>
+              </Box>
+            : <Typography color="text.secondary" fontSize={12.5}>This well has no configured section to set a mud type on.</Typography>}
+        {unconfiguredSettings.length > 0 && <Alert severity="info" sx={{ mt: 1.4 }}>
+          {unconfiguredSettings.length} section{unconfiguredSettings.length === 1 ? '' : 's'} still need a mud type. Reconciliation stays unavailable for an unconfigured section and its recorded mud chemicals cost remains the actual in Well Cost Analysis.
+        </Alert>}
+      </Paper>
+
+      {!deletedView && <Box className="stat-grid" sx={{ gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(5, minmax(0, 1fr))' }, mb: `${space[4]}px` }}>
         <Stat label="Daily entries" value={activeEntries.length.toLocaleString()} hint="Active records for the selected well"/>
         <Stat label="Sections used" value={trackedSections.toLocaleString()} hint="Each section reconciles independently"/>
         <Stat label="Latest entry" value={dateLabel(activeEntries[0]?.entry_date)} hint={activeEntries[0]?.section_label ?? 'No records yet'}/>
         <Stat label="Latest closing stock" value={entrySectionId === ALL_SECTIONS ? 'Per section' : latestEntry ? mudQuantity(latestEntry.closing_stock) : '—'} hint={entrySection?.display_name ?? 'Choose one section to see its latest closing stock'}/>
+        <Stat label="Latest Cost/BBL" value={latestCost ? dailyMoney(latestCost, reconciliation?.currency) : '—'} hint={latestCostHint}/>
       </Box>}
 
       <Paper variant="outlined" sx={{ borderRadius: `${radius.lg}px`, overflow: 'hidden' }}>
         <Tabs value={tab} onChange={(_event, value: number) => setTab(value)} aria-label="Mud Cost Analysis pages" sx={{ px: 1.2, borderBottom: 1, borderColor: 'divider' }}>
           <Tab label="Daily Entries" id="mud-cost-tab-entry" aria-controls="mud-cost-panel-entry"/>
           <Tab label="Material Balance" id="mud-cost-tab-balance" aria-controls="mud-cost-panel-balance"/>
+          <Tab label="Reconciliation" id="mud-cost-tab-reconciliation" aria-controls="mud-cost-panel-reconciliation"/>
         </Tabs>
 
         {tab === 0 && <Box role="tabpanel" id="mud-cost-panel-entry" aria-labelledby="mud-cost-tab-entry" sx={{ p: `${space[4]}px` }}>
@@ -621,6 +821,81 @@ export default function MudCostAnalysis() {
             No material-balance entries match this section and period.
           </Typography>}
         </Box>}
+
+        {tab === 2 && <Box role="tabpanel" id="mud-cost-panel-reconciliation" aria-labelledby="mud-cost-tab-reconciliation" sx={{ p: `${space[4]}px` }}>
+          <Box display="grid" gap={1.2} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1.1fr .9fr .9fr .9fr auto' }, alignItems: 'center', mb: 1.4 }}>
+            <TextField select size="small" label="Section" value={reconSectionId} onChange={event => setReconSectionId(event.target.value)}>
+              <MenuItem value={ALL_SECTIONS}>All sections (shown separately)</MenuItem>
+              {sectionOptions.map(section => <MenuItem key={section.id} value={section.id}>{section.display_name}</MenuItem>)}
+            </TextField>
+            <TextField size="small" type="date" label="From" value={reconDateFrom} onChange={event => setReconDateFrom(event.target.value)} InputLabelProps={{ shrink: true }}/>
+            <TextField size="small" type="date" label="To" value={reconDateTo} onChange={event => setReconDateTo(event.target.value)} InputLabelProps={{ shrink: true }}/>
+            <TextField select size="small" label="View" value={reconView} onChange={event => setReconView(event.target.value as 'daily' | 'section')}>
+              <MenuItem value="daily">Daily detail</MenuItem>
+              <MenuItem value="section">Section summary</MenuItem>
+            </TextField>
+            <Button size="small" variant="outlined" startIcon={<CalculateOutlined/>} onClick={() => void loadReconciliation()} disabled={reconLoading}>
+              {reconLoading ? 'Calculating…' : 'Recalculate'}
+            </Button>
+          </Box>
+          {reconDateFrom && reconDateTo && reconDateFrom > reconDateTo && <Alert severity="error" sx={{ mb: 1.4 }}>The start date must not be after the end date.</Alert>}
+          <Typography color="text.secondary" fontSize={11.5} mb={1.4}>
+            Total mud = Extra OBM received + Additions. ALPHA = Extra OBM received × Cost/BBL base rate; BETA = ALPHA + actual mud chemicals cost;
+            Cost/BBL = BETA ÷ total mud. Reconciled cost = Consumption/Losses × the latest Cost/BBL. Every section is calculated and shown separately;
+            cumulative figures run from that section&apos;s first entry. Section summary totals cover the selected period while
+            Cost/BBL stays the latest cumulative rate to the To date.
+          </Typography>
+          {reconError && <ErrorMessage message={reconError}/>}
+          {reconLoading && !reconciliation
+            ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={25}/></Box>
+            : reconciliation
+              ? <>
+                  <Box className="stat-grid" sx={{ gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, mb: 1.6 }}>
+                    <Stat label="Latest Cost/BBL" value={reconciliation.latest_cost_per_bbl ? dailyMoney(reconciliation.latest_cost_per_bbl, reconciliation.currency) : '—'} hint={reconciliation.latest_cost_per_bbl ? `${reconciliation.latest_cost_per_bbl_section}${reconciliation.latest_cost_per_bbl_date ? ` · ${dateLabel(reconciliation.latest_cost_per_bbl_date)}` : ''}` : reconciliation.configured_section_count ? 'Not derived for WBM sections' : 'No section mud type configured'}/>
+                    <Stat label="Actual mud chemicals" value={dailyMoney(reconciliation.total_actual_cost, reconciliation.currency)} hint="Daily Cost register, section-scoped, in the AFE standard currency"/>
+                    <Stat label="Reconciled mud cost" value={dailyMoney(reconciliation.total_reconciled_cost, reconciliation.currency)} hint="Latest Cost/BBL applied to Consumption/Losses"/>
+                    <Stat label="Reconciliation difference" value={dailyMoney(reconciliation.total_adjustment, reconciliation.currency)} hint={`${reconciliation.configured_section_count} configured · ${reconciliation.unconfigured_section_count} unconfigured section(s)`}/>
+                  </Box>
+                  {reconciliation.unconfigured_section_count > 0 && <Alert severity="warning" sx={{ mb: 1.4 }}>
+                    {reconciliation.unconfigured_section_count} section(s) have no mud type. Their actual mud chemicals cost is shown, but no reconciled amount is calculated until the section is configured above.
+                  </Alert>}
+                  {reconView === 'daily'
+                    ? <DataTable
+                        fillHeight
+                        fillReserve={78}
+                        rows={reconciliation.rows}
+                        columns={reconciliationColumns}
+                        rowKey="id"
+                        exportName="mud-cost-reconciliation-daily"
+                        searchPlaceholder="Search dates, sections, mud types and amounts..."
+                        canExport={can('daily-cost:export')}
+                        onExport={exportReconciliation}
+                      />
+                    : <DataTable
+                        fillHeight
+                        fillReserve={78}
+                        rows={reconciliation.sections}
+                        columns={reconciliationSectionColumns}
+                        rowKey="section_id"
+                        exportName="mud-cost-reconciliation-sections"
+                        searchPlaceholder="Search sections, mud types and amounts..."
+                        canExport={can('daily-cost:export')}
+                        onExport={exportReconciliation}
+                      />}
+                  <Box display="flex" justifyContent="space-between" gap={1} flexWrap="wrap" mt={1.2}>
+                    <Typography color="text.secondary" fontSize={11.5} aria-live="polite">
+                      {reconView === 'daily' ? reconciliation.rows.length : reconciliation.sections.length} row(s) · {reconciliation.selected_section_count} section(s); no cross-section totals are calculated.
+                    </Typography>
+                    <Typography color="text.secondary" fontSize={11.5}>
+                      Rate as at {dateLabel(reconciliation.to_date)} · {reconciliation.currency || 'No currency'} · entries to {dateLabel(reconciliation.to_date)}
+                    </Typography>
+                  </Box>
+                  {reconView === 'daily' && reconciliation.rows.length === 0 && <Typography color="text.secondary" fontSize={12.5} mt={1.4}>
+                    No reconciliation rows match this section and period. Add mud entries or configure a section’s mud type.
+                  </Typography>}
+                </>
+              : <Typography color="text.secondary" fontSize={12.5} mt={1.4}>No reconciliation data for this section and period.</Typography>}
+        </Box>}
       </Paper>
     </>}
 
@@ -649,6 +924,13 @@ export default function MudCostAnalysis() {
       saving={savingEntry}
       error={entryError}
     />
+
+    <MudCostSectionSettingsDialog
+      row={configRow}
+      onClose={() => setConfigRow(null)}
+      onSave={saveConfig}
+    />
+
 
     {can('daily-cost:import') && <ImportDialog
       open={importOpen}

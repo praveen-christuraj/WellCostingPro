@@ -59,10 +59,12 @@ from app.schemas.daily_cost import (
     DailyCostSubActivityOption, DailyCostTangibleLineIn, DailyCostTangibleLineOut,
     DailyCostTrendPoint, DailyCostVendorOption, DailyCostWarnings, DailyCostWellHeader,
     DailyCostWellOption, DailyCostWellProgress, DailyCostWellProgressReport,
+    DailyCostMudReconciliation, DailyCostMudSectionReconciliation,
     DailyCostWellProgressUpdate, DailyCostWellSummary, DailyCostWellTotals,
 )
 from app.services import afe as afe_service
 from app.services import audit
+from app.services import mud_cost as mud_cost_service
 from app.models.catalogue import CatalogueOption
 from app.core.precision import DECIMAL_QUANT
 
@@ -3689,6 +3691,131 @@ def well_cost_summary(
                 adjusted_days += days
         adjusted_planned_days = _rate(adjusted_days)
 
+    # ---- mud chemicals reconciliation ---------------------------------------
+    # Mud Cost Analysis reconciles each section independently. The final AFE
+    # comparison uses the reconciled mud chemicals amount, while the recorded
+    # actual stays available here and in the daily ledger. Sections that cannot
+    # be reconciled keep their actual cost so nothing is silently dropped.
+    mud_window_to = date_to or (max((row.cost_date for row in windowed), default=date.today()))
+    mud_statement = select(
+        func.coalesce(func.sum(DailyCostConsumableLine.standard_amount), 0)
+    ).join(
+        DailyCostEntry, DailyCostEntry.id == DailyCostConsumableLine.entry_id,
+    ).where(
+        DailyCostConsumableLine.organization_id == organization_id,
+        DailyCostEntry.organization_id == organization_id,
+        DailyCostEntry.well_id == well_id,
+        DailyCostEntry.is_deleted.is_(False),
+        DailyCostConsumableLine.category == "Mud Chemicals",
+        DailyCostEntry.cost_date <= mud_window_to,
+    )
+    if date_from is not None:
+        mud_statement = mud_statement.where(DailyCostEntry.cost_date >= date_from)
+    if not include_draft:
+        mud_statement = mud_statement.where(DailyCostEntry.status == "submitted")
+    actual_mud_chemicals = _money(Decimal(db.scalar(mud_statement) or 0))
+    mud_warnings: list[DailyCostWarnings] = []
+    mud_reconciliation: DailyCostMudReconciliation | None = None
+    comparison_mud_cost = actual_mud_chemicals
+    reconciled_mud_cost = Decimal("0.00")
+    if entries:
+        try:
+            reconciliation = mud_cost_service.reconcile_well(
+                db, organization_id, well,
+                date_from=date_from, date_to=mud_window_to, include_draft=include_draft,
+            )
+        except HTTPException as error:
+            mud_warnings.append(DailyCostWarnings(
+                code="mud-reconciliation-unavailable", severity="warning",
+                message=f"Mud cost reconciliation is unavailable: {error.detail}",
+            ))
+            reconciliation = None
+        if reconciliation is not None:
+            covered_actual = sum(
+                (row.actual_cost for row in reconciliation.sections
+                 if row.reconciled_cost is not None),
+                Decimal("0"),
+            )
+            reconciled_mud_cost = _money(sum(
+                (row.reconciled_cost for row in reconciliation.sections
+                 if row.reconciled_cost is not None),
+                Decimal("0"),
+            ))
+            unreconciled_actual = _money(max(actual_mud_chemicals - covered_actual, Decimal("0")))
+            comparison_mud_cost = _money(reconciled_mud_cost + unreconciled_actual)
+            notes: list[str] = []
+            if any(row.reconciled_cost is not None for row in reconciliation.sections):
+                notes.append("The final comparison uses the reconciled mud chemicals cost; the recorded actual remains visible.")
+            if reconciliation.unconfigured_section_count:
+                notes.append(
+                    f"{reconciliation.unconfigured_section_count} section(s) have no mud configuration and remain at actual cost."
+                )
+            mud_reconciliation = DailyCostMudReconciliation(
+                available=bool(reconciliation.sections) and any(
+                    row.reconciled_cost is not None for row in reconciliation.sections
+                ),
+                currency=currency,
+                actual_cost=actual_mud_chemicals,
+                reconciled_cost=reconciled_mud_cost,
+                unreconciled_actual_cost=unreconciled_actual,
+                comparison_cost=comparison_mud_cost,
+                adjustment=_money(comparison_mud_cost - actual_mud_chemicals),
+                latest_cost_per_bbl=reconciliation.latest_cost_per_bbl,
+                latest_cost_per_bbl_section=reconciliation.latest_cost_per_bbl_section,
+                latest_cost_per_bbl_date=reconciliation.latest_cost_per_bbl_date,
+                configured_section_count=reconciliation.configured_section_count,
+                unconfigured_section_count=reconciliation.unconfigured_section_count,
+                sections=[
+                    DailyCostMudSectionReconciliation(
+                        section_id=row.section_id,
+                        section_label=row.section_label,
+                        mud_type=row.mud_type,
+                        mud_type_label=row.mud_type_label,
+                        is_configured=row.is_configured,
+                        is_wbm=row.is_wbm,
+                        currency=row.currency,
+                        base_rate=row.base_rate,
+                        actual_cost=row.actual_cost,
+                        reconciled_cost=row.reconciled_cost,
+                        cost_per_bbl=row.cost_per_bbl,
+                        consumption_losses=row.consumption_losses,
+                        adjustment=row.adjustment,
+                        remarks=row.remarks,
+                    )
+                    for row in reconciliation.sections
+                ],
+                note=" ".join(notes) or (
+                    "No section has both a mud type and reconcilable quantities; the comparison keeps actual mud cost."
+                ),
+            )
+            if reconciliation.unconfigured_section_count:
+                mud_warnings.append(DailyCostWarnings(
+                    code="mud-sections-unconfigured", severity="info",
+                    message=(
+                        f"{reconciliation.unconfigured_section_count} mud section(s) have no mud type configured. "
+                        "Their mud chemicals remain at the recorded actual cost in the comparison."
+                    ),
+                ))
+            if mud_reconciliation.available and mud_reconciliation.adjustment != 0:
+                mud_warnings.append(DailyCostWarnings(
+                    code="mud-cost-reconciled", severity="info",
+                    message=(
+                        f"Mud chemicals compare at {currency} {comparison_mud_cost:,.2f} reconciled "
+                        f"(recorded actual {currency} {actual_mud_chemicals:,.2f}; "
+                        f"adjustment {currency} {mud_reconciliation.adjustment:,.2f})."
+                    ),
+                ))
+    comparison_actual = _money(actual_total - actual_mud_chemicals + comparison_mud_cost)
+    comparison_consumables = _money(consumables - actual_mud_chemicals + comparison_mud_cost)
+    comparison_balance = _money(planned_total - comparison_actual)
+    comparison_used = (
+        (comparison_actual / planned_total * Decimal("100")).quantize(Decimal("0.01"))
+        if planned_total > 0 else Decimal("0.00")
+    )
+    comparison_adjusted_balance = (
+        _money(adjusted_planned - comparison_actual) if adjusted_planned is not None else None
+    )
+
     # ---- daily run sheet -----------------------------------------------------
     per_day: dict[date, dict[str, Any]] = {}
     for row in db.execute(
@@ -3893,6 +4020,7 @@ def well_cost_summary(
 
     # ---- warnings and totals -------------------------------------------------
     warnings: list[DailyCostWarnings] = []
+    warnings.extend(mud_warnings)
     if actual_total > planned_total and planned_total > 0:
         warnings.append(DailyCostWarnings(
             code="well-over-budget", severity="warning",
@@ -3973,6 +4101,16 @@ def well_cost_summary(
         has_adjustment=adjusted_planned is not None or adjusted_planned_days is not None,
         spud_actual_days=spud_actual_days if spudded_rows else None,
         spud_days_variance=spud_days_variance if spudded_rows else None,
+        actual_mud_chemicals=actual_mud_chemicals,
+        reconciled_mud_cost=_money(reconciled_mud_cost),
+        comparison_mud_cost=_money(comparison_mud_cost),
+        mud_cost_adjustment=_money(comparison_mud_cost - actual_mud_chemicals),
+        comparison_actual=comparison_actual,
+        comparison_consumables=comparison_consumables,
+        comparison_balance=comparison_balance,
+        comparison_used_percent=comparison_used,
+        comparison_adjusted_balance=comparison_adjusted_balance,
+        has_mud_reconciliation=bool(mud_reconciliation and mud_reconciliation.available),
     )
     return DailyCostWellSummary(
         well=DailyCostWellHeader(
@@ -3983,7 +4121,7 @@ def well_cost_summary(
         from_date=date_from, to_date=date_to, as_of=max(days) if days else None,
         include_draft=include_draft, totals=totals, afes=positions, daily=daily,
         factors=factors, budget_lines=budget_lines, warnings=warnings,
-        progress=progress_rows,
+        progress=progress_rows, mud_cost=mud_reconciliation,
     )
 
 

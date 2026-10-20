@@ -6,12 +6,17 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.precision import Decimal10
-from app.domain.mud_cost import MUD_COST_LINE_BY_CODE, MUD_COST_LINE_CODES
+from app.domain.mud_cost import (
+    MUD_COST_LINE_BY_CODE,
+    MUD_COST_LINE_CODES,
+    MUD_COST_REMARK_REQUIRED_TYPE,
+)
 
 MudCostCategory = Literal[
     "opening_stock", "receipt", "additions", "consumption_losses", "others", "closing_stock",
 ]
 MudCostBalanceView = Literal["daily", "monthly", "section", "inception"]
+MudCostMudType = Literal["WBM", "OBM", "SOBM", "OTHERS"]
 MAX_QUANTITY = Decimal("999999999999999.9999999999")
 
 
@@ -211,7 +216,7 @@ class MudCostImportResponse(BaseModel):
 
 
 class MudCostExportAudit(_Strict):
-    module: Literal["entries", "deleted", "material_balance"]
+    module: Literal["entries", "deleted", "material_balance", "reconciliation"]
     format: Literal["csv", "xlsx", "pdf", "print"]
     record_count: int = Field(ge=0, le=1_000_000)
     rig_id: str = Field(default="", max_length=36)
@@ -224,3 +229,150 @@ class MudCostExportAudit(_Strict):
 
 class MudCostBulkActionOut(BaseModel):
     affected_count: int
+
+
+
+class MudCostSectionSettingIn(_Strict):
+    """One section's mud system, remark and Cost/BBL base rate.
+
+    The server resolves the section snapshots and the currency; the browser only
+    sends the scope, the selected mud type, the remark and the rate. OTHERS is
+    the only type whose remark is mandatory, and every non-WBM type must carry a
+    positive base rate because it drives the reconciliation arithmetic.
+    """
+
+    rig_id: str = Field(min_length=1, max_length=36)
+    well_id: str = Field(min_length=1, max_length=36)
+    section_id: str = Field(min_length=1, max_length=36)
+    mud_type: MudCostMudType
+    remarks: str = Field(default="", max_length=500)
+    base_rate: Decimal10 | None = Field(default=None, ge=0, le=MAX_QUANTITY)
+
+    @field_validator("rig_id", "well_id", "section_id", "remarks", mode="before")
+    @classmethod
+    def trim_setting_text(cls, value: Any) -> Any:
+        return _trim(value)
+
+    @model_validator(mode="after")
+    def required_fields_for_type(self):
+        if self.mud_type == MUD_COST_REMARK_REQUIRED_TYPE and not self.remarks.strip():
+            raise ValueError("Remarks are mandatory when the mud type is OTHERS.")
+        if self.mud_type != "WBM" and (self.base_rate is None or self.base_rate <= 0):
+            raise ValueError("Enter a positive Cost/BBL base rate for this mud type.")
+        return self
+
+
+class MudCostSectionSettingOut(BaseModel):
+    id: str | None = None
+    rig_id: str
+    rig_code: str
+    well_id: str
+    well_code: str
+    section_id: str
+    hole_section_id: str
+    section_scope: Literal["drilling", "completion"]
+    section_code: str
+    section_name: str
+    section_label: str
+    display_name: str
+    mud_type: MudCostMudType | None = None
+    mud_type_label: str
+    remarks: str
+    base_rate: Decimal
+    currency: str
+    is_configured: bool
+    is_current: bool
+    created_by: str = ""
+    updated_by: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class MudCostReconciliationRowOut(BaseModel):
+    id: str
+    rig_id: str
+    rig_code: str
+    well_id: str
+    well_code: str
+    section_id: str
+    section_scope: Literal["drilling", "completion"]
+    section_code: str
+    section_name: str
+    section_label: str
+    mud_type: MudCostMudType | None
+    mud_type_label: str
+    is_configured: bool
+    is_wbm: bool
+    cost_date: date
+    currency: str
+    base_rate: Decimal
+    additions: Decimal
+    extra_obm_received: Decimal
+    actual_cost: Decimal
+    total_mud: Decimal
+    alpha: Decimal | None
+    beta: Decimal | None
+    cost_per_bbl: Decimal | None
+    consumption_losses: Decimal
+    reconciled_cost: Decimal | None
+    cumulative_additions: Decimal
+    cumulative_extra_obm_received: Decimal
+    cumulative_actual_cost: Decimal
+    cumulative_total_mud: Decimal
+    cumulative_alpha: Decimal | None
+    cumulative_beta: Decimal | None
+    cumulative_consumption_losses: Decimal
+    cumulative_reconciled_cost: Decimal | None
+
+
+class MudCostReconciliationSectionOut(BaseModel):
+    section_id: str
+    hole_section_id: str
+    rig_id: str
+    rig_code: str
+    well_id: str
+    well_code: str
+    section_scope: Literal["drilling", "completion"]
+    section_code: str
+    section_name: str
+    section_label: str
+    mud_type: MudCostMudType | None
+    mud_type_label: str
+    remarks: str
+    is_configured: bool
+    is_current: bool
+    is_wbm: bool
+    currency: str
+    base_rate: Decimal
+    first_date: date | None
+    last_date: date | None
+    entry_count: int
+    additions: Decimal
+    extra_obm_received: Decimal
+    actual_cost: Decimal
+    total_mud: Decimal
+    alpha: Decimal | None
+    beta: Decimal | None
+    consumption_losses: Decimal
+    cost_per_bbl: Decimal | None
+    reconciled_cost: Decimal | None
+    adjustment: Decimal | None
+
+
+class MudCostReconciliationOut(BaseModel):
+    from_date: date | None
+    to_date: date | None
+    currency: str
+    selected_section_count: int
+    configured_section_count: int
+    unconfigured_section_count: int
+    entry_count: int
+    latest_cost_per_bbl: Decimal | None = None
+    latest_cost_per_bbl_section: str = ""
+    latest_cost_per_bbl_date: date | None = None
+    total_actual_cost: Decimal
+    total_reconciled_cost: Decimal
+    total_adjustment: Decimal
+    total_consumption_losses: Decimal
+    sections: list[MudCostReconciliationSectionOut]
+    rows: list[MudCostReconciliationRowOut]

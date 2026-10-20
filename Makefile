@@ -1,4 +1,4 @@
-.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check
+.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check mud-cost-reconciliation-check
 
 test:
 	cd backend && ../.venv/bin/python -m pytest -q
@@ -31,3 +31,11 @@ daily-cost-check:
 		--bundle --platform=node --format=esm --jsx=automatic \
 		--outfile=node_modules/.cache/daily-cost-check.mjs --external:jsdom && \
 		node node_modules/.cache/daily-cost-check.mjs
+
+# Mud type / Cost/BBL configuration dialog rules (section-scoped reconciliation).
+mud-cost-reconciliation-check:
+	cd frontend && npm install --no-save jsdom && \
+		NODE_PATH="$$PWD/node_modules" ./node_modules/.bin/esbuild ../.agent/tools/mud-cost-reconciliation-check.jsx \
+		--bundle --platform=node --format=esm --jsx=automatic \
+		--outfile=node_modules/.cache/mud-cost-reconciliation-check.mjs --external:jsdom && \
+		node node_modules/.cache/mud-cost-reconciliation-check.mjs
