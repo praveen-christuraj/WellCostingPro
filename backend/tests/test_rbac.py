@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from app.core.database import Base, engine, SessionLocal
 from app.main import app
-from app.models import Organization, User, Role, Permission
+from app.models import Organization, User, Role, Permission, AuditLog, RefreshSession, UserCostingSet, UserCostingSetItem
 from app.core.security import hash_password
 
 
@@ -26,7 +26,7 @@ def fresh_database():
             org = Organization(slug=slug, name=f"{slug.title()} Energy")
             db.add(org)
             db.flush()
-            keys = ["users:read", "users:create", "users:update", "roles:read", "roles:create", "roles:update", "roles:delete", "permissions:read", "permissions:create", "permissions:update", "permissions:delete", "assignments:write"]
+            keys = ["users:read", "users:create", "users:update", "users:delete", "roles:read", "roles:create", "roles:update", "roles:delete", "permissions:read", "permissions:create", "permissions:update", "permissions:delete", "assignments:write"]
             permissions = [Permission(organization_id=org.id, key=key, description=key) for key in keys]
             owner = Role(organization_id=org.id, name="Owner", is_owner=True, permissions=permissions)
             db.add(User(organization_id=org.id, email="owner@example.com", full_name="Test Owner", password_hash=hash_password("correct-password-123"), roles=[owner]))
@@ -115,3 +115,87 @@ def test_lockout_owner_protection_and_bad_payloads():
         for _ in range(5):
             assert client.post("/api/v1/auth/login", json={"organization": "north", "email": "owner@example.com", "password": "wrong-password"}).status_code == 401
         assert client.post("/api/v1/auth/login", json={"organization": "north", "email": "owner@example.com", "password": "correct-password-123"}).status_code == 429
+
+
+def test_delete_user_cascades_private_data_revokes_sessions_and_preserves_audit():
+    with TestClient(app) as client:
+        north = login(client)
+        south = login(client, "south")
+        new_user = client.post("/api/v1/users", headers=north, json={
+            "email": "person@example.com", "full_name": "New Person", "password": "person-secret-123"
+        }).json()
+        user_id = new_user["id"]
+        auth = client.post("/api/v1/auth/login", json={
+            "organization": "north", "email": "person@example.com", "password": "person-secret-123"
+        })
+        assert auth.status_code == 200
+        token = {"Authorization": f"Bearer {auth.json()['access_token']}"}
+        old_refresh = client.cookies.get("refresh_token")
+        with SessionLocal() as db:
+            org_id = db.get(User, user_id).organization_id
+            saved = UserCostingSet(organization_id=org_id, user_id=user_id,
+                                   name="Saved", name_key="saved", item_group="services",
+                                   items=[UserCostingSetItem(organization_id=org_id, item_kind="service",
+                                                              item_id="test", item_code_snapshot="S-01",
+                                                              item_name_snapshot="Service", sort_order=0)])
+            db.add(saved)
+            db.commit()
+            saved_id = saved.id
+        assert client.delete(f"/api/v1/users/{user_id}", headers=south).status_code == 404
+        assert client.delete(f"/api/v1/users/{user_id}", headers=token).status_code == 403
+        assert client.delete(f"/api/v1/users/{user_id}", headers=north).status_code == 204
+        assert client.delete(f"/api/v1/users/{user_id}", headers=north).status_code == 404
+        assert client.get("/api/v1/auth/me", headers=token).status_code == 401
+        client.cookies.set("refresh_token", old_refresh, path="/api/v1/auth")
+        assert client.post("/api/v1/auth/refresh").status_code == 401
+        with SessionLocal() as db:
+            assert db.get(User, user_id) is None
+            assert db.get(UserCostingSet, saved_id) is None
+            assert db.scalar(select(RefreshSession).where(RefreshSession.user_id == user_id)) is None
+            records = db.scalars(select(AuditLog).where(AuditLog.entity_type == "user", AuditLog.entity_id == user_id)).all()
+            assert any(record.action == "create" for record in records)
+            assert any(record.action == "delete" and record.actor_email == "owner@example.com" for record in records)
+            assert any(record.actor_user_id == user_id for record in db.scalars(
+                select(AuditLog).where(AuditLog.actor_user_id == user_id)).all())
+        assert client.post("/api/v1/users", headers=north, json={
+            "email": "person@example.com", "full_name": "Replacement", "password": "person-secret-123"
+        }).status_code == 201
+
+
+def test_delete_user_requires_permission_and_protects_owners():
+    with TestClient(app) as client:
+        north = login(client)
+        south = login(client, "south")
+        owner_id = client.get("/api/v1/auth/me", headers=north).json()["id"]
+        south_owner_id = client.get("/api/v1/auth/me", headers=south).json()["id"]
+        target_id = client.post("/api/v1/users", headers=north, json={
+            "email": "target@example.com", "full_name": "Target", "password": "target-secret-123"
+        }).json()["id"]
+        assert client.delete(f"/api/v1/users/{owner_id}", headers=north).status_code == 403
+        assert client.delete(f"/api/v1/users/{south_owner_id}", headers=north).status_code == 404
+        with SessionLocal() as db:
+            north_org = db.get(User, owner_id).organization_id
+            second_owner = User(organization_id=north_org, email="second@example.com", full_name="Second Owner",
+                                password_hash=hash_password("second-secret-123"),
+                                roles=[db.scalar(select(Role).where(Role.organization_id == north_org, Role.is_owner.is_(True)))])
+            db.add(second_owner)
+            db.commit()
+            second_owner_id = second_owner.id
+        assert client.delete(f"/api/v1/users/{second_owner_id}", headers=north).status_code == 403
+        role_id = client.post("/api/v1/roles", headers=north, json={"name": "Manager"}).json()["id"]
+        permissions = {p["key"]: p["id"] for p in client.get("/api/v1/permissions", headers=north).json()}
+        assert client.put(f"/api/v1/roles/{role_id}/permissions", headers=north,
+                          json={"ids": [permissions["users:read"]]}).status_code == 200
+        manager_id = client.post("/api/v1/users", headers=north, json={
+            "email": "manager@example.com", "full_name": "Manager", "password": "manager-secret-123", "role_ids": [role_id]
+        }).json()["id"]
+        manager_token = client.post("/api/v1/auth/login", json={
+            "organization": "north", "email": "manager@example.com", "password": "manager-secret-123"
+        }).json()["access_token"]
+        manager = {"Authorization": f"Bearer {manager_token}"}
+        assert client.delete(f"/api/v1/users/{target_id}", headers=manager).status_code == 403
+        assert client.put(f"/api/v1/roles/{role_id}/permissions", headers=north,
+                          json={"ids": [permissions["users:read"], permissions["users:delete"]]}).status_code == 200
+        assert client.delete(f"/api/v1/users/{second_owner_id}", headers=manager).status_code == 403
+        assert client.delete(f"/api/v1/users/{manager_id}", headers=manager).status_code == 403
+        assert client.delete(f"/api/v1/users/{target_id}", headers=manager).status_code == 204

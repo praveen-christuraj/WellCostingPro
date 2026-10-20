@@ -106,6 +106,22 @@ def update_user(item_id: str, data: UserUpdate, request: Request, db: Db, user: 
     return item
 
 
+@router.delete("/users/{item_id}", status_code=204, dependencies=[Depends(require("users:delete"))])
+def delete_user(item_id: str, request: Request, db: Db, user: Current):
+    item = scoped(db, User, item_id, user.organization_id)
+    if item.id == user.id:
+        raise HTTPException(403, "Cannot delete your own account")
+    if any(role.is_owner for role in item.roles):
+        raise HTTPException(403, "Organization owner accounts cannot be deleted")
+    # Identity and private user-owned shortcuts are removed by their FK cascades;
+    # audit history stores actor snapshots and remains intact.
+    audit.record(db, organization_id=user.organization_id, actor=user, action="delete", entity_type="user",
+                 entity_id=item.id, entity_label=item.email,
+                 summary=f"Deleted user {item.full_name} <{item.email}>", request=request)
+    db.delete(item)
+    commit(db)
+
+
 @router.put("/users/{item_id}/roles", response_model=UserOut, dependencies=[Depends(require("assignments:write"))])
 def assign_roles(item_id: str, data: IDList, request: Request, db: Db, user: Current):
     item = scoped(db, User, item_id, user.organization_id)
