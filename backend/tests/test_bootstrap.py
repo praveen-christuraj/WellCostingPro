@@ -185,3 +185,26 @@ def test_startup_on_an_empty_database_never_blocks_or_prompts(migrated_database)
         assert client.get("/api/health").json() == {"status": "ok", "admin_seeded": False}
         assert client.post("/api/v1/auth/login", json={"organization": "acme-energy", "email": "jane@example.com", "password": "correct-password-123"}).status_code == 401
     assert owners() == []
+
+
+def test_user_delete_capability_backfills_only_owner(migrated_database):
+    reset_schema(migrate=False)
+    command.upgrade(alembic_config(), "e7f2a1c9b305")
+    with SessionLocal() as db:
+        organization = Organization(slug="legacy", name="Legacy Energy")
+        db.add(organization)
+        db.flush()
+        existing = Permission(organization_id=organization.id, key="users:read", description="Read users")
+        owner_role = Role(organization_id=organization.id, name="Owner", is_owner=True, permissions=[existing])
+        member_role = Role(organization_id=organization.id, name="Manager", permissions=[existing])
+        db.add_all([owner_role, member_role])
+        db.commit()
+        owner_id, member_id = owner_role.id, member_role.id
+    upgrade_head()
+    with SessionLocal() as db:
+        owner_role = db.get(Role, owner_id)
+        member_role = db.get(Role, member_id)
+        assert "users:delete" in {permission.key for permission in owner_role.permissions}
+        assert "users:delete" not in {permission.key for permission in member_role.permissions}
+        assert db.scalar(select(Permission).where(Permission.key == "users:delete")).organization_id == owner_role.organization_id
+    assert schema_status() == READY

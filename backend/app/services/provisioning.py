@@ -18,7 +18,7 @@ SLUG_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 # Platform capabilities are seeded as tenant data, never used as hard-coded role assignments in the UI.
 CAPABILITIES = {resource: actions for resource, actions in {
-    "users": ("read", "create", "update"),
+    "users": ("read", "create", "update", "delete"),
     "roles": ("read", "create", "update", "delete"),
     "permissions": ("read", "create", "update", "delete"),
     "assignments": ("write",),
