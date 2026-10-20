@@ -73,6 +73,7 @@ const isConsumable = (line: EditableDailyCostLine): line is DailyCostConsumableI
 const isOther = (line: EditableDailyCostLine): line is DailyCostOtherExpenseInput => 'expense_type' in line
 
 type ServiceEntryRow = {
+  cost_items?: { description: string; amount: string }[]
   id: string
   service_id: string
   baseline_service_rate_id: string | null
@@ -166,6 +167,7 @@ export function DailyCostLineDialog({
   const [serviceRows, setServiceRows] = useState<ServiceEntryRow[]>([])
 
   // Non-service line state (consumables, tangibles, other expenses)
+  const [queuedLines, setQueuedLines] = useState<EditableDailyCostLine[]>([])
   const [nonServiceForm, setNonServiceForm] = useState<EditableDailyCostLine | null>(null)
 
   const [baselineState, setBaselineState] = useState<string>('')
@@ -204,6 +206,7 @@ export function DailyCostLineDialog({
     )
     setCommonDepthUnit(normalizeDepthUnit(initialLine?.actual_depth_unit || 'm'))
     setBaselineState('')
+    setQueuedLines([])
 
     if (initialClassification === 'Planned') {
       setCommonPartyName('Not Applicable')
@@ -220,6 +223,7 @@ export function DailyCostLineDialog({
         const cur = (initialLine.currency || baseline.standard_currency || 'USD').toUpperCase()
         setServiceRows([
           {
+            cost_items: initialLine.cost_items ?? [],
             id: initialLine.id || 'service-0',
             service_id: initialLine.service_id,
             baseline_service_rate_id: initialLine.baseline_service_rate_id,
@@ -397,7 +401,7 @@ export function DailyCostLineDialog({
     serviceRows,
     nonServiceForm,
   })
-  const dirty = baselineState !== '' && currentState !== baselineState
+  const dirty = queuedLines.length > 0 || (baselineState !== '' && currentState !== baselineState)
 
   const sections = baseline.sections
   const selectedCommonSection = sections.find(section => section.hole_section_id === commonHoleSectionId)
@@ -536,6 +540,7 @@ export function DailyCostLineDialog({
       const duplicateCheck = new Set<string>()
       serviceRows.forEach((row, idx) => {
         const rowLabel = `Service #${idx + 1}`
+        if ((row.cost_items ?? []).some(item => !item.description.trim() || item.amount === '' || !Number.isFinite(Number(item.amount)) || Number(item.amount) < 0)) problems.push(`${rowLabel}: Each cost item needs a description and a non-negative amount.`)
         if (!row.service_id) {
           problems.push(`${rowLabel}: Select a service from Master Data.`)
           return
@@ -623,7 +628,11 @@ export function DailyCostLineDialog({
     return problems
   }
 
-  const handleSave = () => {
+  const handleSave = (queueOnly = false) => {
+    if (!queueOnly && queuedLines.length && nonServiceForm && (('item_id' in nonServiceForm && !nonServiceForm.item_id) || ('tangible_id' in nonServiceForm && !nonServiceForm.tangible_id))) {
+      onSave(queuedLines)
+      return
+    }
     setSubmitted(true)
     const problems = validate()
     if (problems.length > 0) {
@@ -654,6 +663,7 @@ export function DailyCostLineDialog({
             actual_depth_unit: commonDepthUnit,
             quantity: qty,
             quantity_unit: unit,
+            cost_items: row.cost_items ?? [],
             service_id: row.service_id,
             baseline_service_rate_id: row.baseline_service_rate_id,
             charging_basis: row.charging_basis,
@@ -683,7 +693,12 @@ export function DailyCostLineDialog({
           remarks: nonServiceForm.remarks.trim(),
           override_reason: nonServiceForm.override_rate === null ? '' : nonServiceForm.override_reason.trim(),
         }
-        onSave(prepared)
+        if (queueOnly) {
+          setQueuedLines(prev => [...prev, prepared])
+          setNonServiceForm(prev => prev ? { ...prev, quantity: '1', override_rate: null, override_reason: '', remarks: '', ...('item_id' in prev ? { item_id: '' } : { tangible_id: '' }) } : prev)
+          setSubmitted(false)
+          setError('')
+        } else onSave([...queuedLines, prepared])
       }
     } finally {
       setSaving(false)
@@ -717,7 +732,7 @@ export function DailyCostLineDialog({
       title={dialogTitle}
       subtitle="Dropdowns, actual depth (standardized to metres via feet ÷ 3.281), and currency conversion apply cleanly across the daily cost register."
       onClose={onClose}
-      onSubmit={handleSave}
+      onSubmit={() => handleSave()}
       busy={saving}
       dirty={dirty}
       submitLabel={submitLabel}
@@ -1011,6 +1026,17 @@ export function DailyCostLineDialog({
                         </Box>
                       )}
 
+                      <Box sx={{ gridColumn: '1 / -1' }} display="grid" gap={1}>
+                        <Typography fontWeight={700}>Actual cost breakdown (optional)</Typography>
+                        <Typography color="text.secondary" fontSize={12}>Amounts are in {row.currency}. Their total replaces the rate-based charge; descriptions are retained for reference.</Typography>
+                        {(row.cost_items ?? []).map((item, itemIndex) => <Box key={itemIndex} display="flex" gap={1}>
+                          <TextField size="small" label="Description" value={item.description} onChange={e => updateServiceRow(row.id, { cost_items: row.cost_items!.map((v, i) => i === itemIndex ? { ...v, description: e.target.value } : v) })} fullWidth />
+                          <TextField size="small" label="Amount" type="number" value={item.amount} onChange={e => updateServiceRow(row.id, { cost_items: row.cost_items!.map((v, i) => i === itemIndex ? { ...v, amount: e.target.value } : v) })} />
+                          <Button color="error" onClick={() => updateServiceRow(row.id, { cost_items: row.cost_items!.filter((_, i) => i !== itemIndex) })}>Remove</Button>
+                        </Box>)}
+                        <Button onClick={() => updateServiceRow(row.id, { cost_items: [...(row.cost_items ?? []), { description: '', amount: '' }] })}>Add cost item</Button>
+                        {!!row.cost_items?.length && <Typography fontWeight={700}>Actual total: {dailyMoney(row.cost_items.reduce((sum, item) => sum + Number(item.amount || 0), 0), row.currency)}</Typography>}
+                      </Box>
                       <TextField
                         size="small"
                         label="Daily rate override (optional)"
@@ -1484,6 +1510,16 @@ export function DailyCostLineDialog({
           </Paper>
         )}
 
+        {!initialLine && (kind === 'consumable' || kind === 'tangible') && <Box display="grid" gap={1}>
+          <Typography fontWeight={700}>Items collected: {queuedLines.length}</Typography>
+          {queuedLines.map((line, index) => <Box key={index} display="flex" justifyContent="space-between" alignItems="center">
+            <Typography>{reference.catalogue_items.find(item => item.id === ('item_id' in line ? line.item_id : 'tangible_id' in line ? line.tangible_id : ''))?.display_name || 'Item'} · Usage: {line.quantity}</Typography>
+            <Button color="error" onClick={() => setQueuedLines(prev => prev.filter((_, i) => i !== index))}>Remove</Button>
+          </Box>)}
+          <Button variant="outlined" onClick={() => handleSave(true)}>Collect item & add another</Button>
+          {!!queuedLines.length && <Button onClick={() => { if (nonServiceForm && (('item_id' in nonServiceForm && nonServiceForm.item_id) || ('tangible_id' in nonServiceForm && nonServiceForm.tangible_id))) handleSave(); else onSave(queuedLines) }}>Add collected items to sheet</Button>}
+          <Typography color="text.secondary" fontSize={12}>Each collected item is added as a separate line. Save the daily sheet to commit them.</Typography>
+        </Box>}
         {submitted && error && <Alert severity="error">{error}</Alert>}
 
         <Divider />

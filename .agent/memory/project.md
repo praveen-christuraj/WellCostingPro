@@ -145,3 +145,8 @@ UI changes are additionally gated by `.agent/tools/ui-check.jsx` (renders the re
 - Decimal persistence and calculation snapshots use `Numeric(28, 10)` so accepted digits are retained through pricing and conversion instead of being rounded at the former 2/3/4/6-place boundaries. Migration `f6b9c2d4e810` upgrades every decimal ledger, snapshot and plan column and restores the prior per-column types on downgrade. AFE, catalogue, Daily Cost and depth helpers calculate at ten-place precision; presentation formatters may still show fewer digits without changing stored values.
 - Frontend well-plan and Mud Cost controls expose the ten-place step/validation rule, and well-plan requests send decimal strings to avoid JavaScript number coercion before the API. Regression coverage is in `backend/tests/test_decimal_precision.py`; existing API tests compare numeric equality rather than relying on legacy zero-padding.
 
+
+## Daily cost itemized actuals (2026-10-20)
+- AFE tangible picker shows captured master prices and includes currency/rate in keyword search.
+- Daily consumable/tangible dialogs collect multiple items before adding them as independent draft lines; existing Add from Set remains unchanged.
+- Service inputs optionally carry `cost_items` (description, amount in the parent currency). Stored in normalized `daily_cost_service_cost_items` rows, cascade-owned by the daily service line. When present, their sum replaces quantity × rate for native, standard and USD accounting. They are retained when reconstructing submission/reopen payloads and exposed on saved/preview responses for reference/editing. Migration `b729f61a` follows `f6b9c2d4e810`.

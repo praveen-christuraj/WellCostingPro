@@ -517,6 +517,10 @@ class DailyCostServiceLine(DailyCostLine):
         ForeignKey("daily_cost_baseline_service_rates.id", ondelete="RESTRICT"), nullable=True, index=True
     )
 
+    cost_items: Mapped[list["DailyCostServiceCostItem"]] = relationship(
+        cascade="all, delete-orphan", order_by="DailyCostServiceCostItem.sort_order", lazy="selectin"
+    )
+
     entry: Mapped[DailyCostEntry] = relationship(back_populates="service_lines", lazy="select")
     service: Mapped["Service"] = relationship("Service", lazy="joined")
     activity: Mapped["Activity"] = relationship("Activity", lazy="joined")
@@ -614,3 +618,13 @@ class DailyCostOtherExpenseLine(DailyCostLine):
     phase: Mapped["Phase | None"] = relationship("Phase", lazy="joined")
     sub_activity: Mapped["WellSubActivity | None"] = relationship("WellSubActivity", lazy="joined")
     vendor: Mapped["Vendor | None"] = relationship("Vendor", lazy="joined")
+
+
+class DailyCostServiceCostItem(Base):
+    __tablename__ = "daily_cost_service_cost_items"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    service_line_id: Mapped[str] = mapped_column(ForeignKey("daily_cost_service_lines.id", ondelete="CASCADE"), nullable=False, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(24, 6), nullable=False)
+    __table_args__ = (CheckConstraint("amount >= 0", name="ck_service_cost_item_amount"),)

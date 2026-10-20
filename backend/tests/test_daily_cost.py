@@ -1261,3 +1261,31 @@ def test_other_expense_remarks_are_enforced_by_the_database_too():
                     db.execute(insert(DailyCostOtherExpenseLine).values(**{**base, **override}))
                 db.rollback()
             assert db.scalar(select(func.count()).select_from(DailyCostOtherExpenseLine)) == 1
+
+
+def test_itemized_service_costs_roundtrip_preview_and_submit():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        base = f"/api/v1/daily-cost/entries/{setup['entry']['id']}"
+        payload = {"services": [{
+            "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
+            "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub1"]["id"],
+            "quantity": "12", "quantity_unit": "hours", "currency": "USD",
+            "service_id": setup["service"]["id"],
+            "baseline_service_rate_id": setup["baseline"]["service_rates"][0]["id"],
+            "charging_basis": "Day Rate", "charge_category": "Operation",
+            "cost_items": [{"description": "Crew", "amount": "123.45"}, {"description": "Transport", "amount": "20.10"}],
+        }]}
+        preview = client.put(base + "/preview", headers=headers, json=payload)
+        assert preview.status_code == 200, preview.text
+        assert Decimal(preview.json()["services"][0]["amount"]) == Decimal("143.55")
+        saved = client.put(base, headers=headers, json=payload)
+        assert saved.status_code == 200, saved.text
+        fetched = client.get(base, headers=headers).json()["services"][0]
+        assert [item["description"] for item in fetched["cost_items"]] == ["Crew", "Transport"]
+        assert Decimal(fetched["usd_amount"]) == Decimal("143.55")
+        submitted = client.post(base + "/submit", headers=headers, json={"remarks": "Reviewed"})
+        assert submitted.status_code == 200, submitted.text
+        assert Decimal(submitted.json()["services"][0]["amount"]) == Decimal("143.55")
+        assert len(submitted.json()["services"][0]["cost_items"]) == 2

@@ -122,7 +122,9 @@ export type DailyCostLineBase = {
   depth_seq?: number | null
   override_rate: string | null; override_reason: string; remarks: string
 }
+export type ServiceCostItem = { description: string; amount: string }
 export type DailyCostServiceInput = DailyCostLineBase & {
+  cost_items?: ServiceCostItem[]
   service_id: string; baseline_service_rate_id: string | null; charging_basis: ChargingBasis | null
   charge_category: ChargeCategory; quantity_unit: DailyQuantityUnit
 }
@@ -155,6 +157,7 @@ export type DailyCostLineOutput = DailyCostLineBase & {
   baseline_budget_line_id: string | null; budget_key: string; budget_name: string
 }
 export type DailyCostServiceLine = DailyCostLineOutput & {
+  cost_items?: ServiceCostItem[]
   service_id: string; service_code: string; service_name: string; charging_basis: ChargingBasis
   charge_category: ChargeCategory; baseline_service_rate_id: string | null
 }
@@ -298,7 +301,7 @@ export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
       phase_id: line.phase_id, sub_activity_id: line.sub_activity_id,
       vendor_id: line.vendor_id, party_name: line.party_name, quantity: line.quantity,
       currency: line.currency, ...lineFxAndDepth(line), override_rate: line.override_rate, override_reason: line.override_reason,
-      remarks: line.remarks, service_id: line.service_id, baseline_service_rate_id: line.baseline_service_rate_id,
+      cost_items: line.cost_items ?? [], remarks: line.remarks, service_id: line.service_id, baseline_service_rate_id: line.baseline_service_rate_id,
       charging_basis: line.charging_basis, charge_category: line.charge_category, quantity_unit: line.quantity_unit,
     })),
     consumables: day.consumables.map(line => ({
