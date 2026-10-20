@@ -27,6 +27,7 @@ import {
   type DailyCostSavePayload, type DailyCostServiceInput, type DailyQuantityUnit,
   type ConsumableCategory, type ConsumableKind,
 } from '../lib/dailyCost'
+import { formatDepthMeters } from '../lib/units'
 import type { CostingSet, CostingSetGroup } from '../lib/costingSets'
 
 /** Where each dialog kind lives inside the save payload. */
@@ -36,9 +37,9 @@ const GROUP_KEY: Record<DailyCostLineKind, LineGroupKey> = {
 }
 
 type GridLine = {
-  id: string; lineIndex: number; item: string; activity: string; section: string; subActivity: string
+  id: string; lineIndex: number; item: string; activity: string; section: string; actualDepth: string; subActivity: string
   vendor: string; quantity: string; quantityUnit: string; rate: string; currency: string
-  amount: string; standardAmount: string; source: string; budget: string; overrideReason: string; remarks: string
+  amount: string; standardAmount: string; usdAmount: string; source: string; budget: string; overrideReason: string; remarks: string
 }
 type StatusAction = 'submit' | 'reopen'
 type LineDelete = { kind: DailyCostLineKind; index: number; label: string } | null
@@ -461,7 +462,7 @@ export default function DailyCostSheet() {
           : rate.charging_basis === 'Per Section Rate' ? 'section'
             : DAILY_ONE_TIME_CATEGORIES.includes(category) ? 'unit' : 'days'
         if (duplicateServices.has(duplicateKey)
-          || !baseline.exchange_rates[rate.currency]
+          || (!baseline.exchange_rates[rate.currency] && rate.currency !== 'USD')
           || (rate.charging_basis !== 'Day Rate' && !sectionId)
           || (deriveClassification(activity) !== 'Planned' && !vendor && !service.vendor_name && !subActivity.responsible_party)) {
           skipped += 1
@@ -495,7 +496,7 @@ export default function DailyCostSheet() {
         const catalogueItem = reference.catalogue_items.find(option => option.item_kind === 'tangible' && option.id === item.item_id)
         const snapshot = baseline.catalogue_rates.find(option => option.item_kind === 'tangible' && option.id === item.item_id)
         const duplicateKey = `tangible:${item.item_id}:${activity.id}:${subActivity.id}`
-        if (!catalogueItem || !snapshot || duplicateCatalogueItems.has(duplicateKey) || !baseline.exchange_rates[snapshot.currency]) {
+        if (!catalogueItem || !snapshot || duplicateCatalogueItems.has(duplicateKey) || (!baseline.exchange_rates[snapshot.currency] && snapshot.currency !== 'USD')) {
           skipped += 1
           continue
         }
@@ -528,7 +529,7 @@ export default function DailyCostSheet() {
         const snapshot = baseline.catalogue_rates.find(option => option.item_kind === kind && option.id === item.item_id)
         const duplicateKey = `${kind}:${item.item_id}:${activity.id}:${subActivity.id}`
         if (!catalogueItem || !snapshot || duplicateCatalogueItems.has(duplicateKey)
-          || !defaultSection || !baseline.exchange_rates[snapshot.currency]) {
+          || !defaultSection || (!baseline.exchange_rates[snapshot.currency] && snapshot.currency !== 'USD')) {
           skipped += 1
           continue
         }
@@ -724,14 +725,20 @@ export default function DailyCostSheet() {
       const sub = priced
         ? (priced.sub_activity_code ? `${priced.sub_activity_code} · ${priced.sub_activity_name}` : priced.sub_activity_name || '—')
         : reference.sub_activities.find(item => item.id === line.sub_activity_id)?.display_name ?? '—'
+      const resolvedDepth = priced?.actual_depth != null
+        ? formatDepthMeters(priced.actual_depth, 'm')
+        : formatDepthMeters(line.actual_depth, line.actual_depth_unit ?? 'm')
       return {
         id: line.id || `${kind}-${index}`, lineIndex: index, item, activity,
-        section: scopeName(line.hole_section_id, line.phase_id), subActivity: sub,
+        section: scopeName(line.hole_section_id, line.phase_id),
+        actualDepth: resolvedDepth,
+        subActivity: sub,
         vendor, quantity: line.quantity, quantityUnit: 'quantity_unit' in line ? line.quantity_unit : '',
         rate: `${dailyMoney(priced?.effective_rate ?? sourceRate, priced?.currency ?? sourceCurrency)}${sourceLabel ? ` · ${sourceLabel}` : ''}`,
         currency: priced?.currency ?? sourceCurrency,
         amount: dailyMoney(localAmount, priced?.currency ?? sourceCurrency),
         standardAmount: priced ? dailyMoney(priced.standard_amount, standard) : 'Preview pending',
+        usdAmount: priced ? dailyMoney(priced.usd_amount ?? priced.standard_amount, 'USD') : 'Preview pending',
         source: priced?.rate_source ?? sourceLabel,
         budget: priced?.budget_name ?? 'AFE comparison pending',
         overrideReason: line.override_reason,
@@ -746,11 +753,13 @@ export default function DailyCostSheet() {
       { headerName: 'ACTIVITY', field: 'activity', minWidth: 140 },
       { headerName: 'SUB ACTIVITY', field: 'subActivity', minWidth: 140 },
       { headerName: 'SECTION / PHASE', field: 'section', minWidth: 140 },
+      { headerName: 'ACTUAL DEPTH (m)', field: 'actualDepth', minWidth: 135 },
       { headerName: 'RESPONSIBLE PARTY', field: 'vendor', minWidth: 150 },
       { headerName: 'QUANTITY', field: 'quantity', minWidth: 115, valueGetter: params => params.data ? `${params.data.quantity} ${params.data.quantityUnit}`.trim() : '' },
       { headerName: 'RATE / SOURCE', field: 'rate', minWidth: 190, tooltipField: 'overrideReason' },
       { headerName: 'NATIVE AMOUNT', field: 'amount', minWidth: 145 },
       { headerName: `AFE AMOUNT (${standard})`, field: 'standardAmount', minWidth: 155 },
+      ...(standard.toUpperCase() !== 'USD' ? [{ headerName: 'USD AMOUNT (STD)', field: 'usdAmount' as const, minWidth: 150 }] : []),
       { headerName: 'AFE BUDGET MATCH', field: 'budget', minWidth: 185 },
     ]
     // The remark is what explains an unbudgeted charge, so it gets a column here.
@@ -784,8 +793,10 @@ export default function DailyCostSheet() {
   }
   const importHeaders = [
     'line_type', 'activity_code', 'section_code', 'phase_code', 'sub_activity_code',
+    'actual_depth', 'actual_depth_unit',
     'vendor_code', 'party_name', 'service_code', 'baseline_service_rate_id', 'charging_basis', 'charge_category',
-    'quantity_unit', 'category', 'item_kind', 'item_code', 'quantity', 'currency', 'override_rate', 'override_reason',
+    'quantity_unit', 'category', 'item_kind', 'item_code', 'quantity', 'currency', 'exchange_rate',
+    'override_rate', 'override_reason',
     'expense_type', 'expense_description', 'unit_rate', 'remarks',
   ]
   const exportTemplate = () => {
@@ -803,18 +814,22 @@ export default function DailyCostSheet() {
         line_type: 'Service', activity_code: activityCode,
         section_code: section?.section_code ?? '', phase_code: phase?.phase_code ?? '',
         sub_activity_code: subActivityCode,
+        actual_depth: section?.to_depth ?? '', actual_depth_unit: 'm',
         vendor_code: '', service_code: rate?.service_code ?? 'SERVICE-001',
         baseline_service_rate_id: rate?.id ?? '', charging_basis: rate?.charging_basis ?? 'Day Rate',
         charge_category: category, quantity_unit: unit, quantity: '1', currency: rate?.currency ?? standard,
+        exchange_rate: '',
         override_rate: '', override_reason: '', remarks: '',
       },
       {
         // An unexpected charge: no AFE allowance, mandatory remark, own unit rate.
         line_type: 'Other', activity_code: reference.activities.find(item => /npt|non.?productive/i.test(`${item.activity_code} ${item.activity_name}`))?.activity_code ?? activityCode,
         section_code: section?.section_code ?? '', phase_code: phase?.phase_code ?? '',
-        sub_activity_code: subActivityCode, vendor_code: '', party_name: 'Operator',
+        sub_activity_code: subActivityCode,
+        actual_depth: '', actual_depth_unit: 'm',
+        vendor_code: '', party_name: 'Operator',
         expense_type: 'LIH', expense_description: '6 5/8 in BHA left in hole', unit_rate: '250000',
-        quantity: '1', quantity_unit: 'unit', currency: standard, remarks: 'Tools lost in hole during tripping',
+        quantity: '1', quantity_unit: 'unit', currency: 'USD', exchange_rate: '', remarks: 'Tools lost in hole during tripping',
       },
     ])
   }
@@ -911,7 +926,32 @@ export default function DailyCostSheet() {
       Unsaved changes{previewing ? ' · recalculating against the locked AFE baseline…' : hasPreviewForEdits ? ' · preview is current' : ' · save to update the register'}.
     </Alert>}
 
-    <Box display="grid" gap={1.2} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: day.comparison.has_adjustment ? 'repeat(8, 1fr)' : 'repeat(6, 1fr)' } }}>
+    {standard.toUpperCase() !== 'USD' && (
+      <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, mb: 1.5, display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Box flex={1} minWidth={240}>
+          <Typography fontSize={12} fontWeight={800}>Standardized USD Conversion Rate ({standard.toUpperCase()} → USD)</Typography>
+          <Typography fontSize={11} color="text.secondary">
+            USD is the standard currency across all wells. Enter the conversion rate (1 {standard.toUpperCase()} = ? USD) so this sheet’s USD totals remain accurate.
+          </Typography>
+        </Box>
+        <TextField
+          size="small"
+          type="number"
+          required
+          disabled={!editable}
+          label={`1 ${standard.toUpperCase()} = ? USD`}
+          value={payload.usd_exchange_rate ?? entry.usd_exchange_rate ?? '1'}
+          onChange={event => setPayload(current => ({ ...current, usd_exchange_rate: event.target.value }))}
+          inputProps={{ min: 0.000001, step: 'any' }}
+          sx={{ width: 210 }}
+        />
+        <Typography fontSize={12} fontWeight={800} color="primary">
+          Today in USD: {dailyMoney(hasPreviewForEdits ? preview?.total_cost_usd : entry.total_cost_usd, 'USD')}
+        </Typography>
+      </Paper>
+    )}
+
+    <Box display="grid" gap={1.2} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: day.comparison.has_adjustment ? 'repeat(9, 1fr)' : 'repeat(7, 1fr)' } }}>
       <StatCard label="AFE planned" value={dailyMoney(day.comparison.planned_total, standard)} hint="Locked standard-currency budget"/>
       {day.comparison.has_adjustment && day.comparison.adjusted_planned_total != null && <>
         <StatCard label="Adjusted AFE" value={dailyMoney(day.comparison.adjusted_planned_total, standard)} hint="Latest approved SOW revision"/>
@@ -923,6 +963,11 @@ export default function DailyCostSheet() {
         />
       </>}
       <StatCard label="Actual to date" value={dailyMoney(actualToDate, standard)} hint={hasPreviewForEdits ? 'Includes the current unsaved preview' : 'All four cost groups through this day'}/>
+      <StatCard
+        label="Actual depth"
+        value={formatDepthMeters(hasPreviewForEdits ? preview?.actual_depth : entry.actual_depth, 'm')}
+        hint="Last entered depth (ft ÷ 3.281 → m)"
+      />
       <StatCard label="Other expenses deducted" value={dailyMoney(otherToDate, standard)} hint={otherItemSummary || 'LIH, hole problems and similar charges'} tone={otherToDate ? 'bad' : undefined}/>
       <StatCard label="Remaining balance" value={dailyMoney(remaining, standard)} hint={remaining < 0 ? 'AFE budget is exceeded' : 'Planned less actual, other expenses included'} tone={remaining < 0 ? 'bad' : 'good'}/>
       <StatCard label="UPA to date" value={dailyMoney(upaToDate, standard)} hint="Unplanned Activity charges" tone={upaToDate ? 'bad' : undefined}/>

@@ -29,6 +29,7 @@ from sqlalchemy import Select, func, literal, select, union_all
 from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.core.units import depth_to_meters, normalize_depth_unit
 from app.models import (
     Activity, Afe, AuditLog, CementAdditive, Currency, DailyCostBaseline,
     DailyCostBaselineBudgetLine, DailyCostBaselineExchangeRate, DailyCostBaselinePhase,
@@ -52,7 +53,7 @@ from app.schemas.daily_cost import (
     DailyCostImportRequest, DailyCostImportResponse, DailyCostOtherExpenseLineIn,
     DailyCostOtherExpenseLineOut, DailyCostOtherExpenseTypeOption, DailyCostOverview, DailyCostPreviewOut,
     DailyCostRateOut, DailyCostReference, DailyCostReopenIn, DailyCostRigOption, DailyCostSaveIn,
-    DailyCostSectionOption, DailyCostServiceLineIn, DailyCostServiceLineOut, DailyCostStatusIn,
+    DailyCostSectionDepthOut, DailyCostSectionOption, DailyCostServiceLineIn, DailyCostServiceLineOut, DailyCostStatusIn,
     DailyCostSubActivityOption, DailyCostTangibleLineIn, DailyCostTangibleLineOut,
     DailyCostTrendPoint, DailyCostVendorOption, DailyCostWarnings, DailyCostWellHeader,
     DailyCostWellOption, DailyCostWellSummary, DailyCostWellTotals,
@@ -547,7 +548,8 @@ def _ensure_afe_baseline(
             snapshot = DailyCostBaselineSection(
                 id=uid(), organization_id=organization_id, hole_section_id=section.hole_section_id,
                 section_code_snapshot=section.section_code, section_name_snapshot=section.section_name,
-                from_depth=Decimal(section.from_depth), to_depth=Decimal(section.to_depth),
+                from_depth=depth_to_meters(section.from_depth, estimate.well.depth_unit) or Decimal("0.00"),
+                to_depth=depth_to_meters(section.to_depth, estimate.well.depth_unit) or Decimal("0.00"),
                 total_days=Decimal(section.total_days), sort_order=section_index,
             )
             snapshot.phases = [
@@ -805,8 +807,10 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
             display_name=_label(well.well_code, well.well_name), status=well.status, config_status=well.config_status,
             sections=[DailyCostSectionOption(
                 hole_section_id=section.hole_section_id, section_code=section.hole_section.section_code,
-                section_name=section.hole_section.section_name, from_depth=Decimal(section.from_depth),
-                to_depth=Decimal(section.to_depth), total_days=sum((Decimal(phase.days) for phase in section.phases), Decimal("0")),
+                section_name=section.hole_section.section_name,
+                from_depth=depth_to_meters(section.from_depth, well.depth_unit) or Decimal("0.00"),
+                to_depth=depth_to_meters(section.to_depth, well.depth_unit) or Decimal("0.00"),
+                total_days=sum((Decimal(phase.days) for phase in section.phases), Decimal("0")),
                 phases=[{
                     "phase_id": phase.phase_id, "phase_code": phase.phase.phase_code,
                     "phase_name": phase.phase.phase_name, "days": Decimal(phase.days),
@@ -832,7 +836,7 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
             id=row.id, vendor_code=row.vendor_code, vendor_name=row.vendor_name, vendor_type=row.vendor_type,
             status=row.status, display_name=_label(row.vendor_code, row.vendor_name),
         ) for row in vendors],
-        currencies=[row.currency_code.upper() for row in currencies],
+        currencies=sorted({*(row.currency_code.upper() for row in currencies), "USD"}),
         charge_categories=["Mobilization", "Demobilization", "Operation", "Standby", "Personnel-Operation", "Personnel-Standby", "Fixed Charge", "Others"],
         charge_bases=["Day Rate", "Per Service Rate", "Per Section Rate"],
         quantity_units=["days", "hours", "service", "section", "unit"],
@@ -893,6 +897,29 @@ def create_entry(db: Session, organization_id: str, data: DailyCostEntryCreate, 
                 raise HTTPException(status_code=409, detail="A daily cost sheet already exists for this well, AFE and date")
             rate_baseline = _ensure_rate_baseline(db, organization_id, well, user)
             baseline = _ensure_afe_baseline(db, organization_id, well, afe, rate_baseline, user)
+            entry_usd_fx = Decimal("1.000000")
+            if baseline.standard_currency.upper() != "USD":
+                if data.usd_exchange_rate is not None:
+                    entry_usd_fx = _fx(data.usd_exchange_rate)
+                else:
+                    baseline_fx = {row.currency_code.upper(): Decimal(row.rate) for row in baseline.exchange_rates}
+                    if baseline_fx.get("USD") and baseline_fx["USD"] > 0:
+                        entry_usd_fx = _fx(Decimal("1") / baseline_fx["USD"])
+                    else:
+                        prior_usd_fx = db.scalar(
+                            select(DailyCostEntry.usd_exchange_rate)
+                            .where(
+                                DailyCostEntry.organization_id == organization_id,
+                                DailyCostEntry.well_id == well.id,
+                                DailyCostEntry.standard_currency == baseline.standard_currency,
+                                DailyCostEntry.is_deleted.is_(False),
+                                DailyCostEntry.usd_exchange_rate > 0,
+                            )
+                            .order_by(DailyCostEntry.cost_date.desc(), DailyCostEntry.created_at.desc())
+                            .limit(1)
+                        )
+                        if prior_usd_fx is not None:
+                            entry_usd_fx = _fx(prior_usd_fx)
             cost_code = f"DC-{well.well_code[:35]}-{data.cost_date:%Y%m%d}-{afe.afe_code[:35]}"[:100]
             entry = DailyCostEntry(
                 id=uid(), organization_id=organization_id, rig_id=well.rig_id,
@@ -901,6 +928,7 @@ def create_entry(db: Session, organization_id: str, data: DailyCostEntryCreate, 
                 afe_id=afe.id, afe_code_snapshot=afe.afe_code, afe_name_snapshot=afe.afe_name,
                 afe_status_at_create=afe.status, rate_baseline_id=rate_baseline.id, baseline_id=baseline.id,
                 daily_cost_code=cost_code, cost_date=data.cost_date, standard_currency=baseline.standard_currency,
+                usd_exchange_rate=entry_usd_fx,
                 remarks=data.remarks, status="draft", created_by=_actor_name(user), updated_by=_actor_name(user),
             )
             db.add(entry)
@@ -1033,18 +1061,81 @@ def _get_sub_activity(
     return row
 
 
-def _rate_factor(baseline: DailyCostBaseline, currency: str, label: str) -> Decimal:
+def _resolve_fx(
+    baseline: DailyCostBaseline,
+    currency: str,
+    label: str,
+    *,
+    line_exchange_rate: Decimal | None = None,
+    entry_usd_fx: Decimal = Decimal("1"),
+    extra_rates: dict[str, Decimal] | None = None,
+) -> tuple[Decimal, Decimal]:
+    """Return ``(factor_to_entry_standard, factor_to_usd)`` for ``currency``.
+
+    When ``currency`` differs from ``USD`` / the locked currency setup, an
+    explicit ``line_exchange_rate`` (1 unit of ``currency`` in ``USD``) satisfies
+    conversion directly and can be stored column-wise on ``baseline.exchange_rates``.
+    """
     code = (currency or "").strip().upper()
     if not code:
         raise HTTPException(status_code=422, detail=f"{label}: enter a currency")
+    entry_std = (baseline.standard_currency or "USD").strip().upper()
     conversion = {row.currency_code.upper(): Decimal(row.rate) for row in baseline.exchange_rates}
-    factor = conversion.get(code)
-    if factor is None or factor <= 0:
-        raise HTTPException(
-            status_code=422,
-            detail=f"{label}: {code} is not in the locked AFE currency setup. Use an AFE currency or reopen tracking with a new AFE.",
-        )
-    return _fx(factor)
+    if extra_rates:
+        conversion.update(extra_rates)
+
+    # 1. Resolve factor to the sheet's standard currency.
+    if code == entry_std:
+        factor = _fx(Decimal("1"))
+    elif line_exchange_rate is not None:
+        if entry_std == "USD":
+            factor = _fx(line_exchange_rate)
+        elif code == "USD":
+            factor = _fx(Decimal("1") / entry_usd_fx)
+        else:
+            factor = _fx(Decimal(line_exchange_rate) / entry_usd_fx)
+    else:
+        raw = conversion.get(code)
+        if raw is None or raw <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{label}: currency {code} requires a USD conversion rate (exchange_rate) "
+                    f"because {code} is not in the locked AFE currency setup."
+                ),
+            )
+        factor = _fx(raw)
+
+    # 2. Resolve standardized USD factor (1 unit of `code` = `usd_fx` USD).
+    if code == "USD":
+        usd_fx = _fx(Decimal("1"))
+    elif line_exchange_rate is not None:
+        usd_fx = _fx(line_exchange_rate)
+    elif entry_std == "USD":
+        usd_fx = factor
+    else:
+        usd_fx = _fx(factor * entry_usd_fx)
+    return factor, usd_fx
+
+
+def _rate_factor(
+    baseline: DailyCostBaseline,
+    currency: str,
+    label: str,
+    *,
+    line_exchange_rate: Decimal | None = None,
+    entry_usd_fx: Decimal = Decimal("1"),
+    extra_rates: dict[str, Decimal] | None = None,
+) -> Decimal:
+    factor, _ = _resolve_fx(
+        baseline,
+        currency,
+        label,
+        line_exchange_rate=line_exchange_rate,
+        entry_usd_fx=entry_usd_fx,
+        extra_rates=extra_rates,
+    )
+    return factor
 
 
 def _scope_snapshots(
@@ -1071,6 +1162,8 @@ def _base_fields(
     quantity_unit: str = "unit",
     existing_row: Any | None,
     snapshots: dict[tuple[str, str], DailyCostCatalogueRateSnapshot],
+    entry_usd_fx: Decimal = Decimal("1"),
+    extra_rates: dict[str, Decimal] | None = None,
 ) -> tuple[dict[str, Any], Activity, DailyCostBaselineSection | None, DailyCostBaselinePhase | None, Vendor | None, WellSubActivity]:
     existing = existing_row is not None
     activity = _get_activity(db, entry.organization_id, data.activity_id, existing=existing, label=label)
@@ -1094,13 +1187,28 @@ def _base_fields(
 
     code_currency = (data.currency or "").strip().upper()
     override = Decimal(data.override_rate) if data.override_rate is not None else None
-    catalogue_snapshot = None
-    base_currency = ""
     revision_number = None
     effective_date = None
     if data.override_rate is None and data.currency:
         code_currency = data.currency.strip().upper()
-    fx_factor = _rate_factor(entry.baseline, code_currency, label) if code_currency else Decimal("0")
+    fx_factor = Decimal("0")
+    usd_fx_factor = Decimal("1")
+    if code_currency:
+        fx_factor, usd_fx_factor = _resolve_fx(
+            entry.baseline,
+            code_currency,
+            label,
+            line_exchange_rate=data.exchange_rate,
+            entry_usd_fx=entry_usd_fx,
+            extra_rates=extra_rates,
+        )
+    depth_unit = normalize_depth_unit(getattr(data, "actual_depth_unit", "m"))
+    depth_input = (
+        Decimal(data.actual_depth).quantize(MONEY, rounding=ROUND_HALF_UP)
+        if getattr(data, "actual_depth", None) is not None
+        else None
+    )
+    depth_meters = depth_to_meters(depth_input, depth_unit)
     section_code = section.section_code_snapshot if section else ""
     section_name = section.section_name_snapshot if section else ""
     phase_code = phase.phase_code_snapshot if phase else ""
@@ -1135,6 +1243,12 @@ def _base_fields(
             "exchange_rate": fx_factor,
             "amount": Decimal("0.00"),
             "standard_amount": Decimal("0.00"),
+            "usd_exchange_rate": usd_fx_factor,
+            "usd_amount": Decimal("0.00"),
+            "actual_depth": depth_meters,
+            "actual_depth_input": depth_input,
+            "actual_depth_unit": depth_unit,
+            "depth_entry_seq": 0,
             "rate_source": "",
             "rate_revision_number": revision_number,
             "rate_effective_date": effective_date,
@@ -1214,6 +1328,9 @@ def _normalise_service(
     existing_rows: dict[str, Any],
     snapshots: dict[tuple[str, str], DailyCostCatalogueRateSnapshot],
     budgets: dict[str, list[DailyCostBaselineBudgetLine]],
+    *,
+    entry_usd_fx: Decimal = Decimal("1"),
+    extra_rates: dict[str, Decimal] | None = None,
 ) -> tuple[dict[str, Any], Any | None, str]:
     old = _check_line_id(line.id, existing_rows, "Service")
     service = _active_master(
@@ -1229,6 +1346,8 @@ def _normalise_service(
         quantity_unit=line.quantity_unit,
         existing_row=old,
         snapshots=snapshots,
+        entry_usd_fx=entry_usd_fx,
+        extra_rates=extra_rates,
     )
     rate = _service_rate_or_422(entry, line, service, base["classification"])
     basis = rate.charging_basis if rate else line.charging_basis
@@ -1266,9 +1385,18 @@ def _normalise_service(
     currency = (line.currency or base_currency).upper()
     if not currency:
         raise HTTPException(status_code=422, detail=f"Service {service.service_code}: a currency is required")
-    if base_currency and currency != base_currency:
+    if line.override_rate is None and base_currency and currency != base_currency:
         raise HTTPException(status_code=422, detail=f"Service {service.service_code}: daily rate currency must match the locked AFE rate ({base_currency})")
-    factor = _rate_factor(entry.baseline, currency, f"Service {service.service_code}")
+    factor, usd_fx = _resolve_fx(
+        entry.baseline,
+        currency,
+        f"Service {service.service_code}",
+        line_exchange_rate=line.exchange_rate,
+        entry_usd_fx=entry_usd_fx,
+        extra_rates=extra_rates,
+    )
+    if line.exchange_rate is not None and extra_rates is not None:
+        extra_rates[currency] = factor
     selected_rate = _rate(line.override_rate if line.override_rate is not None else base_rate)
     if line.override_rate is not None:
         source = "daily_override" if rate else "manual_unplanned"
@@ -1304,6 +1432,8 @@ def _normalise_service(
             "exchange_rate": factor,
             "amount": amount,
             "standard_amount": _money(amount * factor),
+            "usd_exchange_rate": usd_fx,
+            "usd_amount": _money(amount * usd_fx),
             "rate_source": source,
             "baseline_budget_line_id": budget.id if budget else None,
             "budget_key": budget_key,
@@ -1338,6 +1468,8 @@ def _normalise_catalogue_line(
     budgets: dict[str, list[DailyCostBaselineBudgetLine]],
     *,
     tangible: bool,
+    entry_usd_fx: Decimal = Decimal("1"),
+    extra_rates: dict[str, Decimal] | None = None,
 ) -> tuple[dict[str, Any], Any | None, str]:
     label_group = "Tangible" if tangible else "Consumable"
     old = _check_line_id(line.id, existing_rows, label_group)
@@ -1355,6 +1487,8 @@ def _normalise_catalogue_line(
         quantity_unit="unit",
         existing_row=old,
         snapshots=snapshots,
+        entry_usd_fx=entry_usd_fx,
+        extra_rates=extra_rates,
     )
     snapshot = snapshots.get((kind, item.id))
     if kind == "drill_bit":
@@ -1407,9 +1541,18 @@ def _normalise_catalogue_line(
     currency = (line.currency or base_currency).upper()
     if not currency:
         raise HTTPException(status_code=422, detail=f"{label_group} {item_code}: enter a currency")
-    if base_currency and currency != base_currency:
+    if line.override_rate is None and base_currency and currency != base_currency:
         raise HTTPException(status_code=422, detail=f"{label_group} {item_code}: daily rate currency must match the locked baseline rate ({base_currency})")
-    factor = _rate_factor(entry.baseline, currency, f"{label_group} {item_code}")
+    factor, usd_fx = _resolve_fx(
+        entry.baseline,
+        currency,
+        f"{label_group} {item_code}",
+        line_exchange_rate=line.exchange_rate,
+        entry_usd_fx=entry_usd_fx,
+        extra_rates=extra_rates,
+    )
+    if line.exchange_rate is not None and extra_rates is not None:
+        extra_rates[currency] = factor
     effective_rate = _rate(line.override_rate if line.override_rate is not None else base_rate)
     quantity = Decimal(line.quantity)
     amount = _money(quantity * effective_rate)
@@ -1431,6 +1574,8 @@ def _normalise_catalogue_line(
             "exchange_rate": factor,
             "amount": amount,
             "standard_amount": _money(amount * factor),
+            "usd_exchange_rate": usd_fx,
+            "usd_amount": _money(amount * usd_fx),
             "rate_source": source,
             "rate_revision_number": snapshot.revision_number if snapshot else None,
             "rate_effective_date": snapshot.effective_date if snapshot else None,
@@ -1474,6 +1619,9 @@ def _normalise_other_expense(
     entry: DailyCostEntry,
     line: DailyCostOtherExpenseLineIn,
     existing_rows: dict[str, Any],
+    *,
+    entry_usd_fx: Decimal = Decimal("1"),
+    extra_rates: dict[str, Decimal] | None = None,
 ) -> tuple[dict[str, Any], Any | None, str]:
     """Price one unexpected charge (Lost In Hole, hole problem, claim) on the sheet.
 
@@ -1502,9 +1650,20 @@ def _normalise_other_expense(
         quantity_unit=line.quantity_unit,
         existing_row=old,
         snapshots={},  # no catalogue rate book applies to an unbudgeted charge
+        entry_usd_fx=entry_usd_fx,
+        extra_rates=extra_rates,
     )
     currency = (line.currency or entry.standard_currency).upper()
-    factor = _rate_factor(entry.baseline, currency, f"Other expense {type_label}")
+    factor, usd_fx = _resolve_fx(
+        entry.baseline,
+        currency,
+        f"Other expense {type_label}",
+        line_exchange_rate=line.exchange_rate,
+        entry_usd_fx=entry_usd_fx,
+        extra_rates=extra_rates,
+    )
+    if line.exchange_rate is not None and extra_rates is not None:
+        extra_rates[currency] = factor
     quantity = Decimal(line.quantity)
     amount = _money(quantity * _rate(line.unit_rate))
     base.update(
@@ -1516,6 +1675,8 @@ def _normalise_other_expense(
             "exchange_rate": factor,
             "amount": amount,
             "standard_amount": _money(amount * factor),
+            "usd_exchange_rate": usd_fx,
+            "usd_amount": _money(amount * usd_fx),
             "rate_source": OTHER_EXPENSE_RATE_SOURCE,
             "baseline_budget_line_id": None,
             "budget_key": f"other:{line.expense_type}",
@@ -1553,11 +1714,51 @@ def _reject_duplicate_service_sub_activity(services: list[dict[str, Any]]) -> No
         seen[key] = code
 
 
+def _max_depth_seq_for_well_date(
+    db: Session,
+    organization_id: str,
+    well_id: str,
+    cost_date: date,
+) -> int:
+    highest = 0
+    for model, _group in LINE_MODELS:
+        val = db.scalar(
+            select(func.max(model.depth_entry_seq))
+            .join(DailyCostEntry, model.entry_id == DailyCostEntry.id)
+            .where(
+                model.organization_id == organization_id,
+                DailyCostEntry.organization_id == organization_id,
+                DailyCostEntry.well_id == well_id,
+                DailyCostEntry.cost_date == cost_date,
+                DailyCostEntry.is_deleted.is_(False),
+            )
+        )
+        if val is not None and int(val) > highest:
+            highest = int(val)
+    return highest
+
+
 def _normalize_payload(
     db: Session,
     entry: DailyCostEntry,
     payload: DailyCostSaveIn,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Decimal],
+    Decimal,
+]:
+    entry_usd_fx = (
+        _fx(payload.usd_exchange_rate)
+        if payload.usd_exchange_rate is not None and entry.standard_currency.upper() != "USD"
+        else _fx(Decimal(entry.usd_exchange_rate or Decimal("1")))
+    )
+    if entry.standard_currency.upper() == "USD":
+        entry_usd_fx = _fx(Decimal("1"))
+
+    extra_rates: dict[str, Decimal] = {}
     existing_maps = _existing_line_maps(entry)
     snapshots = _rate_snapshot_index(entry.rate_baseline)
     budgets = _budget_by_key(entry.baseline)
@@ -1565,46 +1766,93 @@ def _normalize_payload(
     consumables: list[dict[str, Any]] = []
     tangibles: list[dict[str, Any]] = []
     other_expenses: list[dict[str, Any]] = []
+    staged: list[tuple[int, Any, Any | None, dict[str, Any]]] = []
+    payload_pos = 0
+
     for order, line in enumerate(payload.services):
         fields, old, label = _normalise_service(
-            db, entry, line, existing_maps[DailyCostServiceLine], snapshots, budgets
+            db, entry, line, existing_maps[DailyCostServiceLine], snapshots, budgets,
+            entry_usd_fx=entry_usd_fx, extra_rates=extra_rates,
         )
         fields["sort_order"] = order
         fields["id"] = old.id if old else uid()
         services.append(fields)
+        staged.append((payload_pos, line, old, fields))
+        payload_pos += 1
     _reject_duplicate_service_sub_activity(services)
     for order, line in enumerate(payload.consumables):
         fields, old, label = _normalise_catalogue_line(
             db, entry, line, CONSUMABLE_KIND_MODEL[line.item_kind][0], line.item_kind, line.item_id,
             existing_maps[DailyCostConsumableLine], snapshots, budgets, tangible=False,
+            entry_usd_fx=entry_usd_fx, extra_rates=extra_rates,
         )
         fields["sort_order"] = order
         fields["id"] = old.id if old else uid()
         consumables.append(fields)
+        staged.append((payload_pos, line, old, fields))
+        payload_pos += 1
     for order, line in enumerate(payload.tangibles):
         fields, old, label = _normalise_catalogue_line(
             db, entry, line, Tangible, "tangible", line.tangible_id,
             existing_maps[DailyCostTangibleLine], snapshots, budgets, tangible=True,
+            entry_usd_fx=entry_usd_fx, extra_rates=extra_rates,
         )
         fields["sort_order"] = order
         fields["id"] = old.id if old else uid()
         tangibles.append(fields)
+        staged.append((payload_pos, line, old, fields))
+        payload_pos += 1
     for order, line in enumerate(payload.other_expenses):
         fields, old, label = _normalise_other_expense(
-            db, entry, line, existing_maps[DailyCostOtherExpenseLine]
+            db, entry, line, existing_maps[DailyCostOtherExpenseLine],
+            entry_usd_fx=entry_usd_fx, extra_rates=extra_rates,
         )
         fields["sort_order"] = order
         fields["id"] = old.id if old else uid()
         other_expenses.append(fields)
-    return services, consumables, tangibles, other_expenses
+        staged.append((payload_pos, line, old, fields))
+        payload_pos += 1
+
+    # Assign monotonic depth_entry_seq so the actual depth for (date, well, section)
+    # strictly equals the LAST depth value entered in the daily cost register.
+    next_seq = _max_depth_seq_for_well_date(db, entry.organization_id, entry.well_id, entry.cost_date)
+    to_sequence: list[tuple[tuple[int, int, int], dict[str, Any]]] = []
+    for pos, line, old, fields in staged:
+        same_existing = (
+            old is not None
+            and old.actual_depth_input == fields["actual_depth_input"]
+            and old.actual_depth_unit == fields["actual_depth_unit"]
+            and old.hole_section_id == fields["hole_section_id"]
+            and line.depth_seq is None
+            and int(old.depth_entry_seq or 0) > 0
+        )
+        if same_existing:
+            fields["depth_entry_seq"] = int(old.depth_entry_seq)
+        else:
+            sort_key = (0, int(line.depth_seq), pos) if line.depth_seq is not None else (1, pos, pos)
+            to_sequence.append((sort_key, fields))
+    to_sequence.sort(key=lambda item: item[0])
+    for _, fields in to_sequence:
+        next_seq += 1
+        fields["depth_entry_seq"] = next_seq
+
+    return services, consumables, tangibles, other_expenses, extra_rates, entry_usd_fx
 
 
 def _sum_group(lines: Sequence[Any]) -> Decimal:
     return _money(sum((Decimal(row.standard_amount) for row in lines), Decimal("0")))
 
 
+def _sum_group_usd(lines: Sequence[Any]) -> Decimal:
+    return _money(sum((Decimal(row.usd_amount) for row in lines), Decimal("0")))
+
+
 def _sum_classification(lines: Iterable[Any], classification: str) -> Decimal:
     return _money(sum((Decimal(row.standard_amount) for row in lines if row.classification == classification), Decimal("0")))
+
+
+def _sum_classification_usd(lines: Iterable[Any], classification: str) -> Decimal:
+    return _money(sum((Decimal(row.usd_amount) for row in lines if row.classification == classification), Decimal("0")))
 
 
 def _line_snapshot_for_audit(fields: dict[str, Any]) -> tuple[Decimal | None, str, str]:
@@ -1647,15 +1895,36 @@ def _upsert_lines(
     tangibles: list[dict[str, Any]],
     other_expenses: list[dict[str, Any]],
     *,
+    extra_rates: dict[str, Decimal] | None = None,
+    entry_usd_fx: Decimal = Decimal("1"),
     user: User,
     request: Request | None,
 ) -> None:
+    if extra_rates:
+        by_code = {row.currency_code.upper(): row for row in entry.baseline.exchange_rates}
+        next_sort = max((row.sort_order for row in entry.baseline.exchange_rates), default=-1) + 1
+        for code, rate_val in sorted(extra_rates.items()):
+            existing_rate = by_code.get(code.upper())
+            if existing_rate is not None:
+                existing_rate.rate = _fx(rate_val)
+            else:
+                entry.baseline.exchange_rates.append(
+                    DailyCostBaselineExchangeRate(
+                        id=uid(),
+                        organization_id=entry.organization_id,
+                        currency_code=code.upper(),
+                        rate=_fx(rate_val),
+                        sort_order=next_sort,
+                    )
+                )
+                next_sort += 1
     _, service_overrides = _persist_group(entry, DailyCostServiceLine, services)
     _, consumable_overrides = _persist_group(entry, DailyCostConsumableLine, consumables)
     _, tangible_overrides = _persist_group(entry, DailyCostTangibleLine, tangibles)
     _, other_overrides = _persist_group(entry, DailyCostOtherExpenseLine, other_expenses)
     _flush(db, operation="saving daily cost lines")
     all_lines = [*entry.service_lines, *entry.consumable_lines, *entry.tangible_lines, *entry.other_expense_lines]
+    entry.usd_exchange_rate = _fx(entry_usd_fx)
     entry.services_total = _sum_group(entry.service_lines)
     entry.consumables_total = _sum_group(entry.consumable_lines)
     entry.tangibles_total = _sum_group(entry.tangible_lines)
@@ -1667,6 +1936,15 @@ def _upsert_lines(
     )
     entry.upa_total = _sum_classification(all_lines, "UPA")
     entry.npt_total = _sum_classification(all_lines, "NPT")
+    entry.services_total_usd = _sum_group_usd(entry.service_lines)
+    entry.consumables_total_usd = _sum_group_usd(entry.consumable_lines)
+    entry.tangibles_total_usd = _sum_group_usd(entry.tangible_lines)
+    entry.other_expenses_total_usd = _sum_group_usd(entry.other_expense_lines)
+    entry.total_cost_usd = _money(
+        entry.services_total_usd + entry.consumables_total_usd + entry.tangibles_total_usd + entry.other_expenses_total_usd
+    )
+    entry.upa_total_usd = _sum_classification_usd(all_lines, "UPA")
+    entry.npt_total_usd = _sum_classification_usd(all_lines, "NPT")
     entry.updated_by = _actor_name(user)
     entry.updated_at = _now()
     for line, change in [*service_overrides, *consumable_overrides, *tangible_overrides, *other_overrides]:
@@ -1736,6 +2014,12 @@ def _daily_line_common(line: Any, labels: dict[str, DailyCostBaselineBudgetLine]
         "exchange_rate": Decimal(line.exchange_rate),
         "amount": Decimal(line.amount),
         "standard_amount": Decimal(line.standard_amount),
+        "usd_exchange_rate": Decimal(line.usd_exchange_rate),
+        "usd_amount": Decimal(line.usd_amount),
+        "actual_depth": Decimal(line.actual_depth) if line.actual_depth is not None else None,
+        "actual_depth_entered": Decimal(line.actual_depth_input) if line.actual_depth_input is not None else None,
+        "actual_depth_unit": normalize_depth_unit(line.actual_depth_unit),
+        "depth_seq": int(line.depth_entry_seq or 0),
         "rate_source": line.rate_source,
         "rate_revision_number": line.rate_revision_number,
         "rate_effective_date": line.rate_effective_date,
@@ -1791,7 +2075,152 @@ def _line_outputs(entry: DailyCostEntry) -> tuple[
     )
 
 
-def _entry_out(entry: DailyCostEntry) -> DailyCostEntryOut:
+def resolve_actual_depths(
+    db: Session,
+    organization_id: str,
+    *,
+    well_ids: Sequence[str] | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    exclude_entry_id: str | None = None,
+    preview_entry: tuple[str, date, str, Sequence[Any]] | None = None,
+) -> tuple[
+    dict[tuple[str, date, str | None], DailyCostSectionDepthOut],
+    dict[tuple[str, date], DailyCostSectionDepthOut],
+    dict[tuple[str, str | None], DailyCostSectionDepthOut],
+]:
+    """Resolve standardized meter actual depths from the daily cost register.
+
+    Rule:
+      * Every entered depth is stored standardized in metres (``feet / 3.281``).
+      * For a selected date, selected well, and selected section, actual depth
+        always takes the **last depth value entered** ordered by ``depth_entry_seq``
+        (with ``sort_order`` / ``id`` tie-breaking).
+      * Across multiple dates on a well/section, the latest date's last-entered
+        depth governs cumulative section progress.
+    """
+    branches = []
+    for group_idx, (model, _group) in enumerate(LINE_MODELS):
+        stmt = (
+            select(
+                DailyCostEntry.well_id.label("well_id"),
+                DailyCostEntry.cost_date.label("cost_date"),
+                DailyCostEntry.daily_cost_code.label("daily_cost_code"),
+                model.hole_section_id.label("hole_section_id"),
+                model.section_code_snapshot.label("section_code"),
+                model.section_name_snapshot.label("section_name"),
+                model.actual_depth.label("actual_depth"),
+                model.actual_depth_input.label("actual_depth_input"),
+                model.actual_depth_unit.label("actual_depth_unit"),
+                model.depth_entry_seq.label("depth_entry_seq"),
+                literal(group_idx).label("group_idx"),
+                model.sort_order.label("sort_order"),
+                model.id.label("line_id"),
+            )
+            .join(DailyCostEntry, model.entry_id == DailyCostEntry.id)
+            .where(
+                model.organization_id == organization_id,
+                DailyCostEntry.organization_id == organization_id,
+                DailyCostEntry.is_deleted.is_(False),
+                model.actual_depth.is_not(None),
+            )
+        )
+        if well_ids is not None:
+            if not well_ids:
+                return {}, {}, {}
+            stmt = stmt.where(DailyCostEntry.well_id.in_(list(well_ids)))
+        if date_from is not None:
+            stmt = stmt.where(DailyCostEntry.cost_date >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(DailyCostEntry.cost_date <= date_to)
+        if exclude_entry_id is not None:
+            stmt = stmt.where(DailyCostEntry.id != exclude_entry_id)
+        branches.append(stmt)
+
+    combined = union_all(*branches).subquery()
+    ordered_rows: list[tuple[str, date, str, str | None, str, str, Decimal, Decimal | None, str, int, int, int, str]] = [
+        (
+            str(r.well_id),
+            r.cost_date,
+            str(r.daily_cost_code or ""),
+            str(r.hole_section_id) if r.hole_section_id else None,
+            str(r.section_code or ""),
+            str(r.section_name or ""),
+            Decimal(r.actual_depth),
+            Decimal(r.actual_depth_input) if r.actual_depth_input is not None else None,
+            normalize_depth_unit(r.actual_depth_unit),
+            int(r.depth_entry_seq or 0),
+            int(r.group_idx or 0),
+            int(r.sort_order or 0),
+            str(r.line_id or ""),
+        )
+        for r in db.execute(select(combined)).all()
+    ]
+
+    if preview_entry is not None:
+        p_well_id, p_cost_date, p_code, p_lines = preview_entry
+        for idx, p_line in enumerate(p_lines):
+            if getattr(p_line, "actual_depth", None) is not None:
+                ordered_rows.append(
+                    (
+                        p_well_id,
+                        p_cost_date,
+                        p_code,
+                        p_line.hole_section_id,
+                        p_line.section_code_snapshot or "",
+                        p_line.section_name_snapshot or "",
+                        Decimal(p_line.actual_depth),
+                        Decimal(p_line.actual_depth_input) if p_line.actual_depth_input is not None else None,
+                        normalize_depth_unit(p_line.actual_depth_unit),
+                        int(p_line.depth_entry_seq or 0),
+                        99,
+                        idx,
+                        str(p_line.id or ""),
+                    )
+                )
+
+    ordered_rows.sort(key=lambda item: (item[0], item[1], item[9], item[10], item[11], item[12]))
+
+    by_well_date_section: dict[tuple[str, date, str | None], DailyCostSectionDepthOut] = {}
+    by_well_date: dict[tuple[str, date], DailyCostSectionDepthOut] = {}
+    by_well_section: dict[tuple[str, str | None], DailyCostSectionDepthOut] = {}
+    for (
+        w_id,
+        c_date,
+        dc_code,
+        sec_id,
+        sec_code,
+        sec_name,
+        act_depth,
+        ent_depth,
+        ent_unit,
+        _seq,
+        _gidx,
+        _sord,
+        _lid,
+    ) in ordered_rows:
+        out = DailyCostSectionDepthOut(
+            hole_section_id=sec_id,
+            section_code=sec_code,
+            section_name=sec_name,
+            actual_depth=_money(act_depth),
+            depth_unit="m",
+            entered_depth=_money(ent_depth) if ent_depth is not None else None,
+            entered_unit=ent_unit,
+            daily_cost_code=dc_code,
+        )
+        by_well_date_section[(w_id, c_date, sec_id)] = out
+        by_well_date[(w_id, c_date)] = out
+        by_well_section[(w_id, sec_id)] = out
+    return by_well_date_section, by_well_date, by_well_section
+
+
+def _entry_out(
+    entry: DailyCostEntry,
+    *,
+    day_depth: DailyCostSectionDepthOut | None = None,
+    section_depths: list[DailyCostSectionDepthOut] | None = None,
+) -> DailyCostEntryOut:
     return DailyCostEntryOut(
         id=entry.id,
         daily_cost_code=entry.daily_cost_code,
@@ -1823,6 +2252,17 @@ def _entry_out(entry: DailyCostEntry) -> DailyCostEntryOut:
         total_cost=Decimal(entry.total_cost),
         upa_total=Decimal(entry.upa_total),
         npt_total=Decimal(entry.npt_total),
+        usd_exchange_rate=Decimal(entry.usd_exchange_rate),
+        services_total_usd=Decimal(entry.services_total_usd),
+        consumables_total_usd=Decimal(entry.consumables_total_usd),
+        tangibles_total_usd=Decimal(entry.tangibles_total_usd),
+        other_expenses_total_usd=Decimal(entry.other_expenses_total_usd),
+        total_cost_usd=Decimal(entry.total_cost_usd),
+        upa_total_usd=Decimal(entry.upa_total_usd),
+        npt_total_usd=Decimal(entry.npt_total_usd),
+        actual_depth=day_depth.actual_depth if day_depth is not None else None,
+        depth_unit="m",
+        section_depths=section_depths or [],
         rate_baseline_locked_at=entry.rate_baseline.locked_at,
         budget_baseline_locked_at=entry.baseline.locked_at,
         warning_count=entry.warning_count,
@@ -2034,11 +2474,26 @@ def _warnings(entry: DailyCostEntry, comparison: DailyCostComparison) -> list[Da
 
 
 def get_day(db: Session, organization_id: str, entry_id: str) -> DailyCostDayOut:
-    entry = _get_entry(db, entry_id, organization_id, deleted=False)
+    entry = _get_entry(db, organization_id=organization_id, entry_id=entry_id, deleted=False)
     services, consumables, tangibles, other_expenses = _line_outputs(entry)
     comparison = _comparison(db, entry)
+    by_section, by_day, _ = resolve_actual_depths(
+        db,
+        organization_id,
+        well_ids=[entry.well_id],
+        date_from=entry.cost_date,
+        date_to=entry.cost_date,
+    )
+    sec_depths = [
+        val for (w_id, c_date, _sec), val in by_section.items()
+        if w_id == entry.well_id and c_date == entry.cost_date
+    ]
     return DailyCostDayOut(
-        entry=_entry_out(entry),
+        entry=_entry_out(
+            entry,
+            day_depth=by_day.get((entry.well_id, entry.cost_date)),
+            section_depths=sec_depths,
+        ),
         services=services,
         consumables=consumables,
         tangibles=tangibles,
@@ -2063,11 +2518,12 @@ def save_day(
             entry = _get_entry(db, entry_id, organization_id, deleted=False, lock=True)
             if entry.status != "draft":
                 raise HTTPException(status_code=409, detail="Submitted daily cost sheets are read-only. Reopen the sheet with the authorized workflow first.")
-            service_rows, consumable_rows, tangible_rows, other_rows = _normalize_payload(db, entry, payload)
+            service_rows, consumable_rows, tangible_rows, other_rows, extra_rates, entry_usd_fx = _normalize_payload(db, entry, payload)
             entry.remarks = payload.remarks
             other_before = Decimal(entry.other_expenses_total)
             _upsert_lines(
                 db, entry, service_rows, consumable_rows, tangible_rows, other_rows,
+                extra_rates=extra_rates, entry_usd_fx=entry_usd_fx,
                 user=user, request=request,
             )
             entry.warning_count = (
@@ -2139,7 +2595,7 @@ def preview_day(
     entry = _get_entry(db, entry_id, organization_id, deleted=False)
     if entry.status != "draft":
         raise HTTPException(status_code=409, detail="Submitted daily cost sheets cannot be previewed for editing")
-    services_in, consumables_in, tangibles_in, other_in = _normalize_payload(db, entry, payload)
+    services_in, consumables_in, tangibles_in, other_in, _extra_rates, _entry_usd_fx = _normalize_payload(db, entry, payload)
     existing_maps = _existing_line_maps(entry)
     labels = _budget_label_map(entry.baseline)
 
@@ -2178,6 +2634,26 @@ def preview_day(
     npt_total = _sum_classification(all_rows, "NPT")
     warnings: list[DailyCostWarnings] = []
     total = _money(service_total + consumable_total + tangible_total + other_total)
+    total_usd = _money(
+        _sum_group_usd(service_rows)
+        + _sum_group_usd(consumable_rows)
+        + _sum_group_usd(tangible_rows)
+        + _sum_group_usd(other_rows)
+    )
+    by_section, by_day, _ = resolve_actual_depths(
+        db,
+        organization_id,
+        well_ids=[entry.well_id],
+        date_from=entry.cost_date,
+        date_to=entry.cost_date,
+        exclude_entry_id=entry.id,
+        preview_entry=(entry.well_id, entry.cost_date, entry.daily_cost_code, all_rows),
+    )
+    preview_section_depths = [
+        val for (w_id, c_date, _sec), val in by_section.items()
+        if w_id == entry.well_id and c_date == entry.cost_date
+    ]
+    preview_day_depth = by_day.get((entry.well_id, entry.cost_date))
     if other_total:
         warnings.append(DailyCostWarnings(
             code="other-expenses-preview", severity="warning",
@@ -2207,6 +2683,10 @@ def preview_day(
         total_cost=total,
         upa_total=upa_total,
         npt_total=npt_total,
+        total_cost_usd=total_usd,
+        actual_depth=preview_day_depth.actual_depth if preview_day_depth is not None else None,
+        depth_unit="m",
+        section_depths=preview_section_depths,
         warnings=warnings,
     )
 
@@ -2249,7 +2729,27 @@ def list_entries(
         rows = [row for row in rows if row.cost_date >= date_from]
     if date_to is not None:
         rows = [row for row in rows if row.cost_date <= date_to]
-    return [_entry_out(row) for row in rows]
+    if not rows:
+        return []
+    distinct_wells = list({row.well_id for row in rows})
+    by_section, by_day, _ = resolve_actual_depths(
+        db,
+        organization_id,
+        well_ids=distinct_wells,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    sections_for_key: dict[tuple[str, date], list[DailyCostSectionDepthOut]] = defaultdict(list)
+    for (w_id, c_date, _sec), val in by_section.items():
+        sections_for_key[(w_id, c_date)].append(val)
+    return [
+        _entry_out(
+            row,
+            day_depth=by_day.get((row.well_id, row.cost_date)),
+            section_depths=sections_for_key.get((row.well_id, row.cost_date), []),
+        )
+        for row in rows
+    ]
 
 
 def submit_entry(
@@ -2972,19 +3472,31 @@ def well_cost_summary(
         day = per_day.setdefault(entry.cost_date, {
             "Services": Decimal("0"), "Consumables": Decimal("0"), "Tangibles": Decimal("0"),
             "Other Expenses": Decimal("0"),
-            "UPA": Decimal("0"), "NPT": Decimal("0"), "sheets": set(), "statuses": set(),
+            "UPA": Decimal("0"), "NPT": Decimal("0"), "usd_total": Decimal("0"), "sheets": set(), "statuses": set(),
         })
+        day["usd_total"] = Decimal(day.get("usd_total", Decimal("0"))) + Decimal(entry.total_cost_usd)
         day["sheets"].add(entry.id)
         day["statuses"].add(entry.status)
+    _, summary_day_depths, _ = resolve_actual_depths(
+        db,
+        organization_id,
+        well_ids=[well_id],
+        date_from=date_from,
+        date_to=date_to,
+    )
     cumulative = Decimal("0")
+    cumulative_usd = Decimal("0")
     daily: list[DailyCostDailyRow] = []
     for day_date in sorted(per_day):
         values = per_day[day_date]
         total = _money(
             values["Services"] + values["Consumables"] + values["Tangibles"] + values["Other Expenses"]
         )
+        day_usd = _money(Decimal(values.get("usd_total", Decimal("0"))))
         cumulative = _money(cumulative + total)
+        cumulative_usd = _money(cumulative_usd + day_usd)
         statuses = values["statuses"]
+        day_depth = summary_day_depths.get((well_id, day_date))
         daily.append(DailyCostDailyRow(
             cost_date=day_date,
             services=_money(values["Services"]), consumables=_money(values["Consumables"]),
@@ -2995,6 +3507,9 @@ def well_cost_summary(
             sheets=len(values["sheets"]),
             status=("submitted" if statuses == {"submitted"} else "draft" if statuses == {"draft"} else "mixed"),
             adjusted_budget_balance=_money(adjusted_planned - cumulative) if adjusted_planned is not None else None,
+            actual_depth=day_depth.actual_depth if day_depth is not None else None,
+            total_usd=day_usd,
+            cumulative_usd=cumulative_usd,
         ))
 
     # ---- AFE positions -------------------------------------------------------
@@ -3301,7 +3816,11 @@ def _saved_inputs(
             "id": row.id, "activity_id": row.activity_id, "hole_section_id": row.hole_section_id,
             "phase_id": row.phase_id, "sub_activity_id": row.sub_activity_id,
             "vendor_id": row.vendor_id, "party_name": row.party_name,
-            "quantity": row.quantity, "currency": row.currency, "override_rate": row.override_rate,
+            "quantity": row.quantity, "currency": row.currency,
+            "exchange_rate": Decimal(row.usd_exchange_rate) if (row.currency or "").upper() != "USD" else None,
+            "actual_depth": Decimal(row.actual_depth_input) if row.actual_depth_input is not None else None,
+            "actual_depth_unit": normalize_depth_unit(row.actual_depth_unit),
+            "override_rate": row.override_rate,
             "override_reason": row.override_reason, "remarks": row.remarks,
         }
     services = [DailyCostServiceLineIn(
@@ -3414,6 +3933,11 @@ def import_daily_cost(
             classification = classify_activity(activity)
             quantity = _import_value(row, "quantity", "qty", default="1")
             currency = str(_import_value(row, "currency", "currency_code", default="")).strip().upper()
+            exchange_value = _import_value(row, "exchange_rate", "usd_exchange_rate", "usd_rate", "usd_conversion_rate", default=None)
+            exchange_rate = Decimal(str(exchange_value)) if exchange_value is not None else None
+            depth_value = _import_value(row, "actual_depth", "depth", "actual_depth_m", default=None)
+            actual_depth = Decimal(str(depth_value)) if depth_value is not None else None
+            actual_depth_unit = normalize_depth_unit(str(_import_value(row, "actual_depth_unit", "depth_unit", default="m")))
             override_value = _import_value(row, "override_rate", "daily_rate_override", default=None)
             override_rate = Decimal(str(override_value)) if override_value is not None else None
             override_reason = str(_import_value(row, "override_reason", "rate_override_reason", default=""))
@@ -3427,6 +3951,10 @@ def import_daily_cost(
                 "party_name": party_name,
                 "quantity": quantity,
                 "currency": currency,
+                "exchange_rate": exchange_rate,
+                "actual_depth": actual_depth,
+                "actual_depth_unit": actual_depth_unit,
+                "depth_seq": index,
                 "override_rate": override_rate,
                 "override_reason": override_reason,
                 "remarks": str(_import_value(row, "remarks", "line_remarks", default="")),

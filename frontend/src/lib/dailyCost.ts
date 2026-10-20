@@ -79,6 +79,19 @@ export type DailyCostBaseline = {
   sections: DailyCostSectionOption[]; exchange_rates: Record<string, string>
 }
 
+import type { DepthUnit } from './units'
+
+export type DailyCostSectionDepth = {
+  hole_section_id: string | null
+  section_code: string
+  section_name: string
+  actual_depth: string
+  depth_unit: 'm'
+  entered_depth: string | null
+  entered_unit: DepthUnit
+  daily_cost_code: string
+}
+
 export type DailyCostEntry = {
   id: string; daily_cost_code: string; rig_id: string; rig_code: string; rig_name: string
   well_id: string; well_code: string; well_name: string; afe_id: string; afe_code: string; afe_name: string
@@ -87,7 +100,14 @@ export type DailyCostEntry = {
   services_count: number; consumables_count: number; tangibles_count: number; other_expenses_count: number
   services_total: string; consumables_total: string; tangibles_total: string; other_expenses_total: string
   total_cost: string
-  upa_total: string; npt_total: string; rate_baseline_locked_at: string; budget_baseline_locked_at: string
+  upa_total: string; npt_total: string
+  usd_exchange_rate?: string
+  services_total_usd?: string; consumables_total_usd?: string; tangibles_total_usd?: string; other_expenses_total_usd?: string
+  total_cost_usd?: string; upa_total_usd?: string; npt_total_usd?: string
+  actual_depth?: string | null
+  depth_unit?: 'm'
+  section_depths?: DailyCostSectionDepth[]
+  rate_baseline_locked_at: string; budget_baseline_locked_at: string
   warning_count: number; is_deleted: boolean; deleted_at: string | null
   created_by: string; updated_by: string; created_at: string; updated_at: string
 }
@@ -95,7 +115,12 @@ export type DailyCostEntry = {
 export type DailyCostLineBase = {
   id?: string | null; activity_id: string; hole_section_id: string | null; phase_id: string | null
   sub_activity_id: string | null; vendor_id: string | null; party_name: string
-  quantity: string; currency: string; override_rate: string | null; override_reason: string; remarks: string
+  quantity: string; currency: string
+  exchange_rate?: string | null
+  actual_depth?: string | null
+  actual_depth_unit?: DepthUnit
+  depth_seq?: number | null
+  override_rate: string | null; override_reason: string; remarks: string
 }
 export type DailyCostServiceInput = DailyCostLineBase & {
   service_id: string; baseline_service_rate_id: string | null; charging_basis: ChargingBasis | null
@@ -110,7 +135,9 @@ export type DailyCostOtherExpenseInput = DailyCostLineBase & {
   quantity_unit: OtherExpenseUnit; unit_rate: string
 }
 export type DailyCostSavePayload = {
-  remarks: string; services: DailyCostServiceInput[]
+  remarks: string
+  usd_exchange_rate?: string | null
+  services: DailyCostServiceInput[]
   consumables: DailyCostConsumableInput[]; tangibles: DailyCostTangibleInput[]
   other_expenses: DailyCostOtherExpenseInput[]
 }
@@ -122,6 +149,8 @@ export type DailyCostLineOutput = DailyCostLineBase & {
   /** Derived from the Master Data Activity; not entered on the line. */
   classification: CostClassification
   captured_rate: string; effective_rate: string; exchange_rate: string; amount: string; standard_amount: string
+  usd_exchange_rate?: string; usd_amount?: string
+  actual_depth?: string | null; actual_depth_entered?: string | null; actual_depth_unit?: DepthUnit; depth_seq?: number
   rate_source: string; rate_revision_number: number | null; rate_effective_date: string | null
   baseline_budget_line_id: string | null; budget_key: string; budget_name: string
 }
@@ -175,7 +204,9 @@ export type DailyCostPreview = {
   services: DailyCostServiceLine[]; consumables: DailyCostConsumableLine[]; tangibles: DailyCostTangibleLine[]
   other_expenses: DailyCostOtherExpenseLine[]
   services_total: string; consumables_total: string; tangibles_total: string; other_expenses_total: string
-  total_cost: string; upa_total: string; npt_total: string; warnings: DailyCostWarning[]
+  total_cost: string; upa_total: string; npt_total: string
+  total_cost_usd?: string; actual_depth?: string | null; depth_unit?: 'm'; section_depths?: DailyCostSectionDepth[]
+  warnings: DailyCostWarning[]
 }
 export type DailyCostOverview = {
   active_entries: number; deleted_entries: number; submitted_entries: number; draft_entries: number
@@ -250,13 +281,23 @@ export function displayDate(value: string | null | undefined): string {
 }
 
 export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
+  const lineFxAndDepth = (line: DailyCostLineOutput) => ({
+    exchange_rate: line.currency && line.currency.toUpperCase() !== 'USD' && line.usd_exchange_rate
+      ? line.usd_exchange_rate
+      : null,
+    actual_depth: line.actual_depth_entered ?? line.actual_depth ?? null,
+    actual_depth_unit: line.actual_depth_unit ?? 'm',
+  })
   return {
     remarks: day.entry.remarks,
+    usd_exchange_rate: day.entry.standard_currency && day.entry.standard_currency.toUpperCase() !== 'USD'
+      ? (day.entry.usd_exchange_rate ?? null)
+      : null,
     services: day.services.map(line => ({
       id: line.id, activity_id: line.activity_id, hole_section_id: line.hole_section_id,
       phase_id: line.phase_id, sub_activity_id: line.sub_activity_id,
       vendor_id: line.vendor_id, party_name: line.party_name, quantity: line.quantity,
-      currency: line.currency, override_rate: line.override_rate, override_reason: line.override_reason,
+      currency: line.currency, ...lineFxAndDepth(line), override_rate: line.override_rate, override_reason: line.override_reason,
       remarks: line.remarks, service_id: line.service_id, baseline_service_rate_id: line.baseline_service_rate_id,
       charging_basis: line.charging_basis, charge_category: line.charge_category, quantity_unit: line.quantity_unit,
     })),
@@ -264,21 +305,21 @@ export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
       id: line.id, activity_id: line.activity_id, hole_section_id: line.hole_section_id,
       phase_id: line.phase_id, sub_activity_id: line.sub_activity_id,
       vendor_id: line.vendor_id, party_name: line.party_name, quantity: line.quantity,
-      currency: line.currency, override_rate: line.override_rate, override_reason: line.override_reason,
+      currency: line.currency, ...lineFxAndDepth(line), override_rate: line.override_rate, override_reason: line.override_reason,
       remarks: line.remarks, category: line.category, item_kind: line.item_kind, item_id: line.item_id,
     })),
     tangibles: day.tangibles.map(line => ({
       id: line.id, activity_id: line.activity_id, hole_section_id: line.hole_section_id,
       phase_id: line.phase_id, sub_activity_id: line.sub_activity_id,
       vendor_id: line.vendor_id, party_name: line.party_name, quantity: line.quantity,
-      currency: line.currency, override_rate: line.override_rate, override_reason: line.override_reason,
+      currency: line.currency, ...lineFxAndDepth(line), override_rate: line.override_rate, override_reason: line.override_reason,
       remarks: line.remarks, tangible_id: line.tangible_id,
     })),
     other_expenses: day.other_expenses.map(line => ({
       id: line.id, activity_id: line.activity_id, hole_section_id: line.hole_section_id,
       phase_id: line.phase_id, sub_activity_id: line.sub_activity_id,
       vendor_id: line.vendor_id, party_name: line.party_name, quantity: line.quantity,
-      currency: line.currency, override_rate: null, override_reason: '',
+      currency: line.currency, ...lineFxAndDepth(line), override_rate: null, override_reason: '',
       remarks: line.remarks, expense_type: line.expense_type, expense_description: line.expense_description,
       quantity_unit: line.quantity_unit as OtherExpenseUnit, unit_rate: line.captured_rate,
     })),
@@ -300,6 +341,9 @@ export type DailyCostDailyRow = {
   total: string; upa: string; npt: string; cumulative: string; budget_balance: string; sheets: number
   status: 'draft' | 'submitted' | 'mixed'
   adjusted_budget_balance: string | null
+  actual_depth?: string | null
+  total_usd?: string
+  cumulative_usd?: string
 }
 export type DailyCostFactorRow = {
   key: string; code: string; name: string; detail: string; amount: string

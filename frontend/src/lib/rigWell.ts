@@ -1,3 +1,5 @@
+import { depthToMeters } from './units'
+
 export type Rig = {
   id: string
   rig_code: string
@@ -36,7 +38,9 @@ export type Well = {
   status: 'active' | 'completed'
   config_status: 'draft' | 'configured'
   depth_unit: 'm' | 'ft'
+  standard_depth_unit?: 'm'
   total_depth: string | number | null
+  total_depth_m?: string | number | null
   total_days: string | number
   section_count: number
   sub_activity_count: number
@@ -67,6 +71,8 @@ export type WellSectionDraft = {
   section_name: string
   from_depth: string | number
   to_depth: string | number
+  from_depth_m?: string | number
+  to_depth_m?: string | number
   remarks: string
   total_days: string | number
   phases: WellPhaseDraft[]
@@ -84,7 +90,9 @@ export type WellConfiguration = {
   status: 'active' | 'completed'
   config_status: 'draft' | 'configured'
   depth_unit: 'm' | 'ft'
+  standard_depth_unit?: 'm'
   total_depth: string | number | null
+  total_depth_m?: string | number | null
   total_days: string | number
   sections: WellSectionDraft[]
 }
@@ -195,9 +203,21 @@ export const emptySubActivityForm = (wellId = ''): SubActivityPayload => ({
   description: '',
 })
 
-export function formatDepth(value: string | number | null | undefined, unit: 'm' | 'ft' | string): string {
+export function formatDepth(
+  value: string | number | null | undefined,
+  unit: 'm' | 'ft' | string,
+  metersOverride?: string | number | null,
+): string {
   if (value == null || value === '') return '—'
-  return `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit === 'ft' ? 'ft' : 'm'}`
+  const meters = metersOverride != null && metersOverride !== ''
+    ? Number(metersOverride)
+    : depthToMeters(value, unit)
+  if (meters == null || !Number.isFinite(meters)) return '—'
+  const formattedMeters = `${meters.toLocaleString(undefined, { maximumFractionDigits: 2 })} m`
+  if (unit === 'ft') {
+    return `${formattedMeters} (${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })} ft)`
+  }
+  return formattedMeters
 }
 
 export function formatDays(value: string | number | null | undefined): string {

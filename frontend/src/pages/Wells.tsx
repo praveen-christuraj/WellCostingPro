@@ -251,7 +251,7 @@ export default function Wells() {
     { headerName: 'DRILLING PLAN', field: 'config_status', minWidth: 120, maxWidth: 145, cellRenderer: ({ value }: { value: string }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={value === 'configured' ? 'info' : 'warning'}>{value}</Tag></Box> },
     { headerName: 'COMPLETION STATUS', field: 'completion_status', minWidth: 150, cellRenderer: ({ data }: { data: Well }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={data.completion_status === 'completed' ? 'neutral' : 'info'}>{data.completion_section_count ? data.completion_status : 'Not added'}</Tag></Box> },
     { headerName: 'COMPLETION PLAN', field: 'completion_config_status', minWidth: 145, cellRenderer: ({ data }: { data: Well }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={data.completion_config_status === 'configured' ? 'info' : 'warning'}>{data.completion_section_count ? data.completion_config_status : 'Not added'}</Tag></Box> },
-    { headerName: 'PLANNED DEPTH', field: 'total_depth', minWidth: 140, valueFormatter: params => formatDepth(params.value, params.data?.depth_unit ?? 'm') },
+    { headerName: 'PLANNED DEPTH (m)', field: 'total_depth', minWidth: 165, valueFormatter: params => formatDepth(params.value, params.data?.depth_unit ?? 'm', params.data?.total_depth_m) },
     { headerName: 'PLANNED DAYS', field: 'total_days', minWidth: 125, valueFormatter: params => formatDays(params.value) },
     {
       headerName: 'ADJ PLANNED DAYS', field: 'adjusted_total_days', minWidth: 150,

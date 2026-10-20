@@ -18,6 +18,7 @@ import {
   type DailyCostDay, type DailyCostEntry, type DailyCostReference,
   type DailyCostStatus,
 } from '../lib/dailyCost'
+import { formatDepthMeters } from '../lib/units'
 
 type PendingAction = { kind: 'delete' | 'restore' | 'purge'; rows: DailyCostEntry[] }
 
@@ -48,6 +49,7 @@ export default function DailyCostManagement() {
   const [wellId, setWellId] = useState('')
   const [afeId, setAfeId] = useState('')
   const [costDate, setCostDate] = useState(localToday())
+  const [usdExchangeRate, setUsdExchangeRate] = useState('')
   const [remarks, setRemarks] = useState('')
   const [filterWell, setFilterWell] = useState('')
   const [filterAfe, setFilterAfe] = useState('')
@@ -84,6 +86,8 @@ export default function DailyCostManagement() {
   const selectedWell = wells.find(well => well.id === wellId)
   const afes = useMemo(() => reference?.afes.filter(afe => afe.well_id === wellId) ?? [], [reference, wellId])
   const selectedAfe = afes.find(afe => afe.id === afeId)
+  const needsUsdExchangeRate = Boolean(selectedAfe && selectedAfe.standard_currency.toUpperCase() !== 'USD')
+  const usdRateValid = !needsUsdExchangeRate || (Number.isFinite(Number(usdExchangeRate)) && Number(usdExchangeRate) > 0)
   const createDateValid = isValidCostDate(costDate)
   const selectedDuplicate = rows.find(row => row.well_id === wellId && row.afe_id === afeId && row.cost_date === costDate)
   // Configuring the well sub activity in Rig & Well Management is mandatory
@@ -100,6 +104,7 @@ export default function DailyCostManagement() {
   const openCreate = () => {
     setCreateError('')
     setRemarks('')
+    setUsdExchangeRate('')
     setCostDate(localToday())
     const firstWell = wells[0]
     const firstAfe = reference?.afes.find(item => item.well_id === firstWell?.id)
@@ -121,6 +126,10 @@ export default function DailyCostManagement() {
       setCreateError('Enter a valid cost date before creating the daily sheet.')
       return
     }
+    if (needsUsdExchangeRate && !usdRateValid) {
+      setCreateError(`Enter a positive USD conversion rate for ${selectedAfe.standard_currency.toUpperCase()} so USD values can be standardized across all wells.`)
+      return
+    }
     const existing = rows.find(row => row.well_id === selectedWell.id && row.afe_id === selectedAfe.id && row.cost_date === costDate)
     if (existing) {
       setCreateError(`A daily cost sheet already exists for ${displayDate(costDate)} under ${selectedAfe.afe_code}. Open the existing sheet above instead.`)
@@ -130,7 +139,14 @@ export default function DailyCostManagement() {
     setCreateError('')
     try {
       const created = await api<DailyCostDay>('/daily-cost/entries', {
-        method: 'POST', body: body({ well_id: selectedWell.id, afe_id: selectedAfe.id, cost_date: costDate, remarks }),
+        method: 'POST',
+        body: body({
+          well_id: selectedWell.id,
+          afe_id: selectedAfe.id,
+          cost_date: costDate,
+          remarks,
+          ...(needsUsdExchangeRate ? { usd_exchange_rate: usdExchangeRate.trim() } : {}),
+        }),
       })
       setCreateOpen(false)
       navigate(`/daily-cost/entries/${created.entry.id}`)
@@ -184,7 +200,9 @@ export default function DailyCostManagement() {
     { headerName: 'DAILY SHEET', field: 'daily_cost_code', minWidth: 230, flex: 1.1 },
     { headerName: 'WELL', field: 'well_code', minWidth: 150, valueGetter: params => `${params.data?.well_code ?? ''} · ${params.data?.well_name ?? ''}` },
     { headerName: 'AFE', field: 'afe_code', minWidth: 165, valueGetter: params => `${params.data?.afe_code ?? ''} · ${params.data?.afe_name ?? ''}` },
-    { headerName: 'DAILY TOTAL', field: 'total_cost', minWidth: 160, valueFormatter: params => dailyMoney(String(params.value ?? '0'), params.data?.standard_currency) },
+    { headerName: 'ACTUAL DEPTH (m)', field: 'actual_depth', minWidth: 140, valueFormatter: params => formatDepthMeters(params.data?.actual_depth, 'm') },
+    { headerName: 'DAILY TOTAL', field: 'total_cost', minWidth: 155, valueFormatter: params => dailyMoney(String(params.value ?? '0'), params.data?.standard_currency) },
+    { headerName: 'USD TOTAL', field: 'total_cost_usd', minWidth: 150, valueFormatter: params => dailyMoney(String(params.value ?? params.data?.total_cost ?? '0'), 'USD') },
     {
       // Unexpected charges are part of the day's cost and are deducted from the AFE.
       headerName: 'OTHER EXPENSES', field: 'other_expenses_total', minWidth: 160,
@@ -318,7 +336,7 @@ export default function DailyCostManagement() {
 
     <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={filterWell}/>
 
-    <FormDialog open={createOpen} title="Start a daily cost sheet" subtitle="The first sheet locks the AFE estimate, FX factors, well plan, service rates and Master Data catalogue prices for this well/AFE." onClose={() => setCreateOpen(false)} onSubmit={() => void createEntry()} busy={creating} submitLabel="Create daily sheet" submitDisabled={!selectedAfe || !selectedWell || !createDateValid || Boolean(selectedDuplicate) || missingSubActivities}>
+    <FormDialog open={createOpen} title="Start a daily cost sheet" subtitle="The first sheet locks the AFE estimate, FX factors, well plan, service rates and Master Data catalogue prices for this well/AFE." onClose={() => setCreateOpen(false)} onSubmit={() => void createEntry()} busy={creating} submitLabel="Create daily sheet" submitDisabled={!selectedAfe || !selectedWell || !createDateValid || !usdRateValid || Boolean(selectedDuplicate) || missingSubActivities}>
       <Box display="grid" gap={1.6}>
         {!wells.length && <Alert severity="warning">Create and sign off a well plan in Rig &amp; Well Management before starting daily cost tracking.</Alert>}
         <TextField select required label="Configured well" value={wellId} onChange={event => {
@@ -338,6 +356,18 @@ export default function DailyCostManagement() {
           {afes.map(afe => <MenuItem key={afe.id} value={afe.id}>{afe.display_name}</MenuItem>)}
         </TextField>
         {selectedAfe && <Alert severity="info" sx={{ py: 0 }}>AFE status: {selectedAfe.status}. Budget baseline: {dailyMoney(selectedAfe.total_cost, selectedAfe.standard_currency)}. Subsequent estimate or Master Data changes will not rewrite this locked baseline.</Alert>}
+        {needsUsdExchangeRate && selectedAfe && (
+          <TextField
+            required
+            type="number"
+            label={`USD conversion rate (1 ${selectedAfe.standard_currency.toUpperCase()} = ? USD)`}
+            value={usdExchangeRate}
+            onChange={event => { setUsdExchangeRate(event.target.value); setCreateError('') }}
+            inputProps={{ min: 0.000001, step: 'any' }}
+            error={Boolean(usdExchangeRate) && !usdRateValid}
+            helperText={`USD is the standard currency across all wells. Enter the conversion rate for ${selectedAfe.standard_currency.toUpperCase()} to calculate USD values automatically.`}
+          />
+        )}
         {selectedDuplicate && <Alert severity="warning" sx={{ py: 0 }} action={<Button component={RouterLink} to={`/daily-cost/entries/${selectedDuplicate.id}`} size="small" color="inherit" onClick={() => setCreateOpen(false)}>Open existing</Button>}>
           A sheet already exists for this well, AFE and date. Open it to review or continue editing instead of creating a duplicate.
         </Alert>}

@@ -21,6 +21,7 @@ import {
   dailyMoney, displayDate, DAILY_COST_STATUSES, type DailyCostDailyRow, type DailyCostFactorGroup,
   type DailyCostFactorRow, type DailyCostWellOption, type DailyCostWellSummary,
 } from '../lib/dailyCost'
+import { formatDepthMeters } from '../lib/units'
 
 function StatCard({ label, value, hint, icon, tone = 'default' }: {
   label: string; value: string; hint: string; icon: ReactNode; tone?: 'default' | 'warning' | 'good'
@@ -205,6 +206,7 @@ export default function DailyCostAnalysis() {
 
   const dailyColumns: ColDef<DailyCostDailyRow>[] = [
     { headerName: 'DATE', field: 'cost_date', minWidth: 140, width: 150, valueFormatter: params => displayDate(String(params.value ?? '')) },
+    { headerName: 'ACTUAL DEPTH (m)', field: 'actual_depth', minWidth: 145, valueFormatter: params => formatDepthMeters(params.data?.actual_depth, 'm') },
     { headerName: 'SERVICES', field: 'services', minWidth: 140, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
     { headerName: 'CONSUMABLES', field: 'consumables', minWidth: 140, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
     { headerName: 'TANGIBLES', field: 'tangibles', minWidth: 135, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
@@ -216,6 +218,10 @@ export default function DailyCostAnalysis() {
         : <Typography fontSize={12} color="text.secondary">—</Typography>,
     },
     { headerName: 'DAY TOTAL', field: 'total', minWidth: 145, cellRenderer: (params: ICellRendererParams<DailyCostDailyRow>) => <Typography fontSize={12} fontWeight={800}>{dailyMoney(String(params.value ?? '0'), currency)}</Typography> },
+    ...(currency.toUpperCase() !== 'USD' ? [{
+      headerName: 'DAY USD (STD)', field: 'total_usd' as const, minWidth: 145,
+      valueFormatter: (params: { value?: unknown }) => dailyMoney(String(params.value ?? '0'), 'USD'),
+    } satisfies ColDef<DailyCostDailyRow>] : []),
     { headerName: 'UPA', field: 'upa', minWidth: 125, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
     { headerName: 'NPT', field: 'npt', minWidth: 125, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
     { headerName: 'CUMULATIVE', field: 'cumulative', minWidth: 150, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },

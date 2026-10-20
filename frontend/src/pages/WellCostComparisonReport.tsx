@@ -9,7 +9,8 @@ import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import type { Afe } from '../lib/afe'
 import type { DailyCostEntry } from '../lib/dailyCost'
-import type { Well } from '../lib/rigWell'
+import { formatDepth, type Well } from '../lib/rigWell'
+import { formatDepthMeters } from '../lib/units'
 
 type CostRow = {
   id: string
@@ -20,8 +21,11 @@ type CostRow = {
   afe_amount: string
   sow_adjustment: string
   actual_cost: string
+  actual_usd: string
   afe_balance: string
   costs_incurred: string
+  planned_depth_m: string
+  actual_depth_m: string
   planned_days: number
   adjusted_planned_days: number | null
   actual_days: number | null
@@ -165,6 +169,11 @@ export default function WellCostComparisonReport() {
       const dates = entries.map(entry => String(entry.cost_date)).sort()
       const firstDate = dates[0] ?? ''
       const lastDate = dates.at(-1) ?? ''
+      const totalUsd = entries.reduce((sum, entry) => sum + Number(entry.total_cost_usd ?? entry.total_cost ?? 0), 0)
+      const latestDepthEntry = [...entries]
+        .filter(entry => entry.actual_depth != null && entry.actual_depth !== '')
+        .sort((a, b) => String(a.cost_date).localeCompare(String(b.cost_date)))
+        .at(-1)
       return {
         id: well.id,
         rig_name: well.rig_name,
@@ -174,8 +183,15 @@ export default function WellCostComparisonReport() {
         afe_amount: canReadAfe ? afeAmount : 'Not available',
         sow_adjustment: canReadAfe ? sowAdjustment : 'Not available',
         actual_cost: canReadDaily ? actualCost : 'Not available',
+        actual_usd: canReadDaily
+          ? entries.length > 0
+            ? `USD ${totalUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            : '—'
+          : 'Not available',
         afe_balance: canReadAfe && canReadDaily ? balance : 'Not available',
         costs_incurred: canReadAfe && canReadDaily ? incurred : 'Not available',
+        planned_depth_m: formatDepth(well.total_depth, well.depth_unit, well.total_depth_m),
+        actual_depth_m: canReadDaily ? formatDepthMeters(latestDepthEntry?.actual_depth, 'm') : 'Not available',
         planned_days: Number(well.total_days ?? 0),
         adjusted_planned_days: well.has_plan_adjustment && well.adjusted_total_days != null
           ? Number(well.adjusted_total_days)
@@ -218,8 +234,11 @@ export default function WellCostComparisonReport() {
       headerTooltip: 'Approved SOW adjustment (Adjusted AFE − Original AFE). A plus means scope was added.',
     },
     { headerName: 'ACTUAL COST', field: 'actual_cost', minWidth: 190 },
+    { headerName: 'ACTUAL USD (STD)', field: 'actual_usd', minWidth: 175, headerTooltip: 'Standardized USD actual cost across all wells' },
     { headerName: 'AFE BALANCE', field: 'afe_balance', minWidth: 190, headerTooltip: 'Adjusted AFE amount less actual cost' },
     { headerName: '% COSTS INCURRED', field: 'costs_incurred', minWidth: 155, headerTooltip: 'Actual cost as a share of the adjusted AFE amount' },
+    { headerName: 'PLANNED DEPTH (m)', field: 'planned_depth_m', minWidth: 160 },
+    { headerName: 'ACTUAL DEPTH (m)', field: 'actual_depth_m', minWidth: 155 },
     { headerName: 'PLANNED DAYS', field: 'planned_days', minWidth: 135, headerTooltip: 'Original planned days', valueFormatter: params => Number(params.value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) },
     {
       headerName: 'ADJ PLANNED DAYS', field: 'adjusted_planned_days', minWidth: 160,

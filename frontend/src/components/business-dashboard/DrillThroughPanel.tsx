@@ -14,6 +14,7 @@ import {
   AFE_STATUS_LABELS, CLASSIFICATION_TONES, dashboardQuery, decimal, displayDate, money, percent,
   type DashboardFilters, type DashboardDaySheet, type DashboardWellDetail, type Money,
 } from '../../lib/businessDashboard'
+import { formatDepthMeters } from '../../lib/units'
 
 const SHEET_STATUS_LABELS: Record<string, string> = { draft: 'Draft', submitted: 'Submitted' }
 
@@ -166,7 +167,7 @@ export function DrillThroughPanel({ wellId, filters, onClose }: {
           <Stat label="Consumables" value={money(detail.well.consumables_amount, currency)} hint="Recorded actual"/>
           <Stat label="Tangibles" value={money(detail.well.tangibles_amount, currency)} hint="Recorded actual"/>
           <Stat label="Other expenses" value={money(detail.well.other_expenses_amount, currency)} hint="Unbudgeted, deducted from the AFE"/>
-          <Stat label="Depth progress" value={percent(detail.well.depth_progress_percent)} hint={`${decimal(detail.well.actual_depth, 0)} of ${decimal(detail.well.planned_depth, 0)} ${detail.well.depth_unit}`}/>
+          <Stat label="Depth progress" value={percent(detail.well.depth_progress_percent)} hint={`${decimal(detail.well.actual_depth, 0)} of ${decimal(detail.well.planned_depth, 0)} m`}/>
           <Stat label="Planned sections" value={decimal(detail.well.section_count)} hint="Drilling configuration"/>
         </Box>
       </Paper>
@@ -247,6 +248,7 @@ export function DrillThroughPanel({ wellId, filters, onClose }: {
                 <TableCell>Cost date</TableCell>
                 <TableCell>AFE</TableCell>
                 <TableCell>Status</TableCell>
+                <TableCell align="right">Actual depth (m)</TableCell>
                 <TableCell align="right">Total</TableCell>
                 <TableCell align="right">NPT / UPA</TableCell>
                 <TableCell align="right">Action</TableCell>
@@ -257,6 +259,7 @@ export function DrillThroughPanel({ wellId, filters, onClose }: {
                 <TableCell>{displayDate(row.cost_date)}</TableCell>
                 <TableCell>{row.afe_code || '—'}</TableCell>
                 <TableCell><SheetStatus status={row.status}/></TableCell>
+                <TableCell align="right">{formatDepthMeters(row.actual_depth, 'm')}</TableCell>
                 <TableCell align="right">{money(row.total, currency)}</TableCell>
                 <TableCell align="right">{money(row.npt, currency)} / {money(row.upa, currency)}</TableCell>
                 <TableCell align="right">
@@ -283,7 +286,8 @@ export function DrillThroughPanel({ wellId, filters, onClose }: {
               <TableHead>
                 <TableRow>
                   <TableCell>Section</TableCell>
-                  <TableCell align="right">Depth ({detail.well.depth_unit})</TableCell>
+                  <TableCell align="right">Planned depth (m)</TableCell>
+                  <TableCell align="right">Actual depth (m)</TableCell>
                   <TableCell align="right">Planned days</TableCell>
                   <TableCell align="right">Cost days</TableCell>
                   <TableCell align="right">Actual</TableCell>
@@ -296,7 +300,8 @@ export function DrillThroughPanel({ wellId, filters, onClose }: {
                     <Typography fontSize={12.5} fontWeight={700}>{row.section_code}</Typography>
                     <Typography fontSize={10.5} color="text.secondary">{row.section_name}{row.scope === 'completion' ? ' · completion' : ''}</Typography>
                   </TableCell>
-                  <TableCell align="right">{row.from_depth != null ? `${decimal(row.from_depth)} – ${decimal(row.to_depth)}` : '—'}</TableCell>
+                  <TableCell align="right">{row.from_depth != null ? `${decimal(row.from_depth, 2)} – ${decimal(row.to_depth, 2)} m` : '—'}</TableCell>
+                  <TableCell align="right">{row.actual_depth != null ? formatDepthMeters(row.actual_depth, 'm') : '—'}</TableCell>
                   <TableCell align="right">{decimal(row.planned_days, 2)}</TableCell>
                   <TableCell align="right">{decimal(row.active_days)}</TableCell>
                   <TableCell align="right">{money(row.amount, currency)}</TableCell>
