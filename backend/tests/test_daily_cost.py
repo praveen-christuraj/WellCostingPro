@@ -234,8 +234,8 @@ def test_daily_cost_locks_rates_prices_bulk_actuals_and_tracks_submission():
         assert Decimal(result["comparison"]["actual_to_date"]) == Decimal("140.00")
         assert Decimal(result["comparison"]["balance"]) == Decimal("5860.00")
         assert result["services"][0]["rate_source"] == "daily_override"
-        assert result["services"][0]["captured_rate"] == "100.0000"
-        assert result["services"][0]["override_rate"] == "80.0000"
+        assert Decimal(result["services"][0]["captured_rate"]) == Decimal("100.0000")
+        assert Decimal(result["services"][0]["override_rate"]) == Decimal("80.0000")
         assert result["consumables"][0]["rate_revision_number"] == 1
         assert result["consumables"][0]["baseline_budget_line_id"]
         bulk_budget = next(row for row in result["comparison"]["budget_lines"] if row["budget_kind"] == "consumable_category")
@@ -477,7 +477,7 @@ def test_well_cost_summary_reports_daily_and_factor_views():
         assert section["code"] == "17-1/2" and Decimal(section["planned"]) == Decimal("5000.00")
         assert Decimal(factors["cost_group"]["total"]) == Decimal("6000.00")
         planned_keys = {row["budget_key"]: row for row in data["budget_lines"]}
-        assert planned_keys[f"service:{rate['source_afe_line_id']}"]["actual_to_date"] == "100.00"
+        assert Decimal(planned_keys[f"service:{rate['source_afe_line_id']}"]["actual_to_date"]) == Decimal("100.00")
 
         # Submitted-only and date-range views narrow the same ledger.
         submitted_only = client.get(
@@ -487,7 +487,7 @@ def test_well_cost_summary_reports_daily_and_factor_views():
         single_day = client.get(
             f"/api/v1/daily-cost/wells/{setup['well']['id']}/cost-summary?from=2026-10-11&to=2026-10-11", headers=headers)
         assert len(single_day.json()["daily"]) == 1
-        assert single_day.json()["totals"]["actual"] == "200.00"
+        assert Decimal(single_day.json()["totals"]["actual"]) == Decimal("200.00")
 
         # The register filters daily: well, AFE, status and date range.
         filtered = client.get(
@@ -890,7 +890,7 @@ def test_well_analysis_never_sums_mixed_standard_currencies():
         response = client.get(path + "/cost-report?to=2026-10-13", headers=headers)
         assert response.status_code == 200, response.text
         assert [day["entry"]["standard_currency"] for day in response.json()] == ["USD", "EUR"]
-        assert [day["comparison"]["planned_total"] for day in response.json()] == ["6000.00", "500.00"]
+        assert [Decimal(day["comparison"]["planned_total"]) for day in response.json()] == [Decimal("6000.00"), Decimal("500.00")]
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 import os
 import tempfile
+from decimal import Decimal
 
 _db_path = tempfile.mktemp(suffix=".sqlite3")
 # Set TEST_DATABASE_URL (a PostgreSQL URL, as CI does) to run this suite against
@@ -171,9 +172,9 @@ def test_sow_adjustment_lifecycle_and_effective_totals():
     created = _post(client, f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers, _adjustment_payload(), status=201)
     assert created["revision_number"] == 1
     assert created["status"] == "draft"
-    assert created["original_services_total"] == "1000.00"
-    assert created["adjusted_total"] == "2000.00"
-    assert created["delta_total"] == "1000.00"
+    assert Decimal(created["original_services_total"]) == Decimal("1000.00")
+    assert Decimal(created["adjusted_total"]) == Decimal("2000.00")
+    assert Decimal(created["delta_total"]) == Decimal("1000.00")
 
     # A second draft is blocked while the first is still open.
     blocked = client.post(f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers=headers, json=_adjustment_payload())
@@ -188,7 +189,7 @@ def test_sow_adjustment_lifecycle_and_effective_totals():
         "adjusted_services_total": "2500", "reason": "Extra logging unit and standby cover",
     })
     assert updated.status_code == 200, updated.text
-    assert updated.json()["adjusted_total"] == "2500.00"
+    assert Decimal(updated.json()["adjusted_total"]) == Decimal("2500.00")
 
     approved = client.post(
         f"/api/v1/afe/sow-adjustments/{created['id']}/approve", headers=headers, json={"remarks": "Scope change verified"},
@@ -198,10 +199,10 @@ def test_sow_adjustment_lifecycle_and_effective_totals():
 
     register = client.get("/api/v1/afe/afes", headers=headers).json()
     assert register[0]["has_sow_adjustment"] is True
-    assert register[0]["adjusted_total"] == "2500.00"
+    assert Decimal(register[0]["adjusted_total"]) == Decimal("2500.00")
     assert register[0]["sow_revision"] == 1
     # The saved estimate itself never changes.
-    assert register[0]["total_cost"] == "1000.00"
+    assert Decimal(register[0]["total_cost"]) == Decimal("1000.00")
 
     # A newer approved revision supersedes the older one.
     second = _post(client, f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers, _adjustment_payload(
@@ -209,13 +210,13 @@ def test_sow_adjustment_lifecycle_and_effective_totals():
     ), status=201)
     assert second["revision_number"] == 2
     # The original snapshot is carried forward from the first revision, not re-taken.
-    assert second["original_services_total"] == "1000.00"
+    assert Decimal(second["original_services_total"]) == Decimal("1000.00")
     approve_second = client.post(
         f"/api/v1/afe/sow-adjustments/{second['id']}/approve", headers=headers, json={"remarks": "Revised scope agreed"},
     )
     assert approve_second.status_code == 200, approve_second.text
     register = client.get("/api/v1/afe/afes", headers=headers).json()
-    assert register[0]["adjusted_total"] == "1800.00"
+    assert Decimal(register[0]["adjusted_total"]) == Decimal("1800.00")
     assert register[0]["sow_revision"] == 2
 
     # Voiding the latest revision restores the earlier approved revision.
@@ -224,7 +225,7 @@ def test_sow_adjustment_lifecycle_and_effective_totals():
     )
     assert voided.status_code == 200, voided.text
     register = client.get("/api/v1/afe/afes", headers=headers).json()
-    assert register[0]["adjusted_total"] == "2500.00"
+    assert Decimal(register[0]["adjusted_total"]) == Decimal("2500.00")
     assert register[0]["sow_revision"] == 1
 
     history = client.get(f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers=headers).json()
@@ -245,12 +246,12 @@ def test_plan_adjustment_revises_planned_days_without_touching_the_plan():
         "section_count_after": 1,
     }, status=201)
     assert created["revision_number"] == 1
-    assert created["planned_days_before"] == "10.00"
-    assert created["delta_days"] == "2.00"
+    assert Decimal(created["planned_days_before"]) == Decimal("10.00")
+    assert Decimal(created["delta_days"]) == Decimal("2.00")
 
     wells = client.get("/api/v1/rig-well/wells", headers=headers).json()
     assert wells[0]["has_plan_adjustment"] is False
-    assert wells[0]["total_days"] == "10.00"
+    assert Decimal(wells[0]["total_days"]) == Decimal("10.00")
 
     approved = client.post(
         f"/api/v1/rig-well/plan-adjustments/{created['id']}/approve", headers=headers, json={"remarks": "Days verified"},
@@ -258,14 +259,14 @@ def test_plan_adjustment_revises_planned_days_without_touching_the_plan():
     assert approved.status_code == 200, approved.text
 
     wells = client.get("/api/v1/rig-well/wells", headers=headers).json()
-    assert wells[0]["total_days"] == "10.00"
+    assert Decimal(wells[0]["total_days"]) == Decimal("10.00")
     assert wells[0]["has_plan_adjustment"] is True
-    assert wells[0]["adjusted_total_days"] == "12.00"
+    assert Decimal(wells[0]["adjusted_total_days"]) == Decimal("12.00")
     assert wells[0]["plan_revision"] == 1
 
     summary = client.get(f"/api/v1/rig-well/wells/{well_id}/adjusted-summary?scope=drilling", headers=headers).json()
-    assert summary["planned_days_before"] == "10.00"
-    assert summary["planned_days_after"] == "12.00"
+    assert Decimal(summary["planned_days_before"]) == Decimal("10.00")
+    assert Decimal(summary["planned_days_after"]) == Decimal("12.00")
     assert summary["has_plan_adjustment"] is True
     assert summary["plan_revision"] == 1
 

@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
 
+from app.core.precision import DECIMAL_QUANT
+
 FEET_PER_METER = Decimal("3.281")
-DEPTH_QUANT = Decimal("0.01")
+DEPTH_QUANT = DECIMAL_QUANT
 VALID_DEPTH_UNITS = ("m", "ft")
 
 

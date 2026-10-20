@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.precision import Decimal10
+
 SowStatus = Literal["draft", "approved", "void"]
 SowScope = Literal["drilling", "completion"]
 
@@ -22,9 +24,9 @@ class AfeSowAdjustmentCreate(BaseModel):
     tangibles that were added or removed.
     """
 
-    adjusted_services_total: Decimal = Field(ge=Decimal("0"), le=Decimal("9999999999999999.99"))
-    adjusted_consumables_total: Decimal = Field(ge=Decimal("0"), le=Decimal("9999999999999999.99"))
-    adjusted_tangibles_total: Decimal = Field(ge=Decimal("0"), le=Decimal("9999999999999999.99"))
+    adjusted_services_total: Decimal10 = Field(ge=Decimal("0"), le=Decimal("9999999999999999.9999999999"))
+    adjusted_consumables_total: Decimal10 = Field(ge=Decimal("0"), le=Decimal("9999999999999999.9999999999"))
+    adjusted_tangibles_total: Decimal10 = Field(ge=Decimal("0"), le=Decimal("9999999999999999.9999999999"))
     reason: str = Field(min_length=3, max_length=500)
     sow_summary: str = Field(default="", max_length=2000)
 
@@ -39,9 +41,9 @@ class AfeSowAdjustmentCreate(BaseModel):
 class AfeSowAdjustmentUpdate(BaseModel):
     """Draft-only edits to a recorded adjustment."""
 
-    adjusted_services_total: Decimal | None = Field(default=None, ge=Decimal("0"))
-    adjusted_consumables_total: Decimal | None = Field(default=None, ge=Decimal("0"))
-    adjusted_tangibles_total: Decimal | None = Field(default=None, ge=Decimal("0"))
+    adjusted_services_total: Decimal10 | None = Field(default=None, ge=Decimal("0"))
+    adjusted_consumables_total: Decimal10 | None = Field(default=None, ge=Decimal("0"))
+    adjusted_tangibles_total: Decimal10 | None = Field(default=None, ge=Decimal("0"))
     reason: str | None = Field(default=None, min_length=3, max_length=500)
     sow_summary: str | None = Field(default=None, max_length=2000)
 
@@ -96,7 +98,7 @@ class WellPlanAdjustmentCreate(BaseModel):
     """
 
     configuration_scope: SowScope = "drilling"
-    planned_days_after: Decimal = Field(ge=Decimal("0"), le=Decimal("1000000"))
+    planned_days_after: Decimal10 = Field(ge=Decimal("0"), le=Decimal("1000000"))
     section_count_after: int = Field(default=0, ge=0, le=500)
     reason: str = Field(min_length=3, max_length=500)
     sow_summary: str = Field(default="", max_length=2000)
@@ -110,7 +112,7 @@ class WellPlanAdjustmentCreate(BaseModel):
 
 
 class WellPlanAdjustmentUpdate(BaseModel):
-    planned_days_after: Decimal | None = Field(default=None, ge=Decimal("0"))
+    planned_days_after: Decimal10 | None = Field(default=None, ge=Decimal("0"))
     section_count_after: int | None = Field(default=None, ge=0, le=500)
     reason: str | None = Field(default=None, min_length=3, max_length=500)
     sow_summary: str | None = Field(default=None, max_length=2000)

@@ -18,22 +18,23 @@ export type MudCostEditorPayload = MudCostEntryUpdatePayload
 type LineState = Record<string, { amount: string; remarks: string }>
 type FormState = { entry_date: string; lines: LineState }
 
-const MAX_QUANTITY_MILLI = 999999999999999999n
-const QUANTITY_PATTERN = /^(?:\d+|\d*\.\d{1,3})$/
+const DECIMAL_SCALE = 10_000_000_000n
+const MAX_QUANTITY_SCALED = 9999999999999999999999999n
+const QUANTITY_PATTERN = /^(?:\d+|\d*\.\d{1,10})$/
 
-function quantityMilli(value: string | null | undefined): bigint {
+function quantityScaled(value: string | null | undefined): bigint {
   const text = (value ?? '').trim()
-  if (text.startsWith('-')) return -quantityMilli(text.slice(1))
+  if (text.startsWith('-')) return -quantityScaled(text.slice(1))
   if (!text || !QUANTITY_PATTERN.test(text)) return 0n
   const [whole = '0', fraction = ''] = text.split('.')
-  return BigInt(whole || '0') * 1000n + BigInt((fraction + '000').slice(0, 3) || '0')
+  return BigInt(whole || '0') * DECIMAL_SCALE + BigInt((fraction + '0000000000').slice(0, 10) || '0')
 }
 
-function displayMilli(value: bigint): string {
+function displayScaled(value: bigint): string {
   const negative = value < 0n
   const absolute = negative ? -value : value
-  const whole = (absolute / 1000n).toLocaleString()
-  const fraction = String(absolute % 1000n).padStart(3, '0').replace(/0+$/, '')
+  const whole = (absolute / DECIMAL_SCALE).toLocaleString()
+  const fraction = String(absolute % DECIMAL_SCALE).padStart(10, '0').replace(/0+$/, '')
   return `${negative ? '−' : ''}${whole}${fraction ? `.${fraction}` : ''}`
 }
 
@@ -82,7 +83,7 @@ function NumberCell({ line, value, onChange, error, disabled = false }: {
     value={value}
     disabled={disabled}
     onChange={event => onChange(event.target.value)}
-    inputProps={{ min: 0, step: 0.001, inputMode: 'decimal', 'aria-label': `${line.label} quantity` }}
+    inputProps={{ min: 0, step: 0.0000000001, inputMode: 'decimal', 'aria-label': `${line.label} quantity` }}
     error={Boolean(error)}
     helperText={error || ' '}
     sx={{ minWidth: 130, '& .MuiFormHelperText-root': { minHeight: 16, mt: 0 } }}
@@ -131,8 +132,8 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
   const openingRemarks = previousEntry ? '' : entry?.opening_stock_remarks ?? initialEntry?.opening_stock_remarks ?? openingLine.remarks
   const categoryTotal = (category: string) => MUD_COST_ENTRY_LINES
     .filter(line => line.category === category)
-    .reduce((total, line) => total + quantityMilli(form.lines[line.code]?.amount), 0n)
-  const openingTotal = quantityMilli(openingAmount)
+    .reduce((total, line) => total + quantityScaled(form.lines[line.code]?.amount), 0n)
+  const openingTotal = quantityScaled(openingAmount)
   const receiptTotal = categoryTotal('receipt')
   const additionsTotal = categoryTotal('additions')
   const consumptionTotal = categoryTotal('consumption_losses')
@@ -156,10 +157,10 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
       const text = value.amount.trim()
       if (text) {
         if (!QUANTITY_PATTERN.test(text)) {
-          errors[spec.code] = `${spec.label}: enter a non-negative quantity with up to 3 decimal places.`
+          errors[spec.code] = `${spec.label}: enter a non-negative quantity with up to 10 decimal places.`
           continue
         }
-        if (quantityMilli(text) > MAX_QUANTITY_MILLI) {
+        if (quantityScaled(text) > MAX_QUANTITY_SCALED) {
           errors[spec.code] = `${spec.label}: quantity is larger than the supported maximum.`
           continue
         }
@@ -263,12 +264,12 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
         </Box>
         <Box display="grid" gap={1.2} sx={{ gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' } }}>
           {[
-            { label: 'Opening stock', value: displayMilli(openingTotal) },
-            { label: 'Receipt', value: displayMilli(receiptTotal) },
-            { label: 'Additions', value: displayMilli(additionsTotal) },
-            { label: 'Consumption / losses', value: displayMilli(consumptionTotal) },
-            { label: 'Others', value: displayMilli(otherTotal) },
-            { label: 'Closing stock', value: displayMilli(closingTotal) },
+            { label: 'Opening stock', value: displayScaled(openingTotal) },
+            { label: 'Receipt', value: displayScaled(receiptTotal) },
+            { label: 'Additions', value: displayScaled(additionsTotal) },
+            { label: 'Consumption / losses', value: displayScaled(consumptionTotal) },
+            { label: 'Others', value: displayScaled(otherTotal) },
+            { label: 'Closing stock', value: displayScaled(closingTotal) },
           ].map(item => <Box key={item.label} sx={{ minWidth: 0, borderLeft: '2px solid', borderColor: 'divider', pl: 1 }}>
             <Typography color="text.secondary" fontSize={10.5} fontWeight={700} textTransform="uppercase">{item.label}</Typography>
             <Typography className="tnum" fontSize={15} fontWeight={800}>{item.value}</Typography>

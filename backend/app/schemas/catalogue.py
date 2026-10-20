@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.precision import Decimal10
+
 TangibleScope = Literal["Drilling", "Completion", "Others"]
 MAX_RATE = Decimal("999999999999")
 MAX_UPLIFT = Decimal("100000")
@@ -159,8 +161,8 @@ class TangibleCreate(_Strict):
     manufacturer_id: str = Field(min_length=1, max_length=36)
     uom: str = Field(default="", max_length=50)
     po_number: str = Field(default="", max_length=100)
-    unit_rate: Decimal = Field(ge=0, le=MAX_RATE)
-    cost_uplift: Decimal = Field(default=Decimal("100"), ge=0, le=MAX_UPLIFT)
+    unit_rate: Decimal10 = Field(ge=0, le=MAX_RATE)
+    cost_uplift: Decimal10 = Field(default=Decimal("100"), ge=0, le=MAX_UPLIFT)
     currency: str = Field(min_length=1, max_length=10)
     effective_date: date | None = None
     description: str = Field(default="", max_length=500)
@@ -236,8 +238,8 @@ class DrillBitCreate(_Strict):
     iadc_code: str = Field(default="", max_length=20)
     serial_number: str = Field(default="", max_length=100)
     po_number: str = Field(default="", max_length=100)
-    unit_rate: Decimal = Field(ge=0, le=MAX_RATE)
-    cost_uplift: Decimal = Field(default=Decimal("100"), ge=0, le=MAX_UPLIFT)
+    unit_rate: Decimal10 = Field(ge=0, le=MAX_RATE)
+    cost_uplift: Decimal10 = Field(default=Decimal("100"), ge=0, le=MAX_UPLIFT)
     currency: str = Field(min_length=1, max_length=10)
     effective_date: date | None = None
     description: str = Field(default="", max_length=500)
@@ -316,7 +318,7 @@ class MudChemicalCreate(_Strict):
     manufacturer_id: str | None = Field(default=None, max_length=36)
     part_number: str = Field(default="", max_length=100)
     uom: str = Field(default="", max_length=50)
-    unit_rate: Decimal = Field(ge=0, le=MAX_RATE)
+    unit_rate: Decimal10 = Field(ge=0, le=MAX_RATE)
     currency: str = Field(min_length=1, max_length=10)
     po_number: str = Field(default="", max_length=100)
     effective_date: date | None = None
@@ -388,7 +390,7 @@ class CementAdditiveCreate(_Strict):
     manufacturer_id: str | None = Field(default=None, max_length=36)
     part_number: str = Field(default="", max_length=100)
     uom: str = Field(default="", max_length=50)
-    unit_rate: Decimal = Field(ge=0, le=MAX_RATE)
+    unit_rate: Decimal10 = Field(ge=0, le=MAX_RATE)
     currency: str = Field(min_length=1, max_length=10)
     po_number: str = Field(default="", max_length=100)
     effective_date: date | None = None
@@ -477,8 +479,8 @@ class FuelOut(BaseModel):
 
 
 class UpliftRevise(_Strict):
-    unit_rate: Decimal = Field(ge=0, le=MAX_RATE)
-    cost_uplift: Decimal = Field(ge=0, le=MAX_UPLIFT)
+    unit_rate: Decimal10 = Field(ge=0, le=MAX_RATE)
+    cost_uplift: Decimal10 = Field(ge=0, le=MAX_UPLIFT)
     currency: str = Field(min_length=1, max_length=10)
     po_number: str = Field(default="", max_length=100)
     effective_date: date | None = None
@@ -496,7 +498,7 @@ class UpliftRevise(_Strict):
 
 
 class UnitRevise(_Strict):
-    unit_rate: Decimal = Field(ge=0, le=MAX_RATE)
+    unit_rate: Decimal10 = Field(ge=0, le=MAX_RATE)
     currency: str = Field(min_length=1, max_length=10)
     po_number: str = Field(default="", max_length=100)
     effective_date: date | None = None
@@ -514,7 +516,7 @@ class UnitRevise(_Strict):
 
 
 class FuelRevise(_Strict):
-    unit_rate: Decimal = Field(ge=0, le=MAX_RATE)
+    unit_rate: Decimal10 = Field(ge=0, le=MAX_RATE)
     currency: str = Field(min_length=1, max_length=10)
     effective_date: date | None = None
     reason: str = Field(min_length=3, max_length=500)

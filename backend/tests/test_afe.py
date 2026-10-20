@@ -336,7 +336,7 @@ def test_engine_warns_when_currencies_are_mixed_and_rounds_half_up():
     tangible = engine_rules.TangibleLine(key="t", label="Centraliser", quantity=Decimal("3"), captured_rate=Decimal("1.005"), currency="USD")
     other = engine_rules.TangibleLine(key="o", label="Shoe", quantity=Decimal("1"), captured_rate=Decimal("10"), currency="EUR")
     result = engine_rules.compile_estimate(_scope(), tangibles=[tangible, other])
-    assert result.tangibles[0].amount == Decimal("3.02")  # 3.015 rounds half-up to 3.02
+    assert result.tangibles[0].amount == Decimal("3.0150000000")
     assert any("mixes currencies" in text for text in result.warnings)
 
 
@@ -394,23 +394,23 @@ def test_preview_prices_without_writing_and_save_round_trips_without_duplicates(
         preview = client.post(f"{url}/preview", headers=headers, json=payload)
         assert preview.status_code == 200, preview.text
         assert preview.json()["persisted"] is False
-        assert preview.json()["summary"]["total"] == "263500.00"
+        assert Decimal(preview.json()["summary"]["total"]) == Decimal("263500.00")
         assert client.get(url, headers=headers).json()["services"] == []  # preview wrote nothing
 
         saved = client.put(url, headers=headers, json=payload)
         assert saved.status_code == 200, saved.text
         first = saved.json()
         assert first["persisted"] is True
-        assert first["summary"]["total"] == "263500.00"
+        assert Decimal(first["summary"]["total"]) == Decimal("263500.00")
         assert len(first["services"]) == 1 and len(first["consumables"]) == 4 and len(first["tangibles"]) == 2
 
         again = client.put(url, headers=headers, json=payload)
         second = again.json()
         assert len(second["services"]) == 1 and len(second["consumables"]) == 4 and len(second["tangibles"]) == 2
-        assert second["summary"]["total"] == "263500.00"
+        assert Decimal(second["summary"]["total"]) == Decimal("263500.00")
 
         reloaded = client.get(url, headers=headers).json()
-        assert reloaded["summary"]["total"] == "263500.00"
+        assert Decimal(reloaded["summary"]["total"]) == Decimal("263500.00")
         assert [row["amount"] for row in reloaded["consumables"]] == [row["amount"] for row in second["consumables"]]
 
 
@@ -420,9 +420,9 @@ def test_day_rate_split_is_per_section_and_one_time_charges_stay_well_level():
         master, _, _, afe = _setup(client, headers)
         saved = client.put(f"/api/v1/afe/afes/{afe['id']}/estimate", headers=headers, json=_estimate_payload(master)).json()
         rows = {row["label"]: row for row in saved["summary"]["by_section"]}
-        assert rows["17-1/2 — Surface hole"]["services"] == "10000.00"
-        assert rows["12-1/4 — Intermediate hole"]["services"] == "30000.00"
-        assert rows["Well-level (not section-specific)"]["services"] == "5000.00"
+        assert Decimal(rows["17-1/2 — Surface hole"]["services"]) == Decimal("10000.00")
+        assert Decimal(rows["12-1/4 — Intermediate hole"]["services"]) == Decimal("30000.00")
+        assert Decimal(rows["Well-level (not section-specific)"]["services"]) == Decimal("5000.00")
         assert Decimal(rows["17-1/2 — Surface hole"]["planned_days"]) == Decimal("10")
         operation = [c for c in saved["services"][0]["components"] if c["category"] == "Operation"]
         assert {c["section_label"] for c in operation} == {"17-1/2 — Surface hole", "12-1/4 — Intermediate hole"}
@@ -435,9 +435,9 @@ def test_bit_override_uses_master_currency_and_lump_sums_round_trip_with_separat
         saved = client.put(f"/api/v1/afe/afes/{afe['id']}/estimate", headers=headers, json=_estimate_payload(master)).json()
         bit = next(row for row in saved["consumables"] if row["category"] == "Drill Bits")
         assert bit["currency"] == "USD"  # from the bit's master record, not typed by the user
-        assert Decimal(bit["effective_rate"]) == Decimal("90000") and bit["amount"] == "180000.00"
+        assert Decimal(bit["effective_rate"]) == Decimal("90000") and Decimal(bit["amount"]) == Decimal("180000.00")
         lumps = [row for row in saved["consumables"] if row["category"] == "Mud Chemicals"]
-        assert [row["estimated_amount"] for row in lumps] == ["20000.00", "5000.00"]
+        assert [Decimal(row["estimated_amount"]) for row in lumps] == [Decimal("20000.00"), Decimal("5000.00")]
         assert all(row["drill_bit_id"] is None and row["bit_code"] == "" for row in lumps)
         assert all(not row["warnings"] for row in lumps)
 
@@ -504,10 +504,10 @@ def test_per_section_and_per_service_lines_save_and_price_in_scope():
         saved = client.put(url, headers=headers, json=payload)
         assert saved.status_code == 200, saved.text
         body = saved.json()
-        assert body["summary"]["total"] == "8000.00"
+        assert Decimal(body["summary"]["total"]) == Decimal("8000.00")
         by_section = {row["label"]: row["services"] for row in body["summary"]["by_section"]}
-        assert by_section["17-1/2 — Surface hole"] == "2500.00"
-        assert by_section["12-1/4 — Intermediate hole"] == "5500.00"
+        assert Decimal(by_section["17-1/2 — Surface hole"]) == Decimal("2500.00")
+        assert Decimal(by_section["12-1/4 — Intermediate hole"]) == Decimal("5500.00")
 
 
 def test_status_moves_are_controlled_from_estimate_and_gated_by_permission():
@@ -764,7 +764,7 @@ def test_mixed_currency_estimate_needs_standard_currency_and_rates_then_converts
         assert unset["summary"]["total"] is None
         assert unset["summary"]["currency"]["standard_missing"] is True and unset["summary"]["currency"]["converted"] is False
         assert unset["summary"]["currency"]["currencies"] == ["EUR", "USD"]
-        assert {row["currency"]: row["amount"] for row in unset["summary"]["totals_by_currency"]} == {"EUR": "2000.00", "USD": "1000.00"}
+        assert {row["currency"]: Decimal(row["amount"]) for row in unset["summary"]["totals_by_currency"]} == {"EUR": Decimal("2000.00"), "USD": Decimal("1000.00")}
         assert any("mixes currencies" in text for text in unset["summary"]["warnings"])
         assert unset["afe"]["conversion_pending"] is True and unset["afe"]["total_cost"] is None
         refused = client.put(url, headers=headers, json=payload)
@@ -777,27 +777,29 @@ def test_mixed_currency_estimate_needs_standard_currency_and_rates_then_converts
 
         rated = {**payload, "standard_currency": "usd", "exchange_rates": [{"currency_code": "eur", "rate": "1.1"}]}
         preview = client.post(f"{url}/preview", headers=headers, json=rated).json()
-        assert preview["summary"]["total"] == "3200.00"  # 1000 USD + 2000 EUR x 1.1
-        assert preview["summary"]["services_total"] == "3200.00"
+        assert Decimal(preview["summary"]["total"]) == Decimal("3200.00")  # 1000 USD + 2000 EUR x 1.1
+        assert Decimal(preview["summary"]["services_total"]) == Decimal("3200.00")
         assert preview["summary"]["currency"]["standard_currency"] == "USD"
 
         saved = client.put(url, headers=headers, json=rated)
         assert saved.status_code == 200, saved.text
         body = saved.json()
-        assert body["summary"]["total"] == "3200.00" and body["afe"]["total_cost"] == "3200.00"
+        assert Decimal(body["summary"]["total"]) == Decimal("3200.00") and Decimal(body["afe"]["total_cost"]) == Decimal("3200.00")
         assert body["afe"]["standard_currency"] == "USD" and body["afe"]["conversion_pending"] is False
-        assert body["summary"]["currency"]["exchange_rates"] == [{"currency_code": "EUR", "rate": "1.100000"}]
+        assert body["summary"]["currency"]["exchange_rates"][0]["currency_code"] == "EUR"
+        assert Decimal(body["summary"]["currency"]["exchange_rates"][0]["rate"]) == Decimal("1.1")
         reloaded = client.get(url, headers=headers).json()
-        assert reloaded["summary"]["total"] == "3200.00"
+        assert Decimal(reloaded["summary"]["total"]) == Decimal("3200.00")
         by_section = {row["hole_section_id"]: row["services"] for row in reloaded["summary"]["by_section"]}
-        assert by_section[master["hole_2"]] == "3200.00"  # converted, not 1000 + 2000 as entered
-        assert by_section[master["hole_1"]] == "0.00"
+        assert Decimal(by_section[master["hole_2"]]) == Decimal("3200.00")  # converted, not 1000 + 2000 as entered
+        assert Decimal(by_section[master["hole_1"]]) == Decimal("0.00")
 
         updated = client.put(url, headers=headers, json={**rated, "exchange_rates": [{"currency_code": "EUR", "rate": "1.2"}]})
-        assert updated.json()["summary"]["total"] == "3400.00"  # the new rate replaces the saved one
+        assert Decimal(updated.json()["summary"]["total"]) == Decimal("3400.00")  # the new rate replaces the saved one
 
         overview = client.get("/api/v1/afe/overview", headers=headers).json()
-        assert overview["totals_by_currency"] == [{"currency": "USD", "amount": "3400.00"}]
+        assert overview["totals_by_currency"][0]["currency"] == "USD"
+        assert Decimal(overview["totals_by_currency"][0]["amount"]) == Decimal("3400.00")
         assert overview["conversion_pending_afes"] == 0
 
 
@@ -811,7 +813,7 @@ def test_single_currency_estimate_needs_no_rates_and_ignores_a_stored_standard()
         assert body["summary"]["currency"]["converted"] is True and body["summary"]["currency"]["multi_currency"] is False
         assert body["summary"]["currency"]["standard_currency"] == "USD"
         assert body["summary"]["currency"]["exchange_rates"] == []
-        assert body["summary"]["total"] == "1500.00"
+        assert Decimal(body["summary"]["total"]) == Decimal("1500.00")
         assert body["afe"]["standard_currency"] == "USD"
         dup = client.put(url, headers=headers, json={**payload, "exchange_rates": [{"currency_code": "EUR", "rate": "1"}, {"currency_code": "EUR", "rate": "2"}]})
         assert dup.status_code == 422
@@ -832,7 +834,7 @@ def test_scoped_plans_keep_rows_units_days_and_lifecycles_independent():
         saved = client.put(f"{url}/configuration", headers=headers, json=plan)
         assert saved.status_code == 200, saved.text
         assert saved.json()["scope"] == "completion"
-        assert saved.json()["total_days"] == "3.50"
+        assert Decimal(saved.json()["total_days"]) == Decimal("3.50")
         assert saved.json()["depth_unit"] == "ft"
         # Replacing Completion rows must not touch any Drilling row IDs or values.
         plan["sections"][0]["phases"][0]["days"] = "4"
@@ -890,13 +892,13 @@ def test_afe_prices_and_validates_only_the_selected_configuration_scope():
         payload = _estimate_payload(master, consumables=[], tangibles=[])
         saved = client.put(estimate_url, headers=headers, json=payload)
         assert saved.status_code == 200, saved.text
-        assert saved.json()["summary"]["total"] == "8500.00"  # 3.5 * 1000 + 5000
+        assert Decimal(saved.json()["summary"]["total"]) == Decimal("8500.00")  # 3.5 * 1000 + 5000
         assert saved.json()["well"]["scope"] == "completion"
         assert saved.json()["well"]["depth_unit"] == "ft"
         assert len(saved.json()["well"]["sections"]) == 1
-        assert client.get(estimate_url, headers=headers).json()["summary"]["total"] == "8500.00"
+        assert Decimal(client.get(estimate_url, headers=headers).json()["summary"]["total"]) == Decimal("8500.00")
         drilling_preview = client.post(f"/api/v1/afe/afes/{drilling['id']}/estimate/preview", headers=headers, json=payload)
-        assert drilling_preview.json()["summary"]["total"] == "45000.00"
+        assert Decimal(drilling_preview.json()["summary"]["total"]) == Decimal("45000.00")
         # A Drilling-only section is rejected for a Completion estimate.
         invalid = _estimate_payload(master, tangibles=[])
         assert client.post(f"{estimate_url}/preview", headers=headers, json=invalid).status_code == 422

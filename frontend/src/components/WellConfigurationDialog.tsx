@@ -174,12 +174,12 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
           depth_unit: depthUnit,
           sections: sections.map(section => ({
             hole_section_id: section.hole_section_id,
-            from_depth: Number(section.from_depth),
-            to_depth: Number(section.to_depth),
+            from_depth: section.from_depth,
+            to_depth: section.to_depth,
             remarks: section.remarks.trim(),
             phases: section.phases.map(phase => ({
               phase_id: phase.phase_id,
-              days: Number(phase.days),
+              days: phase.days,
               remarks: phase.remarks.trim(),
             })),
           })),
@@ -291,8 +291,8 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
                 {section.hole_section_id && !selectedSection && <MenuItem value={section.hole_section_id} disabled>Deleted or unavailable section · choose another</MenuItem>}
                 {options.hole_sections.map(option => <MenuItem key={option.id} value={option.id}>{option.code} — {option.name}</MenuItem>)}
               </TextField>
-              <TextField type="number" label={`From (${depthUnit})`} required value={section.from_depth} disabled={readOnly} inputProps={{ min: 0, step: .01 }} helperText={depthUnit === 'ft' && section.from_depth.trim() !== '' ? `= ${formatDepthMeters(section.from_depth, 'ft')}` : undefined} onChange={event => updateSection(section.key, { from_depth: event.target.value })}/>
-              <TextField type="number" label={`To (${depthUnit})`} required value={section.to_depth} disabled={readOnly} inputProps={{ min: 0, step: .01 }} helperText={depthUnit === 'ft' && section.to_depth.trim() !== '' ? `= ${formatDepthMeters(section.to_depth, 'ft')}` : undefined} onChange={event => updateSection(section.key, { to_depth: event.target.value })}/>
+              <TextField type="number" label={`From (${depthUnit})`} required value={section.from_depth} disabled={readOnly} inputProps={{ min: 0, step: .0000000001 }} helperText={depthUnit === 'ft' && section.from_depth.trim() !== '' ? `= ${formatDepthMeters(section.from_depth, 'ft')}` : 'Up to 10 decimal places.'} onChange={event => updateSection(section.key, { from_depth: event.target.value })}/>
+              <TextField type="number" label={`To (${depthUnit})`} required value={section.to_depth} disabled={readOnly} inputProps={{ min: 0, step: .0000000001 }} helperText={depthUnit === 'ft' && section.to_depth.trim() !== '' ? `= ${formatDepthMeters(section.to_depth, 'ft')}` : 'Up to 10 decimal places.'} onChange={event => updateSection(section.key, { to_depth: event.target.value })}/>
               <TextField label="Section remarks" value={section.remarks} disabled={readOnly} inputProps={{ maxLength: 1000 }} onChange={event => updateSection(section.key, { remarks: event.target.value })}/>
             </Box>
             <Divider sx={{ my: 1.6 }}/>
@@ -309,7 +309,7 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
                     {phase.phase_id && !selectedPhase && <MenuItem value={phase.phase_id} disabled>Deleted or unavailable phase · choose another</MenuItem>}
                     {options.phases.map(option => <MenuItem key={option.id} value={option.id}>{option.code} — {option.name}</MenuItem>)}
                   </TextField>
-                  <TextField type="number" label="Days" required value={phase.days} disabled={readOnly} inputProps={{ min: 0, step: .01 }} onChange={event => updatePhase(section.key, phase.key, { days: event.target.value })}/>
+                  <TextField type="number" label="Days" required value={phase.days} disabled={readOnly} inputProps={{ min: 0, step: .0000000001 }} helperText="Up to 10 decimal places." onChange={event => updatePhase(section.key, phase.key, { days: event.target.value })}/>
                   <TextField label="Phase remarks" value={phase.remarks} disabled={readOnly} inputProps={{ maxLength: 1000 }} onChange={event => updatePhase(section.key, phase.key, { remarks: event.target.value })}/>
                   {!readOnly && <Button color="error" size="small" aria-label="Remove phase" onClick={() => removePhase(section.key, phase.key)}><DeleteOutlineRounded fontSize="small"/></Button>}
                 </Box>

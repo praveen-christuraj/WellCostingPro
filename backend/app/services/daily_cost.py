@@ -61,14 +61,15 @@ from app.schemas.daily_cost import (
 from app.services import afe as afe_service
 from app.services import audit
 from app.models.catalogue import CatalogueOption
+from app.core.precision import DECIMAL_QUANT
 
-MONEY = Decimal("0.01")
-RATE = Decimal("0.0001")
-FX = Decimal("0.000001")
-# Every money column is Numeric(18, 2). PostgreSQL rejects anything larger with a
+MONEY = DECIMAL_QUANT
+RATE = DECIMAL_QUANT
+FX = DECIMAL_QUANT
+# Decimal ledger columns are Numeric(28, 10). PostgreSQL rejects anything larger with a
 # driver error, which would surface as an opaque 500, so the limit is checked here
 # and reported to the user as ordinary validation.
-MONEY_LIMIT = Decimal("9999999999999999.99")
+MONEY_LIMIT = Decimal("9999999999999999.9999999999")
 MAX_IMPORT_ERRORS = 100
 SERVICE_ONE_TIME = {"Mobilization", "Demobilization", "Fixed Charge"}
 SERVICE_DAY_BASED = {"Operation", "Standby", "Personnel-Operation", "Personnel-Standby", "Others"}

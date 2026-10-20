@@ -28,6 +28,7 @@ digraph WellCostingPro {
   "backend/app/core/config.py";
   "backend/app/core/database.py";
   "backend/app/core/migrations.py";
+  "backend/app/core/precision.py";
   "backend/app/core/security.py";
   "backend/app/core/units.py";
   "backend/app/domain/__init__.py";
@@ -266,6 +267,8 @@ digraph WellCostingPro {
   "backend/app/core/migrations.py" -> "backend/app/core/database.py";
   "backend/app/core/security.py" -> "backend/app/core/config.py";
   "backend/app/core/security.py" -> "backend/app/models/entities.py";
+  "backend/app/core/units.py" -> "backend/app/core/precision.py";
+  "backend/app/domain/afe_costing.py" -> "backend/app/core/precision.py";
   "backend/app/main.py" -> "backend/app/api/__init__.py";
   "backend/app/main.py" -> "backend/app/api/catalogue_items.py";
   "backend/app/main.py" -> "backend/app/api/catalogue_options.py";
@@ -308,8 +311,14 @@ digraph WellCostingPro {
   "backend/app/models/well_sub_activity.py" -> "backend/app/core/database.py";
   "backend/app/models/well_sub_activity.py" -> "backend/app/models/master_data.py";
   "backend/app/models/well_sub_activity.py" -> "backend/app/models/rig_well.py";
+  "backend/app/schemas/afe.py" -> "backend/app/core/precision.py";
   "backend/app/schemas/afe.py" -> "backend/app/domain/afe_costing.py";
+  "backend/app/schemas/catalogue.py" -> "backend/app/core/precision.py";
+  "backend/app/schemas/daily_cost.py" -> "backend/app/core/precision.py";
+  "backend/app/schemas/mud_cost.py" -> "backend/app/core/precision.py";
   "backend/app/schemas/mud_cost.py" -> "backend/app/domain/mud_cost.py";
+  "backend/app/schemas/rig_well.py" -> "backend/app/core/precision.py";
+  "backend/app/schemas/sow_adjustment.py" -> "backend/app/core/precision.py";
   "backend/app/seed.py" -> "backend/app/bootstrap.py";
   "backend/app/seed.py" -> "backend/app/core/migrations.py";
   "backend/app/seed.py" -> "backend/app/services/__init__.py";
@@ -332,6 +341,7 @@ digraph WellCostingPro {
   "backend/app/services/business_dashboard.py" -> "backend/app/schemas/business_dashboard.py";
   "backend/app/services/business_dashboard.py" -> "backend/app/services/__init__.py";
   "backend/app/services/business_dashboard.py" -> "backend/app/services/daily_cost.py";
+  "backend/app/services/catalogue.py" -> "backend/app/core/precision.py";
   "backend/app/services/catalogue.py" -> "backend/app/models/__init__.py";
   "backend/app/services/catalogue.py" -> "backend/app/models/catalogue.py";
   "backend/app/services/catalogue.py" -> "backend/app/schemas/catalogue.py";
@@ -340,6 +350,7 @@ digraph WellCostingPro {
   "backend/app/services/catalogue_specs.py" -> "backend/app/models/catalogue.py";
   "backend/app/services/catalogue_specs.py" -> "backend/app/schemas/catalogue.py";
   "backend/app/services/catalogue_specs.py" -> "backend/app/services/catalogue.py";
+  "backend/app/services/daily_cost.py" -> "backend/app/core/precision.py";
   "backend/app/services/daily_cost.py" -> "backend/app/core/units.py";
   "backend/app/services/daily_cost.py" -> "backend/app/models/__init__.py";
   "backend/app/services/daily_cost.py" -> "backend/app/models/catalogue.py";

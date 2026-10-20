@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.precision import Decimal10, Decimal10Days
+
 
 def _trim_required(value: Any) -> Any:
     return value.strip() if isinstance(value, str) else value
@@ -180,7 +182,7 @@ class WellOut(BaseModel):
 
 class ConfigurationPhaseIn(BaseModel):
     phase_id: str = Field(min_length=1, max_length=36)
-    days: Decimal = Field(ge=Decimal("0"), max_digits=12, decimal_places=2)
+    days: Decimal10Days = Field(ge=Decimal("0"))
     remarks: str = Field(default="", max_length=1000)
 
     model_config = ConfigDict(extra="forbid")
@@ -193,8 +195,8 @@ class ConfigurationPhaseIn(BaseModel):
 
 class ConfigurationSectionIn(BaseModel):
     hole_section_id: str = Field(min_length=1, max_length=36)
-    from_depth: Decimal = Field(ge=Decimal("0"), max_digits=18, decimal_places=2)
-    to_depth: Decimal = Field(ge=Decimal("0"), max_digits=18, decimal_places=2)
+    from_depth: Decimal10 = Field(ge=Decimal("0"))
+    to_depth: Decimal10 = Field(ge=Decimal("0"))
     remarks: str = Field(default="", max_length=1000)
     phases: list[ConfigurationPhaseIn] = Field(min_length=1, max_length=50)
 

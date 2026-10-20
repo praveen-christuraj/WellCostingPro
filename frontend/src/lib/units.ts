@@ -26,7 +26,7 @@ export function depthToMeters(
   const num = Number(value)
   if (!Number.isFinite(num)) return null
   const meters = normalizeDepthUnit(unit) === 'ft' ? num / FEET_PER_METER : num
-  return Math.round((meters + Number.EPSILON) * 100) / 100
+  return Math.round((meters + Number.EPSILON) * 10_000_000_000) / 10_000_000_000
 }
 
 export function formatDepthMeters(
@@ -35,5 +35,5 @@ export function formatDepthMeters(
 ): string {
   const meters = depthToMeters(value, unit)
   if (meters === null) return '—'
-  return `${meters.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m`
+  return `${meters.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 10 })} m`
 }

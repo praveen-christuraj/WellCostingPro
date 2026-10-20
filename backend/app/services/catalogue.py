@@ -39,11 +39,12 @@ from app.models.catalogue import (
     MudChemical,
     Tangible,
 )
+from app.core.precision import DECIMAL_QUANT
 from app.schemas.catalogue import PricedItemOverview, RateRevisionOut, BreakdownItem
 from app.services import audit
 from app.services.dependencies import assert_no_dependencies
 
-Q4 = Decimal("0.0001")
+Q4 = DECIMAL_QUANT
 DEFAULT_UPLIFT = Decimal("100")
 DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d/%m/%y", "%d-%m-%y", "%Y/%m/%d")
 

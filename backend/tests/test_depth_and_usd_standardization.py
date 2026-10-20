@@ -185,9 +185,9 @@ def test_mixed_ft_and_m_wells_last_entered_depth_and_usd_conversion_end_to_end()
         cfg_ft_data = cfg_ft.json()
         assert cfg_ft_data["depth_unit"] == "ft"
         assert cfg_ft_data["standard_depth_unit"] == "m"
-        assert cfg_ft_data["total_depth_m"] == "2000.00"
-        assert cfg_ft_data["sections"][0]["to_depth_m"] == "1000.00"
-        assert cfg_ft_data["sections"][1]["to_depth_m"] == "2000.00"
+        assert Decimal(cfg_ft_data["total_depth_m"]) == Decimal("2000.00")
+        assert Decimal(cfg_ft_data["sections"][0]["to_depth_m"]) == Decimal("1000.00")
+        assert Decimal(cfg_ft_data["sections"][1]["to_depth_m"]) == Decimal("2000.00")
         assert client.post(
             f"/api/v1/rig-well/wells/{well_ft['id']}/transition",
             headers=headers,
@@ -304,7 +304,7 @@ def test_mixed_ft_and_m_wells_last_entered_depth_and_usd_conversion_end_to_end()
         )
         assert save_afe_ft.status_code == 200, save_afe_ft.text
         assert save_afe_ft.json()["summary"]["currency"]["standard_currency"] == "USD"
-        assert save_afe_ft.json()["well"]["total_depth_m"] == "2000.00"
+        assert Decimal(save_afe_ft.json()["well"]["total_depth_m"]) == Decimal("2000.00")
 
         afe_m = client.post(
             "/api/v1/afe/afes",
@@ -447,14 +447,14 @@ def test_mixed_ft_and_m_wells_last_entered_depth_and_usd_conversion_end_to_end()
         assert saved_ft.status_code == 200, saved_ft.text
         saved_ft_body = saved_ft.json()
         # 1640.5 ft -> 500.00 m, 2624.8 ft -> 800.00 m, 2296.7 ft -> 700.00 m (LAST entered wins!).
-        assert saved_ft_body["services"][0]["actual_depth"] == "500.00"
-        assert saved_ft_body["consumables"][0]["actual_depth"] == "800.00"
-        assert saved_ft_body["other_expenses"][0]["actual_depth"] == "700.00"
-        assert saved_ft_body["entry"]["actual_depth"] == "700.00"
+        assert Decimal(saved_ft_body["services"][0]["actual_depth"]) == Decimal("500.00")
+        assert Decimal(saved_ft_body["consumables"][0]["actual_depth"]) == Decimal("800.00")
+        assert Decimal(saved_ft_body["other_expenses"][0]["actual_depth"]) == Decimal("700.00")
+        assert Decimal(saved_ft_body["entry"]["actual_depth"]) == Decimal("700.00")
         assert saved_ft_body["entry"]["depth_unit"] == "m"
         # 1000 USD service + 500 USD barite + 1100 USD (1000 EUR * 1.10) = 2600.00 USD
-        assert saved_ft_body["entry"]["total_cost"] == "2600.00"
-        assert saved_ft_body["entry"]["total_cost_usd"] == "2600.00"
+        assert Decimal(saved_ft_body["entry"]["total_cost"]) == Decimal("2600.00")
+        assert Decimal(saved_ft_body["entry"]["total_cost_usd"]) == Decimal("2600.00")
 
         # Import another row on the same sheet/date/section with 2952.9 ft (= 900.00 m) ->
         # verifies existing feet depths do NOT double-divide AND new imported depth becomes last-entered!
@@ -482,8 +482,8 @@ def test_mixed_ft_and_m_wells_last_entered_depth_and_usd_conversion_end_to_end()
         day_after_import = client.get(
             f"/api/v1/daily-cost/entries/{entry_ft_id}", headers=headers
         ).json()
-        assert day_after_import["services"][0]["actual_depth"] == "500.00"
-        assert day_after_import["entry"]["actual_depth"] == "900.00"
+        assert Decimal(day_after_import["services"][0]["actual_depth"]) == Decimal("500.00")
+        assert Decimal(day_after_import["entry"]["actual_depth"]) == Decimal("900.00")
 
         # Record GBP sheet on WELL-M with usd_exchange_rate=1.25 (800 GBP * 1.25 = 1000.00 USD) and 320 m depth.
         entry_m = client.post(
@@ -529,9 +529,9 @@ def test_mixed_ft_and_m_wells_last_entered_depth_and_usd_conversion_end_to_end()
             },
         )
         assert saved_m.status_code == 200, saved_m.text
-        assert saved_m.json()["entry"]["total_cost"] == "800.00"
-        assert saved_m.json()["entry"]["total_cost_usd"] == "1000.00"
-        assert saved_m.json()["entry"]["actual_depth"] == "320.00"
+        assert Decimal(saved_m.json()["entry"]["total_cost"]) == Decimal("800.00")
+        assert Decimal(saved_m.json()["entry"]["total_cost_usd"]) == Decimal("1000.00")
+        assert Decimal(saved_m.json()["entry"]["actual_depth"]) == Decimal("320.00")
 
         # Verify Business Dashboard:
         #   - Default currency is USD
@@ -547,17 +547,17 @@ def test_mixed_ft_and_m_wells_last_entered_depth_and_usd_conversion_end_to_end()
         assert all(alert["kind"] != "mixed_depth_units" for alert in dash_body["alerts"])
         assert all("different depth units" not in alert["title"] for alert in dash_body["alerts"])
         assert dash_body["kpis"]["depth_unit"] == "m"
-        assert dash_body["kpis"]["planned_depth"] == "2500.00"
-        assert dash_body["kpis"]["actual_depth"] == "1220.00"
-        assert dash_body["kpis"]["actual_amount"] == "3850.00"
+        assert Decimal(dash_body["kpis"]["planned_depth"]) == Decimal("2500.00")
+        assert Decimal(dash_body["kpis"]["actual_depth"]) == Decimal("1220.00")
+        assert Decimal(dash_body["kpis"]["actual_amount"]) == Decimal("3850.00")
 
         by_code = {row["well_code"]: row for row in dash_body["wells"]}
         assert by_code["WELL-FT"]["depth_unit"] == "m"
         assert by_code["WELL-FT"]["configured_depth_unit"] == "ft"
-        assert by_code["WELL-FT"]["planned_depth"] == "2000.00"
-        assert by_code["WELL-FT"]["actual_depth"] == "900.00"
-        assert by_code["WELL-FT"]["actual_amount"] == "2850.00"
+        assert Decimal(by_code["WELL-FT"]["planned_depth"]) == Decimal("2000.00")
+        assert Decimal(by_code["WELL-FT"]["actual_depth"]) == Decimal("900.00")
+        assert Decimal(by_code["WELL-FT"]["actual_amount"]) == Decimal("2850.00")
         assert by_code["WELL-M"]["depth_unit"] == "m"
-        assert by_code["WELL-M"]["planned_depth"] == "500.00"
-        assert by_code["WELL-M"]["actual_depth"] == "320.00"
-        assert by_code["WELL-M"]["actual_amount"] == "1000.00"
+        assert Decimal(by_code["WELL-M"]["planned_depth"]) == Decimal("500.00")
+        assert Decimal(by_code["WELL-M"]["actual_depth"]) == Decimal("320.00")
+        assert Decimal(by_code["WELL-M"]["actual_amount"]) == Decimal("1000.00")

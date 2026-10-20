@@ -19,7 +19,7 @@ Rules
   rate is the override when one is entered, otherwise the captured rate.
 * Sections and phases must come from the well configuration. Anything outside it
   is reported as a warning and is never silently priced into a section.
-* Money is rounded to 2 decimals (half-up) per component; days and rates to 4.
+* Entered and calculated decimals are retained to 10 places (half-up).
 * Currency. Every line keeps its entered currency. The estimate has one standard
   currency. When only one currency is detected, that currency is the standard and
   no rate is needed. When several are detected, a standard currency must be chosen
@@ -33,6 +33,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+
+from app.core.precision import DECIMAL_QUANT
 
 ONE_TIME_CATEGORIES: tuple[str, ...] = ("Mobilization", "Demobilization", "Fixed Charge")
 DAY_CATEGORIES: tuple[str, ...] = ("Operation", "Standby", "Personnel-Operation", "Personnel-Standby", "Others")
@@ -66,8 +68,8 @@ GROUP_TANGIBLES = "Tangibles"
 
 WELL_LEVEL_LABEL = "Well-level (not section-specific)"
 
-_MONEY = Decimal("0.01")
-_QTY = Decimal("0.0001")
+_MONEY = DECIMAL_QUANT
+_QTY = DECIMAL_QUANT
 
 
 def money(value: Decimal) -> Decimal:

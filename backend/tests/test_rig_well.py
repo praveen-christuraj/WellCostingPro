@@ -1,5 +1,6 @@
 import os
 import tempfile
+from decimal import Decimal
 
 # Set the database before importing app modules (the engine is constructed at import).
 _db_path = tempfile.mktemp(suffix=".sqlite3")
@@ -229,7 +230,7 @@ def test_configuration_uses_workspace_master_data_and_enforces_lifecycle_and_dep
         saved = client.put(f"/api/v1/rig-well/wells/{well['id']}/configuration", headers=headers, json=payload)
         assert saved.status_code == 200, saved.text
         assert saved.json()["total_depth"] == "500"
-        assert saved.json()["total_days"] == "6.50"
+        assert Decimal(saved.json()["total_days"]) == Decimal("6.50")
         assert [item["section_code"] for item in saved.json()["sections"]] == ["17-1/2", "12-1/4"]
 
         overlapping = {"depth_unit": "m", "sections": [section(hole["id"], "0", "100", "2"), section(second_hole["id"], "99", "500", "4")]}

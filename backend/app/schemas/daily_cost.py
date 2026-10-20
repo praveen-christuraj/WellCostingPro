@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.precision import Decimal10
+
 # Classification (Planned / UPA / NPT) is no longer entered on daily cost
 # lines: the Master Data Activity already carries that meaning, so every line's
 # classification is derived from its selected Activity. The type is kept only
@@ -67,7 +69,7 @@ class DailyCostEntryCreate(_Strict):
     afe_id: str = Field(min_length=1, max_length=36)
     cost_date: date
     remarks: str = Field(default="", max_length=1000)
-    usd_exchange_rate: Decimal | None = Field(default=None, gt=0, le=Decimal("999999"), max_digits=18, decimal_places=6)
+    usd_exchange_rate: Decimal10 | None = Field(default=None, gt=0, le=Decimal("999999"))
 
     @field_validator("well_id", "afe_id", "remarks", mode="before")
     @classmethod
@@ -97,13 +99,13 @@ class DailyCostLineInput(_Strict):
     sub_activity_id: str | None = Field(default=None, max_length=36)
     vendor_id: str | None = Field(default=None, max_length=36)
     party_name: str = Field(default="", max_length=200)
-    quantity: Decimal = Field(gt=0, le=Decimal("1000000"), max_digits=18, decimal_places=4)
+    quantity: Decimal10 = Field(gt=0, le=Decimal("1000000"))
     currency: str = Field(default="", max_length=10)
-    exchange_rate: Decimal | None = Field(default=None, gt=0, le=Decimal("999999"), max_digits=18, decimal_places=6)
-    actual_depth: Decimal | None = Field(default=None, ge=0, le=Decimal("999999999"), max_digits=18, decimal_places=4)
+    exchange_rate: Decimal10 | None = Field(default=None, gt=0, le=Decimal("999999"))
+    actual_depth: Decimal10 | None = Field(default=None, ge=0, le=Decimal("999999999"))
     actual_depth_unit: Literal["m", "ft"] = "m"
     depth_seq: int | None = None
-    override_rate: Decimal | None = Field(default=None, ge=0, le=MAX_RATE, max_digits=18, decimal_places=4)
+    override_rate: Decimal10 | None = Field(default=None, ge=0, le=MAX_RATE)
     override_reason: str = Field(default="", max_length=500)
     remarks: str = Field(default="", max_length=500)
 
@@ -189,7 +191,7 @@ class DailyCostOtherExpenseLineIn(DailyCostLineInput):
     expense_type: OtherExpenseType
     expense_description: str = Field(default="", max_length=300)
     quantity_unit: OtherExpenseUnit = "unit"
-    unit_rate: Decimal = Field(gt=0, le=MAX_RATE, max_digits=18, decimal_places=4)
+    unit_rate: Decimal10 = Field(gt=0, le=MAX_RATE)
 
     @field_validator("expense_description", mode="before")
     @classmethod
@@ -213,7 +215,7 @@ class DailyCostOtherExpenseLineIn(DailyCostLineInput):
 
 class DailyCostSaveIn(_Strict):
     remarks: str = Field(default="", max_length=1000)
-    usd_exchange_rate: Decimal | None = Field(default=None, gt=0, le=Decimal("999999"), max_digits=18, decimal_places=6)
+    usd_exchange_rate: Decimal10 | None = Field(default=None, gt=0, le=Decimal("999999"))
     services: list[DailyCostServiceLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
     consumables: list[DailyCostConsumableLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
     tangibles: list[DailyCostTangibleLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)

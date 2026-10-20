@@ -5,13 +5,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.precision import Decimal10
 from app.domain.mud_cost import MUD_COST_LINE_BY_CODE, MUD_COST_LINE_CODES
 
 MudCostCategory = Literal[
     "opening_stock", "receipt", "additions", "consumption_losses", "others", "closing_stock",
 ]
 MudCostBalanceView = Literal["daily", "monthly", "section", "inception"]
-MAX_QUANTITY = Decimal("999999999999999.999")
+MAX_QUANTITY = Decimal("999999999999999.9999999999")
 
 
 def _trim(value: Any) -> Any:
@@ -24,7 +25,7 @@ class _Strict(BaseModel):
 
 class MudCostLineIn(_Strict):
     line_code: str = Field(min_length=1, max_length=50)
-    amount: Decimal | None = Field(default=None, ge=0, le=MAX_QUANTITY, max_digits=18, decimal_places=3)
+    amount: Decimal10 | None = Field(default=None, ge=0, le=MAX_QUANTITY)
     remarks: str = Field(default="", max_length=500)
 
     @field_validator("line_code", "remarks", mode="before")

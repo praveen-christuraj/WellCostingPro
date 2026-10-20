@@ -1,5 +1,6 @@
 import os
 import tempfile
+from decimal import Decimal
 
 # Set the database before importing app modules (the engine is constructed at import).
 _db_path = tempfile.mktemp(suffix=".sqlite3")
@@ -141,7 +142,7 @@ def test_tangible_code_is_manual_and_final_cost_uses_uplift():
         assert body["tangible_code"] == "TNG-0001"
         assert body["currency"] == "USD"
         assert body["uom"] == "EA"
-        assert str(body["final_cost"]) in {"1500", "1500.0000"}
+        assert Decimal(body["final_cost"]) == Decimal("1500")
         assert body["category_name"] == "Casing Accessories"
         assert body["subcategory_name"] == "Centralisers"
         assert body["current_revision_number"] == 1
@@ -404,7 +405,7 @@ def test_fuel_has_fixed_types_and_only_price_updates():
 
         price = client.post(f"/api/v1/master-data/fuel-types/{diesel['id']}/revise", headers=headers, json={"unit_rate": "1.25", "currency": "USD", "effective_date": "2026-06-01", "reason": "Weekly index"})
         assert price.status_code == 200, price.text
-        assert price.json()["unit_rate"] in {"1.25", "1.2500"}
+        assert Decimal(price.json()["unit_rate"]) == Decimal("1.25")
         assert len(client.get(f"/api/v1/master-data/fuel-types/{diesel['id']}/revisions", headers=headers).json()) == 1
 
 
