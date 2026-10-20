@@ -9,6 +9,7 @@ digraph WellCostingPro {
   "backend/app/api/afe.py";
   "backend/app/api/audit.py";
   "backend/app/api/auth.py";
+  "backend/app/api/business_dashboard.py";
   "backend/app/api/catalogue_items.py";
   "backend/app/api/catalogue_options.py";
   "backend/app/api/costing_sets.py";
@@ -47,6 +48,7 @@ digraph WellCostingPro {
   "backend/app/models/well_sub_activity.py";
   "backend/app/schemas/__init__.py";
   "backend/app/schemas/afe.py";
+  "backend/app/schemas/business_dashboard.py";
   "backend/app/schemas/catalogue.py";
   "backend/app/schemas/costing_set.py";
   "backend/app/schemas/daily_cost.py";
@@ -62,6 +64,7 @@ digraph WellCostingPro {
   "backend/app/services/__init__.py";
   "backend/app/services/afe.py";
   "backend/app/services/audit.py";
+  "backend/app/services/business_dashboard.py";
   "backend/app/services/catalogue.py";
   "backend/app/services/catalogue_specs.py";
   "backend/app/services/console.py";
@@ -100,6 +103,7 @@ digraph WellCostingPro {
   "frontend/src/components/afe/ServiceLineDialog.tsx";
   "frontend/src/components/afe/SowAdjustmentDialog.tsx";
   "frontend/src/components/afe/TangibleLineDialog.tsx";
+  "frontend/src/components/business-dashboard/DrillThroughPanel.tsx";
   "frontend/src/components/catalogue/CatalogueItemRegister.tsx";
   "frontend/src/components/catalogue/FuelRegister.tsx";
   "frontend/src/components/catalogue/MasterSelect.tsx";
@@ -118,6 +122,7 @@ digraph WellCostingPro {
   "frontend/src/designSystem.ts";
   "frontend/src/lib/afe.ts";
   "frontend/src/lib/api.ts";
+  "frontend/src/lib/businessDashboard.ts";
   "frontend/src/lib/catalogue.ts";
   "frontend/src/lib/costingSets.ts";
   "frontend/src/lib/dailyCost.ts";
@@ -136,6 +141,7 @@ digraph WellCostingPro {
   "frontend/src/pages/AfeOverview.tsx";
   "frontend/src/pages/Assignments.tsx";
   "frontend/src/pages/AuditLog.tsx";
+  "frontend/src/pages/BusinessDashboard.tsx";
   "frontend/src/pages/CatalogueLists.tsx";
   "frontend/src/pages/Consumables.tsx";
   "frontend/src/pages/CostingSets.tsx";
@@ -179,6 +185,9 @@ digraph WellCostingPro {
   "backend/app/api/auth.py" -> "backend/app/models/__init__.py";
   "backend/app/api/auth.py" -> "backend/app/schemas/rbac.py";
   "backend/app/api/auth.py" -> "backend/app/services/__init__.py";
+  "backend/app/api/business_dashboard.py" -> "backend/app/api/deps.py";
+  "backend/app/api/business_dashboard.py" -> "backend/app/schemas/business_dashboard.py";
+  "backend/app/api/business_dashboard.py" -> "backend/app/services/__init__.py";
   "backend/app/api/catalogue_items.py" -> "backend/app/api/deps.py";
   "backend/app/api/catalogue_items.py" -> "backend/app/schemas/catalogue.py";
   "backend/app/api/catalogue_items.py" -> "backend/app/schemas/master_data.py";
@@ -314,6 +323,10 @@ digraph WellCostingPro {
   "backend/app/services/afe.py" -> "backend/app/services/__init__.py";
   "backend/app/services/afe.py" -> "backend/app/services/catalogue.py";
   "backend/app/services/audit.py" -> "backend/app/models/__init__.py";
+  "backend/app/services/business_dashboard.py" -> "backend/app/models/__init__.py";
+  "backend/app/services/business_dashboard.py" -> "backend/app/schemas/business_dashboard.py";
+  "backend/app/services/business_dashboard.py" -> "backend/app/services/__init__.py";
+  "backend/app/services/business_dashboard.py" -> "backend/app/services/daily_cost.py";
   "backend/app/services/catalogue.py" -> "backend/app/models/__init__.py";
   "backend/app/services/catalogue.py" -> "backend/app/models/catalogue.py";
   "backend/app/services/catalogue.py" -> "backend/app/schemas/catalogue.py";
@@ -354,6 +367,7 @@ digraph WellCostingPro {
   "frontend/src/App.tsx" -> "frontend/src/pages/AfeOverview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Assignments.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/AuditLog.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/pages/BusinessDashboard.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/CatalogueLists.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Consumables.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/CostingSets.tsx";
@@ -473,6 +487,10 @@ digraph WellCostingPro {
   "frontend/src/components/afe/TangibleLineDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/afe/TangibleLineDialog.tsx" -> "frontend/src/components/afe/LinePickers.tsx";
   "frontend/src/components/afe/TangibleLineDialog.tsx" -> "frontend/src/lib/afe.ts";
+  "frontend/src/components/business-dashboard/DrillThroughPanel.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/components/business-dashboard/DrillThroughPanel.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/components/business-dashboard/DrillThroughPanel.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/components/business-dashboard/DrillThroughPanel.tsx" -> "frontend/src/lib/businessDashboard.ts";
   "frontend/src/components/catalogue/CatalogueItemRegister.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/catalogue/CatalogueItemRegister.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/components/catalogue/CatalogueItemRegister.tsx" -> "frontend/src/components/ImportDialog.tsx";
@@ -559,6 +577,12 @@ digraph WellCostingPro {
   "frontend/src/pages/AuditLog.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/AuditLog.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/AuditLog.tsx" -> "frontend/src/lib/types.ts";
+  "frontend/src/pages/BusinessDashboard.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/pages/BusinessDashboard.tsx" -> "frontend/src/components/DataTable.tsx";
+  "frontend/src/pages/BusinessDashboard.tsx" -> "frontend/src/components/business-dashboard/DrillThroughPanel.tsx";
+  "frontend/src/pages/BusinessDashboard.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/BusinessDashboard.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/BusinessDashboard.tsx" -> "frontend/src/lib/businessDashboard.ts";
   "frontend/src/pages/CatalogueLists.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/CatalogueLists.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/CatalogueLists.tsx" -> "frontend/src/components/MasterDataTabs.tsx";

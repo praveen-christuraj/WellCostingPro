@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from app.api import afe, auth, audit, costing_sets, daily_cost, database_browser, master_data, mud_cost, rbac, rig_well, service_master, sow_adjustment, vendor_master
+from app.api import afe, auth, audit, business_dashboard, costing_sets, daily_cost, database_browser, master_data, mud_cost, rbac, rig_well, service_master, sow_adjustment, vendor_master
 from app.api.catalogue_items import ITEM_ROUTERS, catalogue_error_handler
 from app.api.catalogue_options import router as catalogue_options_router
 from app.services.catalogue import CatalogueError
@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[s.strip() for s in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(business_dashboard.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(database_browser.router, prefix="/api/v1")
 app.include_router(rbac.router, prefix="/api/v1")
