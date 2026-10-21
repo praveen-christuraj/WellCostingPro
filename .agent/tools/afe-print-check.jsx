@@ -72,6 +72,17 @@ assert.ok(pages[1].textContent.includes('Casing'), 'tangible name remains visibl
 assert.ok(pages[1].textContent.includes('1,000.13 m') && pages[1].textContent.includes('10.13 d') && pages[1].textContent.includes('1.13'), 'depths, days and quantities round to two decimals')
 assert.ok(!pages[0].textContent.includes('Authorisation') && pages[1].textContent.includes('Authorisation'), 'sign-off is kept with supporting detail')
 
+const orderedEstimate = structuredClone(estimate)
+orderedEstimate.services = [
+  { ...estimate.services[0], id: 'service-line10', service_code: 'SVC-10', service_name: 'Later service' },
+  { ...estimate.services[0], id: 'service-line2', service_code: 'SVC-2', service_name: 'Earlier service' },
+]
+await act(async () => root.render(<AfePrintSheet estimate={orderedEstimate}/>))
+const orderedRows = document.querySelectorAll('.ps-afe-summary tbody tr.ps-line')
+assert.deepEqual([...orderedRows].map(row => row.cells[1].querySelector('strong').textContent),
+  ['Earlier service', 'Later service'], 'services print in natural service-code order')
+assert.ok(!document.querySelector('.afe-cost-print-sheet').textContent.includes('SVC-2'), 'service codes remain hidden after ordering')
+
 const sectionEstimate = structuredClone(estimate)
 sectionEstimate.services = [
   { ...estimate.services[0], charging_basis: 'Per Section Rate', currency: 'EUR', service_amount: '0', amount: '175',
@@ -110,5 +121,5 @@ assert.ok(styles.includes('.afe-cost-print-sheet .ps-afe-dense'), 'large service
 
 await act(async () => root.unmount())
 dom.window.close()
-console.log('AFE print checks passed: name-only entities, two-decimal measurements, five-column service schedule, entered section rates, currency labels and compact two-page grouping.')
+console.log('AFE print checks passed: service-code ordering with name-only output, two-decimal measurements, five-column service schedule, entered section rates, currency labels and compact two-page grouping.')
 process.exit(0)

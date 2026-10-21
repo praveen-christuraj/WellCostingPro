@@ -59,6 +59,8 @@ function basisDetail(line: ServiceLineOut) {
 
 export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
   const { afe, well, services, consumables, tangibles, summary } = estimate
+  const printServices = [...services].sort((left, right) =>
+    left.service_code.localeCompare(right.service_code, undefined, { numeric: true, sensitivity: 'base' }))
   const standard = summary.currency.standard_currency
   const printedAt = new Date().toLocaleString()
   const multiCurrency = summary.currency.multi_currency
@@ -85,7 +87,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
 
   const lineCount = (count: number): string => (count ? `${count} line(s)` : 'no lines')
   // Multiple entered rates occupy multiple lines within Basis, even for one service.
-  const serviceDetailRows = services.reduce((count, line) => count + Math.max(1,
+  const serviceDetailRows = printServices.reduce((count, line) => count + Math.max(1,
     line.charging_basis === 'Per Section Rate' ? line.section_rates.length
       : line.charging_basis === 'Day Rate' ? line.rates.length : 1), 0)
 
@@ -147,7 +149,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
             </tr>
           </thead>
           <tbody>
-            {services.map((line, index) => (
+            {printServices.map((line, index) => (
               <tr className="ps-line" key={line.client_key ?? line.id ?? line.service_id}>
                 <td>{index + 1}</td>
                 <td><strong>{line.service_name}</strong><div className="ps-sub">{[line.provider_type, line.vendor_name || 'No vendor'].join(' · ')}</div></td>
