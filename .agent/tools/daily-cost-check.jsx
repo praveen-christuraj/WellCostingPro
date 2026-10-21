@@ -52,25 +52,30 @@ const second = { ...day, entry: { ...day.entry, id: 'd2', afe_id: 'afe2', afe_co
       { budget_key: 'consumable:Cement Additives', budget_kind: 'consumable_category', item_code: 'Cement Additives', item_name: 'Cement Additives allowance', cost_group: 'Consumables', planned: '1500', actual_to_date: '125', balance: '1375', is_planned: true },
       { budget_key: 'drill-bit:BIT-A', budget_kind: 'drill_bit', item_code: 'BIT-A', item_name: 'Bit Alpha', cost_group: 'Consumables', planned: '3000', actual_to_date: '800', balance: '2200', is_planned: true },
       { budget_key: 'drill-bit:BIT-B', budget_kind: 'drill_bit', item_code: 'BIT-B', item_name: 'Bit Beta', cost_group: 'Consumables', planned: '2500', actual_to_date: '700', balance: '1800', is_planned: true },
+      { budget_key: 'tangible:T1', budget_kind: 'tangible', item_code: 'T1', item_name: 'Casing', cost_group: 'Tangibles', planned: '4000', actual_to_date: '900', balance: '3100', is_planned: true },
     ] },
   services: [], other_expenses: [],
   consumables: [{ ...line, id: 'chemical1', currency: 'EUR', category: 'Mud Chemicals', item_code: 'BAR', item_name: 'Barite', uom: 'MT', quantity_unit: 'unit', override_rate: '50', override_reason: 'Justified daily override' }],
   tangibles: [{ ...line, id: 'tangible1', tangible_code: 'T1', tangible_name: 'Casing', uom: 'm' }],
 }
+day.entry.section_depths = [{ hole_section_id: 'section-1', section_code: 'SURFACE', section_name: 'Surface hole', actual_depth: '1234.567', depth_unit: 'm', entered_depth: '1234.567', entered_unit: 'm', daily_cost_code: 'DC-1' }]
+second.entry.section_depths = day.entry.section_depths
+const mudReconciliation = { currency: 'EUR', sections: [{ section_id: 'section-1', hole_section_id: 'section-1', section_label: 'SURFACE · Surface hole', mud_type: 'OBM', additions: '60', total_mud: '90', consumption_losses: '15', cost_per_bbl: '12.5', reconciled_cost: '187.5', actual_cost: '200' }] }
+const mudBalance = { view: 'section', rows: [{ section_id: 'section-1', opening_stock: '20', receipt: '30', additions: '60', consumption_losses: '15', closing_stock: '95' }] }
 const root = createRoot(document.getElementById('root'))
-await act(async () => root.render(<DailyCostPrintSheet report={{ title: 'Well costing sheet', period: 'Inception to date', days: [day, second] }}/>))
+await act(async () => root.render(<DailyCostPrintSheet report={{ title: 'Well costing sheet', period: 'Inception to date', days: [day, second], mudReconciliation, mudBalance, milestoneLabel: 'Side track on date / time' }}/>))
 let sheet = document.querySelector('.afe-print-sheet')
 assert.ok(sheet, 'print sheet is a body portal')
 assert.equal(sheet.parentElement, document.body)
 assert.ok(sheet.classList.contains('daily-cost-print-sheet'), 'daily costing opts into the landscape report page')
 assert.ok(sheet.querySelector('.daily-report-cover'), 'the model-report summary is page one')
-assert.ok(sheet.querySelector('.daily-report-details'), 'the retained detailed schedules follow the cover')
+assert.ok(sheet.querySelector('.daily-report-details'), 'cumulative schedules follow the cover')
 const coverPanels = sheet.querySelectorAll('.daily-report-cover .dcr-cost-panel')
 const serviceNames = [...coverPanels[0].querySelectorAll('tbody tr')].map(row => row.cells[0].textContent)
 assert.deepEqual(serviceNames, ['Mud logging', 'Directional drilling'], 'services follow hidden natural service-code order')
 const consumableRows = [...coverPanels[1].querySelectorAll('tbody tr')]
 const consumableNames = consumableRows.map(row => row.cells[0].textContent)
-assert.deepEqual(consumableNames, ['Fuel', 'Mud Chemicals', 'Cement Additives', 'Drill Bits'], 'consumables print category totals only')
+assert.deepEqual(consumableNames, ['Mud Chemicals', 'Cement Additives', 'Fuel', 'Drill Bits'], 'consumables print the four fixed category totals only')
 assert.equal(consumableNames.filter(name => name === 'Drill Bits').length, 1, 'drill bits print as one cumulative row')
 const drillBitsRow = consumableRows.find(row => row.cells[0].textContent === 'Drill Bits')
 assert.ok(drillBitsRow.textContent.includes('EUR 5,500.00') && drillBitsRow.textContent.includes('EUR 1,500.00'), 'drill bit AFE and actual values are cumulative')
@@ -83,28 +88,21 @@ for (const heading of [
   'Mud chemical cost · section-wise', 'Consumption / losses · cumulative', 'Mud cost analysis · section / mud type',
   'NPT summary', 'UPA summary',
 ]) assert.ok(sheet.textContent.includes(heading), `cover prints ${heading}`)
-assert.ok(sheet.textContent.includes('Row 119 notes'), 'all 120 rows print, no grid pagination')
+assert.ok(sheet.textContent.includes('Side track on date / time'), 'the report prints the user-edited milestone label')
+assert.ok(!sheet.textContent.includes('Row 119 notes'), 'daily service-line breakdowns are omitted from cumulative reports')
+for (const heading of ['Service-wise cumulative cost', 'Consumables cumulative cost · four categories', 'Tangibles cumulative cost · item-wise']) {
+  assert.ok(sheet.textContent.includes(heading), `cumulative pages print ${heading}`)
+}
+const matrix = sheet.querySelector('.dcr-mud-analysis')
+for (const text of ['Surface hole', 'OBM', 'Opening Stock', 'Receipt', 'Additions', 'Total Mud', 'Losses', 'Closing Stock', 'Meterage (current depth)', 'Cost / BBL', 'Reconciled Cost', '20.00', '30.00', '60.00', '90.00', '15.00', '95.00', '1,234.57 m', 'EUR 12.50', 'EUR 187.50']) {
+  assert.ok(matrix.textContent.includes(text), `mud matrix prints ${text}`)
+}
 for (const code of ['DC-1', 'DC-2', 'AFE-1', 'AFE-2', 'WELL-1', 'RIG-1', 'SVC', 'SURFACE', 'DRL', 'DRILL', 'SA1', 'V1', 'T1', 'BAR']) {
   assert.ok(!sheet.textContent.includes(code), `${code} is omitted in favour of its name`)
 }
-assert.ok(sheet.textContent.includes('1,234.57 m') && sheet.textContent.includes('12.13 hours') && sheet.textContent.includes('FX 1.00'), 'depth, quantity and FX values round to two decimals')
-assert.equal(sheet.querySelectorAll('.ps-total').length, 2, 'separate AFE/currency totals')
-assert.ok(sheet.querySelector('.ps-total').textContent.includes('USD 6,000.00'))
-assert.ok(sheet.querySelectorAll('.ps-total')[1].textContent.includes('EUR 100.00'))
-for (const text of ['Services (120)', 'Consumables (1)', 'Tangibles (1)', 'Barite', 'Casing', 'Rate trace:', 'FX 1.00', 'Justified daily override', 'AFE budget reconciliation', 'Includes draft actuals', '<script>unsafe</script>',
-  // Other expenses print as their own section and as their own deduction from the AFE.
-  '6. Other expenses (LIH, hole problems and similar charges) (1)', 'Lost In Hole (LIH) · Three joints of BHA left in hole',
-  'Drill collar lost in hole on tripping', 'Remarks (mandatory):', 'Daily other expenses', '1 line(s)',
-  'Less other expenses to sheet date', 'Services, consumables and tangibles to sheet date', 'Other expenses (Lost In Hole, hole problems, claims) carry no AFE allowance',
-  'Other expenses', 'Lost In Hole (LIH) · unbudgeted']) {
-  assert.ok(sheet.textContent.includes(text), `prints ${text}`)
-}
+assert.ok(sheet.textContent.includes('1,234.57 m'), 'printed depth rounds to two decimals')
+assert.ok(sheet.textContent.includes('Casing') && sheet.textContent.includes('EUR 900.00'), 'tangible items and cumulative prices print')
 assert.equal(sheet.querySelector('script'), null, 'remarks remain escaped')
-assert.ok(sheet.textContent.includes('6. Other expenses (LIH, hole problems and similar charges) (0)'), 'a day without unexpected charges prints an empty section')
-assert.equal(sheet.querySelectorAll('.ps-empty').length, 4, 'the three empty groups and the empty other-expense group say so')
-// A single deduction is printed in the AFE register as well as in the day sheet.
-assert.ok(sheet.textContent.includes('Other expenses') && sheet.querySelector('.ps-total').textContent.includes('USD 3,000.00'), 'other expenses are a column of the AFE register')
-assert.ok(sheet.textContent.includes('USD 9,000.00'), 'the period total still adds the deduction into the day cost')
 let trigger
 function PrintHarness() { const hook = useCostPrint(); trigger = hook.print; return hook.printSheet }
 await act(async () => root.render(<PrintHarness/>))
@@ -114,12 +112,12 @@ window.print = () => {
   const printed = document.querySelector('.afe-print-sheet')
   assert.ok(printed.textContent.includes('Well one'), 'portal is mounted before window.print with the well name')
   const timePosition = printed.querySelector('.dcr-time').textContent
-  for (const text of ['Planned', '10.13 days', 'Actual from spud', '8.13 days', 'NPT', '2.00 days', 'UPA', '0.00 days']) {
+  for (const text of ['Planned', '10.13 days', 'Actual from spud', '8.13 days', 'Actual against planned activities', '6.13 days', 'NPT', '2.00 days', 'UPA', '0.00 days']) {
     assert.ok(timePosition.includes(text), `time position prints ${text}`)
   }
   assert.ok(!timePosition.includes('Variance') && !timePosition.includes('Sheets / status'), 'time position omits variance and sheet status')
 }
-await act(async () => trigger({ title: 'Daily sheet', period: 'Today', days: [day] }))
+await act(async () => trigger({ title: 'Daily sheet', period: 'Today', days: [day], milestoneLabel: 'Side track on date / time' }))
 assert.ok(printCalled)
 await act(async () => window.dispatchEvent(new Event('afterprint')))
 assert.equal(document.querySelector('.afe-print-sheet'), null, 'afterprint removes stale output')
@@ -132,8 +130,12 @@ for (const retained of ['New daily sheet', 'Well cost analysis', 'Filter by well
   assert.ok(register.includes(retained), `register retains ${retained}`)
 }
 const sheetPage = readFileSync('../frontend/src/pages/DailyCostSheet.tsx', 'utf8')
-for (const retained of ["'other_expenses'", 'Less other expenses', 'Other Expenses']) {
+for (const retained of ["'other_expenses'", 'Less other expenses', 'Other Expenses', 'Assign scope / depth / quantity', 'Milestone label in report', 'MudCostMaterialBalance']) {
   assert.ok(sheetPage.includes(retained), `day sheet retains ${retained}`)
+}
+const bulkDialog = readFileSync('../frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx', 'utf8')
+for (const retained of ['Set one depth for all', 'Actual depth', 'Depth unit', 'Set one quantity and unit for all', 'Charged quantity', 'Quantity unit']) {
+  assert.ok(bulkDialog.includes(retained), `bulk service editor exposes ${retained}`)
 }
 const analysis = readFileSync('../frontend/src/pages/DailyCostAnalysis.tsx', 'utf8')
 for (const retained of ["headerName: 'OTHER EXPENSES'", "name: 'Other expenses'", 'other_expenses']) {
@@ -145,7 +147,7 @@ assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog
 assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
 assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
-console.log('Daily cost checks passed: code-ordered/name-only services, category-only consumables with cumulative drill bits, cleaned allowance labels, two-decimal measurements, revised time position, landscape model-report cover, retained complete print sections with other-expense deduction, 120 rows, separate AFE/currency totals, escaped remarks, synchronous print portal, cleanup, list-only register, other-expense wiring on sheet and analysis.')
+console.log('Daily cost checks passed: bulk depth/quantity/unit controls, editable milestone label, planned-activity days, transposed mud matrix, code-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
 
 dom.window.close()
 process.exit(0)

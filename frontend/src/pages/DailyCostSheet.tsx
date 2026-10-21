@@ -28,7 +28,7 @@ import {
   type DailyCostSavePayload, type DailyCostServiceInput, type DailyQuantityUnit, type WellProgressScope,
   type ConsumableCategory, type ConsumableKind, type DailyCostWellSummary,
 } from '../lib/dailyCost'
-import type { MudCostReconciliation } from '../lib/mudCost'
+import type { MudCostMaterialBalance, MudCostReconciliation } from '../lib/mudCost'
 import { formatDepthMeters } from '../lib/units'
 import type { CostingSet, CostingSetGroup } from '../lib/costingSets'
 
@@ -64,6 +64,8 @@ function amountForRate(rate: string, quantity: string, unit: string, basis?: str
 
 export default function DailyCostSheet() {
   const { print, printSheet } = useCostPrint()
+  const [dailyPrintOpen, setDailyPrintOpen] = useState(false)
+  const [milestoneLabel, setMilestoneLabel] = useState('Spud date & time')
   const [printOpen, setPrintOpen] = useState(false)
   const [printBusy, setPrintBusy] = useState(false)
   const [printError, setPrintError] = useState('')
@@ -878,10 +880,14 @@ export default function DailyCostSheet() {
       const mudParams = new URLSearchParams({
         rig_id: entry.rig_id, well_id: entry.well_id, to: entry.cost_date, include_draft: 'true',
       })
-      const [overviewDays, summary, mudReconciliation] = await Promise.all([
+      const mudBalanceParams = new URLSearchParams({
+        rig_id: entry.rig_id, well_id: entry.well_id, view: 'section', to: entry.cost_date,
+      })
+      const [overviewDays, summary, mudReconciliation, mudBalance] = await Promise.all([
         api<DailyCostDay[]>(`/daily-cost/wells/${entry.well_id}/cost-report?${params}`).catch(() => [saved]),
         api<DailyCostWellSummary>(`/daily-cost/wells/${entry.well_id}/cost-summary?${params}`).catch(() => null),
         api<MudCostReconciliation>(`/mud-cost/reconciliation?${mudParams}`).catch(() => null),
+        api<MudCostMaterialBalance>(`/mud-cost/material-balance?${mudBalanceParams}`).catch(() => null),
       ])
       await api('/daily-cost/export-audit', { method: 'POST', body: body({
         module: 'day-sheet', format: 'pdf', record_count: 1, entry_id: entry.id,
@@ -890,8 +896,10 @@ export default function DailyCostSheet() {
       const well = reference?.wells.find(item => item.id === entry.well_id)
       print({
         title: `Daily cost report · ${entry.well_name}`, period: displayDate(entry.cost_date), days: [saved],
-        overviewDays, summary, mudReconciliation, sections: well?.sections ?? baseline?.sections, reportKind: 'daily',
+        overviewDays, summary, mudReconciliation, mudBalance, sections: well?.sections ?? baseline?.sections,
+        reportKind: 'daily', milestoneLabel: milestoneLabel.trim() || 'Spud date & time',
       })
+      setDailyPrintOpen(false)
     } catch (caught) {
       setPrintError(caught instanceof Error ? caught.message : 'The daily sheet could not be printed')
     } finally { setPrintBusy(false) }
@@ -909,7 +917,7 @@ export default function DailyCostSheet() {
       subtitle={`${entry.well_code} · ${entry.well_name} · ${entry.rig_code} · ${entry.afe_code} ${entry.afe_name} · ${displayDate(entry.cost_date)}`}
       action={<Box display="flex" gap={1} flexWrap="wrap">
         {canExport && <>
-          <Tooltip title={dirty ? 'Save or discard changes before printing the saved daily sheet.' : 'Print the full saved daily sheet or save as PDF.'}><span><Button variant="outlined" startIcon={<PrintOutlined/>} disabled={dirty || saving || printBusy} onClick={() => void printDay()}>{printBusy ? 'Preparing print…' : 'Print daily sheet'}</Button></span></Tooltip>
+          <Tooltip title={dirty ? 'Save or discard changes before printing the saved daily sheet.' : 'Prepare the saved daily report and edit its milestone label.'}><span><Button variant="outlined" startIcon={<PrintOutlined/>} disabled={dirty || saving || printBusy} onClick={() => { setMilestoneLabel('Spud date & time'); setDailyPrintOpen(true) }}>{printBusy ? 'Preparing print…' : 'Print daily sheet'}</Button></span></Tooltip>
           <Button variant="outlined" startIcon={<PrintOutlined/>} onClick={() => setPrintOpen(true)}>Print well costing sheet</Button>
         </>}
         <Button component={RouterLink} to="/daily-cost" variant="outlined" startIcon={<ArrowBackRounded/>}>Register</Button>
@@ -1050,7 +1058,7 @@ export default function DailyCostSheet() {
         onExport={recordExport} onAdd={() => setLineEditor({ kind: 'service', index: null })} onImport={openImport}
         selectable selectedCount={selectedServiceLines.length} selectionResetKey={serviceSelectionResetKey}
         onSelectionChange={rows => setSelectedServiceIndices(rows.map(row => row.lineIndex))}
-        onBulkEdit={() => setBulkScopeOpen(true)} bulkEditLabel="Assign Activity / scope"
+        onBulkEdit={() => setBulkScopeOpen(true)} bulkEditLabel="Assign scope / depth / quantity"
         onAddFromSet={canReadCostingSets ? () => setSetPickerGroup('services') : undefined}
       />
       <LineGroup
@@ -1119,6 +1127,18 @@ export default function DailyCostSheet() {
 
     <ErrorMessage message={printError}/>
     {printSheet}
+    <FormDialog
+      open={dailyPrintOpen}
+      title="Print daily cost report"
+      subtitle="The report uses saved data and cumulative schedules. Edit only the milestone label when this report represents a side track or another operational milestone."
+      onClose={() => setDailyPrintOpen(false)}
+      onSubmit={() => void printDay()}
+      submitLabel="Print daily report"
+      busy={printBusy}
+    >
+      <TextField fullWidth label="Milestone label in report" value={milestoneLabel} onChange={event => setMilestoneLabel(event.target.value)} inputProps={{ maxLength: 80 }} helperText="For example: Side track on date / time. The recorded date and time are not changed."/>
+      <ErrorMessage message={printError}/>
+    </FormDialog>
     <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={entry.well_id}/>
 
     <DailyCostBulkScopeDialog

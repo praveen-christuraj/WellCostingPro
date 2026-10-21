@@ -5,7 +5,7 @@ import { api, body } from '../../lib/api'
 import {
   displayDate, localToday, type DailyCostDay, type DailyCostWellOption, type DailyCostWellSummary,
 } from '../../lib/dailyCost'
-import type { MudCostReconciliation } from '../../lib/mudCost'
+import type { MudCostMaterialBalance, MudCostReconciliation } from '../../lib/mudCost'
 import { useCostPrint } from './DailyCostPrintSheet'
 
 export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }: {
@@ -16,11 +16,12 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState(localToday())
   const [includeDraft, setIncludeDraft] = useState(true)
+  const [milestoneLabel, setMilestoneLabel] = useState('Spud date & time')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const { print, printSheet } = useCostPrint()
   useEffect(() => {
-    if (open) { setWellId(initialWellId); setError(''); setDateTo(localToday()) }
+    if (open) { setWellId(initialWellId); setError(''); setDateTo(localToday()); setMilestoneLabel('Spud date & time') }
   }, [open, initialWellId])
   const invalidRange = mode === 'range' && (!dateFrom || !dateTo || dateFrom > dateTo)
   const submit = async () => {
@@ -36,13 +37,18 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
         rig_id: well?.rig_id ?? '', well_id: wellId, to, include_draft: String(includeDraft),
       })
       if (mode === 'range') mudParams.set('from', dateFrom)
-      const [days, summary, mudReconciliation] = await Promise.all([
+      const mudBalanceParams = new URLSearchParams({ rig_id: well?.rig_id ?? '', well_id: wellId, view: 'section', to })
+      if (mode === 'range') mudBalanceParams.set('from', dateFrom)
+      const [days, summary, mudReconciliation, mudBalance] = await Promise.all([
         api<DailyCostDay[]>(`/daily-cost/wells/${wellId}/cost-report?${params}`),
         // A mixed-standard-currency well cannot expose one combined summary;
         // retain the existing per-AFE/currency print path in that case.
         api<DailyCostWellSummary>(`/daily-cost/wells/${wellId}/cost-summary?${params}`).catch(() => null),
         well?.rig_id
           ? api<MudCostReconciliation>(`/mud-cost/reconciliation?${mudParams}`).catch(() => null)
+          : Promise.resolve(null),
+        well?.rig_id
+          ? api<MudCostMaterialBalance>(`/mud-cost/material-balance?${mudBalanceParams}`).catch(() => null)
           : Promise.resolve(null),
       ])
       if (!days.length) { setError('No saved daily sheets match this well and period.'); return }
@@ -52,7 +58,8 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
       }) })
       print({ title: `Well cost report · ${well?.well_name ?? days[0].entry.well_name}`,
         period: `${mode === 'range' ? displayDate(dateFrom) : 'Inception (first recorded cost)'} to ${displayDate(to)} · ${includeDraft ? 'Draft and submitted sheets' : 'Submitted sheets only'}`,
-        days, overviewDays: days, summary, mudReconciliation, sections: well?.sections, reportKind: 'well' })
+        days, overviewDays: days, summary, mudReconciliation, mudBalance, sections: well?.sections,
+        reportKind: 'well', milestoneLabel: milestoneLabel.trim() || 'Spud date & time' })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The costing sheet could not be printed')
     } finally { setBusy(false) }
@@ -73,6 +80,7 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
           {invalidRange && <Alert severity="warning">Choose both dates with the start on or before the end date.</Alert>}
         </Box>}
         <FormControlLabel control={<Switch checked={includeDraft} onChange={event => setIncludeDraft(event.target.checked)}/>} label="Include draft sheets"/>
+        <TextField label="Milestone label in report" value={milestoneLabel} onChange={event => setMilestoneLabel(event.target.value)} inputProps={{ maxLength: 80 }} helperText="Edit the label when the milestone should read, for example, “Side track on date / time”. The recorded milestone date and time are unchanged."/>
         <ErrorMessage message={error}/>
       </Box>
     </FormDialog>

@@ -297,7 +297,7 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
 
   /* Daily and whole-well costing reports use the uploaded model's landscape
      information architecture. The first sheet is the operational summary;
-     the complete pre-existing schedules always start on page two. */
+     cumulative service/category/item schedules start on page two. */
   @page daily-cost-report {
     size: A4 landscape;
     margin: 4mm;
@@ -372,6 +372,9 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-mud-analysis th,
   .daily-cost-print-sheet .dcr-mud-analysis td { padding: .42mm .32mm; }
   .daily-cost-print-sheet .dcr-mud-analysis thead th { font-size: 4.55pt; }
+  .daily-cost-print-sheet .dcr-mud-analysis thead th:first-child { width: 34%; }
+  .daily-cost-print-sheet .dcr-mud-analysis thead th span { display: block; margin-top: .25mm; color: #4A6F96; font-size: 4.2pt; }
+  .daily-cost-print-sheet .dcr-mud-analysis tbody th { text-align: left; }
   .daily-cost-print-sheet .dcr-incident table { font-size: 5.2pt; }
   .daily-cost-print-sheet .dcr-incident th:nth-child(1) { width: 21%; }
   .daily-cost-print-sheet .dcr-incident th:nth-child(2) { width: 9%; }
@@ -384,6 +387,12 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .daily-report-details table { font-size: 6.7pt; }
   .daily-cost-print-sheet .daily-report-details th,
   .daily-cost-print-sheet .daily-report-details td { padding: .6mm .75mm; }
+  .daily-cost-print-sheet .dcr-cumulative-scope > h1 { margin: 0 0 2mm; font-size: 10pt; }
+  .daily-cost-print-sheet .dcr-cumulative-scope + .dcr-cumulative-scope { break-before: page; }
+  .daily-cost-print-sheet .dcr-cumulative-section { break-inside: auto; margin-bottom: 3mm; }
+  .daily-cost-print-sheet .dcr-cumulative-section h2 { break-after: avoid; margin-top: 0; }
+  .daily-cost-print-sheet .dcr-cumulative-section thead { display: table-header-group; }
+  .daily-cost-print-sheet .dcr-cumulative-section th:first-child { width: 44%; }
 }
 
 /* AG Grid empty state (DataTable sets this as the no-rows overlay). */

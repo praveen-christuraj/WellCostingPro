@@ -20,9 +20,11 @@ import {
   type DailyCostServiceInput,
   type DailyQuantityUnit,
 } from '../../lib/dailyCost'
+import type { DepthUnit } from '../../lib/units'
 
 type Selection = { index: number; line: DailyCostServiceInput }
 type ScopeMode = 'keep' | 'assign'
+type BulkFieldMode = 'keep' | 'assign'
 
 type Props = {
   open: boolean
@@ -54,6 +56,12 @@ export function DailyCostBulkScopeDialog({
   const [scopeMode, setScopeMode] = useState<ScopeMode>('keep')
   const [sectionId, setSectionId] = useState('')
   const [phaseId, setPhaseId] = useState('')
+  const [depthMode, setDepthMode] = useState<BulkFieldMode>('keep')
+  const [actualDepth, setActualDepth] = useState('')
+  const [actualDepthUnit, setActualDepthUnit] = useState<DepthUnit>('m')
+  const [quantityMode, setQuantityMode] = useState<BulkFieldMode>('keep')
+  const [quantity, setQuantity] = useState('')
+  const [quantityUnit, setQuantityUnit] = useState<DailyQuantityUnit>('days')
   const [error, setError] = useState('')
 
   const subActivities = useMemo(
@@ -76,11 +84,21 @@ export function DailyCostBulkScopeDialog({
     const commonSub = commonValue(selectedSubs)
     const commonSection = commonValue(selectedSections)
     const commonPhase = commonValue(selectedPhases)
+    const commonDepth = commonValue(selections.map(item => item.line.actual_depth ?? ''))
+    const commonDepthUnit = commonValue(selections.map(item => item.line.actual_depth_unit ?? 'm'))
+    const commonQuantity = commonValue(selections.map(item => item.line.quantity))
+    const commonQuantityUnit = commonValue(selections.map(item => item.line.quantity_unit))
     setActivityId(commonActivity ?? '')
     setSubActivityId(commonSub ?? '')
     setScopeMode('keep')
     setSectionId(commonSection ?? '')
     setPhaseId(commonPhase ?? '')
+    setDepthMode('keep')
+    setActualDepth(commonDepth ?? '')
+    setActualDepthUnit(commonDepthUnit ?? 'm')
+    setQuantityMode('keep')
+    setQuantity(commonQuantity ?? '')
+    setQuantityUnit(commonQuantityUnit ?? 'days')
     setError('')
   }, [open, selections])
 
@@ -111,6 +129,21 @@ export function DailyCostBulkScopeDialog({
     if (targetPhase && !sections.find(section => section.hole_section_id === targetSection)?.phases.some(phase => phase.phase_id === targetPhase)) {
       setError('Choose a phase that belongs to the selected section.'); return
     }
+    if (depthMode === 'assign') {
+      const depth = Number(actualDepth)
+      if (actualDepth.trim() === '' || !Number.isFinite(depth) || depth < 0) {
+        setError('Enter a valid non-negative actual depth for the selected service lines.'); return
+      }
+    }
+    if (quantityMode === 'assign') {
+      const chargedQuantity = Number(quantity)
+      if (quantity.trim() === '' || !Number.isFinite(chargedQuantity) || chargedQuantity <= 0 || chargedQuantity > 1_000_000) {
+        setError('Enter a charged quantity greater than zero and no more than 1,000,000.'); return
+      }
+      if (quantityUnit === 'hours' && chargedQuantity > 24) {
+        setError('Charged hours cannot exceed 24; enter the equivalent quantity in days instead.'); return
+      }
+    }
 
     const selectedIndexes = new Set(selections.map(item => item.index))
     const existingPairs = new Set<string>()
@@ -128,6 +161,10 @@ export function DailyCostBulkScopeDialog({
         sub_activity_id: selectedSub.id,
         hole_section_id: nextSection,
         phase_id: nextSection ? nextPhase : null,
+        actual_depth: depthMode === 'assign' ? actualDepth : line.actual_depth,
+        actual_depth_unit: depthMode === 'assign' ? actualDepthUnit : line.actual_depth_unit,
+        quantity: quantityMode === 'assign' ? quantity : line.quantity,
+        quantity_unit: quantityMode === 'assign' ? quantityUnit : line.quantity_unit,
         vendor_id: classification === 'Planned' ? null : line.vendor_id,
         party_name: classification === 'Planned'
           ? 'Not Applicable'
@@ -150,6 +187,11 @@ export function DailyCostBulkScopeDialog({
         targetLine.charge_category = (selectedRate.charge_category || 'Operation') as DailyCostServiceInput['charge_category']
         targetLine.quantity_unit = rateQuantityUnit(selectedRate.charging_basis, targetLine.charge_category)
         targetLine.currency = selectedRate.currency
+      }
+      // An explicit bulk quantity choice wins over the basis-derived default.
+      if (quantityMode === 'assign') {
+        targetLine.quantity = quantity
+        targetLine.quantity_unit = quantityUnit
       }
 
       if (selectedRate && selectedRate.service_id !== line.service_id) {
@@ -211,12 +253,14 @@ export function DailyCostBulkScopeDialog({
 
   const selectedSubIsValid = subActivities.some(item => item.id === subActivityId)
   const invalidScope = scopeMode === 'assign' && (requireSection && !sectionId || Boolean(phaseId && !sectionId))
-  const submitDisabled = !selections.length || !activityId || !selectedSubIsValid || invalidScope
+  const invalidDepth = depthMode === 'assign' && (actualDepth.trim() === '' || !Number.isFinite(Number(actualDepth)) || Number(actualDepth) < 0)
+  const invalidQuantity = quantityMode === 'assign' && (quantity.trim() === '' || !Number.isFinite(Number(quantity)) || Number(quantity) <= 0 || Number(quantity) > 1_000_000 || quantityUnit === 'hours' && Number(quantity) > 24)
+  const submitDisabled = !selections.length || !activityId || !selectedSubIsValid || invalidScope || invalidDepth || invalidQuantity
 
   return <FormDialog
     open={open}
     title={`Bulk edit ${selections.length} selected service line(s)`}
-    subtitle="Apply one Activity and well sub activity to the selected lines. Optionally assign the same section and phase; each line keeps its locked AFE rate and quantity."
+    subtitle="Apply one Activity and well sub activity to the selected lines. Optionally assign one scope, actual depth, charged quantity and unit; each line keeps its locked AFE rate."
     onClose={onClose}
     onSubmit={apply}
     submitLabel="Apply to selected lines"
@@ -253,6 +297,33 @@ export function DailyCostBulkScopeDialog({
         <TextField select label="Phase" value={phaseId} disabled={!sectionId} onChange={event => setPhaseId(event.target.value)} helperText={!sectionId ? 'Choose a section first.' : 'Optional; leave No phase to apply the whole section.'}>
           <MenuItem value="">No phase</MenuItem>
           {selectedSection?.phases.map(phase => <MenuItem key={phase.phase_id} value={phase.phase_id}>{phase.phase_code} · {phase.phase_name}</MenuItem>)}
+        </TextField>
+      </Box>}
+      <FormControl>
+        <FormLabel>Actual depth</FormLabel>
+        <RadioGroup row value={depthMode} onChange={event => setDepthMode(event.target.value as BulkFieldMode)}>
+          <FormControlLabel value="keep" control={<Radio size="small"/>} label="Keep each line’s current depth"/>
+          <FormControlLabel value="assign" control={<Radio size="small"/>} label="Set one depth for all"/>
+        </RadioGroup>
+      </FormControl>
+      {depthMode === 'assign' && <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+        <TextField required type="number" label="Actual depth" value={actualDepth} onChange={event => setActualDepth(event.target.value)} inputProps={{ min: 0, step: 'any' }} helperText="The last entered depth for the date and section governs the register."/>
+        <TextField select label="Depth unit" value={actualDepthUnit} onChange={event => setActualDepthUnit(event.target.value as DepthUnit)} helperText="Feet are standardized to metres using ft ÷ 3.281.">
+          <MenuItem value="m">Metres (m)</MenuItem>
+          <MenuItem value="ft">Feet (ft)</MenuItem>
+        </TextField>
+      </Box>}
+      <FormControl>
+        <FormLabel>Charged quantity and unit</FormLabel>
+        <RadioGroup row value={quantityMode} onChange={event => setQuantityMode(event.target.value as BulkFieldMode)}>
+          <FormControlLabel value="keep" control={<Radio size="small"/>} label="Keep each line’s current quantity"/>
+          <FormControlLabel value="assign" control={<Radio size="small"/>} label="Set one quantity and unit for all"/>
+        </RadioGroup>
+      </FormControl>
+      {quantityMode === 'assign' && <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+        <TextField required type="number" label="Charged quantity" value={quantity} onChange={event => setQuantity(event.target.value)} inputProps={{ min: 0.0000000001, max: 1_000_000, step: 'any' }} helperText={quantityUnit === 'hours' ? 'Maximum 24 hours per daily sheet.' : 'Applied to every selected service line.'}/>
+        <TextField select label="Quantity unit" value={quantityUnit} onChange={event => setQuantityUnit(event.target.value as DailyQuantityUnit)}>
+          {reference.quantity_units.map(unit => <MenuItem key={unit} value={unit}>{unit}</MenuItem>)}
         </TextField>
       </Box>}
       {error && <Alert severity="error">{error}</Alert>}

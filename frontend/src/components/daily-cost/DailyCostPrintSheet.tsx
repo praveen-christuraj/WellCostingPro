@@ -1,66 +1,32 @@
-import { Fragment, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import {
-  dailyMoney, displayDate, type DailyCostDay, type DailyCostLineOutput, type DailyCostSectionOption,
+  dailyMoney, displayDate, type DailyCostComparisonLine, type DailyCostDay, type DailyCostLineOutput, type DailyCostSectionOption,
   type DailyCostWellSummary,
 } from '../../lib/dailyCost'
-import type { MudCostReconciliation } from '../../lib/mudCost'
+import type { MudCostMaterialBalance, MudCostReconciliation } from '../../lib/mudCost'
 import { depthToMeters } from '../../lib/units'
 
 export type CostPrintReport = {
   title: string
   period: string
   days: DailyCostDay[]
-  /** Cumulative rows used only by the model-report cover. Detail pages still use `days`. */
+  /** Cumulative saved rows used by the cover and the page-2 cumulative schedules. */
   overviewDays?: DailyCostDay[]
   summary?: DailyCostWellSummary | null
   mudReconciliation?: MudCostReconciliation | null
+  mudBalance?: MudCostMaterialBalance | null
   sections?: DailyCostSectionOption[]
   reportKind?: 'daily' | 'well'
+  milestoneLabel?: string
 }
 
-/** Reuses the existing AFE print layout: complete tables, not paginated grids. */
+/** Prints the model-based summary followed by cumulative schedules, never one page per day. */
 export function DailyCostPrintSheet({ report }: { report: CostPrintReport | null }) {
   if (!report) return null
-  const groups = new Map<string, DailyCostDay[]>()
-  for (const day of report.days) {
-    const key = `${day.entry.afe_id}:${day.entry.standard_currency}`
-    groups.set(key, [...(groups.get(key) ?? []), day])
-  }
   return createPortal(<article className="afe-print-sheet daily-cost-print-sheet" aria-hidden="true">
     <ReportCover report={report}/>
-    <div className="daily-report-details">
-    <header>
-      <div className="ps-eyebrow">WellCosting Pro · saved cost records</div>
-      <h1>{report.title}</h1>
-      <p>{report.period} · Printed {new Date().toLocaleString()}</p>
-      <p>Draft sheets are identified below. Native amounts use the captured FX rate to reconcile to each AFE's standard currency. No amounts are combined across wells, AFEs or standard currencies.</p>
-    </header>
-    <section>
-      <h2>Costing register · totals by AFE and currency for this report period</h2>
-      {[...groups.entries()].map(([key, days]) => {
-        const entry = days[0].entry
-        const sum = (field: 'total_cost' | 'services_total' | 'consumables_total' | 'tangibles_total' | 'other_expenses_total') =>
-          dailyMoney(days.reduce((total, day) => total + Number(day.entry[field]), 0), entry.standard_currency)
-        return <Fragment key={key}>
-          <h3>{entry.well_name} · {entry.afe_name} ({entry.standard_currency})</h3>
-          <table><thead><tr><th>Date / daily sheet</th><th>Status</th><th>Actual depth (m)</th><th>Services</th><th>Consumables</th><th>Tangibles</th><th>Other expenses</th><th>Total</th><th>USD Total</th></tr></thead>
-            <tbody>{days.map(day => <tr key={day.entry.id}>
-              <td>{displayDate(day.entry.cost_date)}</td><td>{day.entry.status}</td>
-              <td className="num">{depthText(day.entry.actual_depth, 'm')}</td>
-              <td className="num">{dailyMoney(day.entry.services_total, entry.standard_currency)}</td>
-              <td className="num">{dailyMoney(day.entry.consumables_total, entry.standard_currency)}</td>
-              <td className="num">{dailyMoney(day.entry.tangibles_total, entry.standard_currency)}</td>
-              <td className="num">{dailyMoney(day.entry.other_expenses_total, entry.standard_currency)}</td>
-              <td className="num">{dailyMoney(day.entry.total_cost, entry.standard_currency)}</td>
-              <td className="num">{dailyMoney(day.entry.total_cost_usd ?? day.entry.total_cost, 'USD')}</td>
-            </tr>)}<tr className="ps-total"><th colSpan={3}>Period total · this AFE only</th><td className="num">{sum('services_total')}</td><td className="num">{sum('consumables_total')}</td><td className="num">{sum('tangibles_total')}</td><td className="num">{sum('other_expenses_total')}</td><td className="num">{sum('total_cost')}</td><td className="num">{dailyMoney(days.reduce((total, day) => total + Number(day.entry.total_cost_usd ?? day.entry.total_cost), 0), 'USD')}</td></tr></tbody>
-          </table>
-        </Fragment>
-      })}
-    </section>
-    {report.days.map(day => <DailySections key={day.entry.id} day={day}/>)}
-    </div>
+    <CumulativeReportDetails report={report}/>
   </article>, document.body)
 }
 
@@ -69,6 +35,11 @@ type CoverIncident = { label: string; days: number; amount: number; party: strin
 function asNumber(value: string | number | null | undefined) {
   const parsed = Number(value ?? 0)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+function optionalText(value: object, key: string) {
+  const candidate = (value as Record<string, unknown>)[key]
+  return typeof candidate === 'string' || typeof candidate === 'number' ? String(candidate) : undefined
 }
 
 function decimalText(value: string | number | null | undefined) {
@@ -95,6 +66,54 @@ function costName(label: string) {
     .replace(/\bMud Chemicals\s+allowance\b/gi, 'Mud Chemicals')
     .replace(/\bCement Additives\s+allowance\b/gi, 'Cement Additives')
     .trim()
+}
+
+const CONSUMABLE_ORDER = ['Mud Chemicals', 'Cement Additives', 'Fuel', 'Drill Bits'] as const
+
+function reportCostRows(budgetLines: DailyCostComparisonLine[]) {
+  const services = [...budgetLines]
+    .filter(line => line.cost_group === 'Services')
+    .sort((left, right) => left.item_code.localeCompare(right.item_code, undefined, { numeric: true, sensitivity: 'base' }))
+  const consumableGroups = new Map<string, DailyCostComparisonLine>()
+  for (const line of budgetLines.filter(item => item.cost_group === 'Consumables')) {
+    const source = `${line.budget_kind} ${line.budget_key} ${line.item_code} ${line.item_name}`.toLowerCase()
+    const category = source.includes('drill_bit') || source.includes('drill bit')
+      ? 'Drill Bits'
+      : source.includes('mud chemicals')
+        ? 'Mud Chemicals'
+        : source.includes('cement additives')
+          ? 'Cement Additives'
+          : source.includes('fuel')
+            ? 'Fuel'
+            : 'Other Consumables'
+    const current = consumableGroups.get(category)
+    const planned = asNumber(current?.planned) + asNumber(line.planned)
+    const actual = asNumber(current?.actual_to_date) + asNumber(line.actual_to_date)
+    consumableGroups.set(category, {
+      ...line,
+      budget_key: `consumable-summary:${category}`,
+      budget_kind: 'consumable_summary',
+      item_code: category,
+      item_name: category,
+      planned: String(planned),
+      actual_to_date: String(actual),
+      balance: String(planned - actual),
+      is_planned: Boolean(current?.is_planned || line.is_planned),
+    })
+  }
+  const example = budgetLines.find(line => line.cost_group === 'Consumables')
+  const consumables = CONSUMABLE_ORDER.map(category => consumableGroups.get(category) ?? {
+    budget_key: `consumable-summary:${category}`,
+    budget_kind: 'consumable_summary',
+    item_code: category,
+    item_name: category,
+    cost_group: 'Consumables' as const,
+    planned: '0', actual_to_date: '0', balance: '0', is_planned: Boolean(example?.is_planned),
+  })
+  const tangibles = [...budgetLines]
+    .filter(line => line.cost_group === 'Tangibles')
+    .sort((left, right) => left.item_name.localeCompare(right.item_name, undefined, { numeric: true, sensitivity: 'base' }))
+  return { services, consumables, tangibles }
 }
 
 function percent(actual: number, planned: number) {
@@ -140,46 +159,10 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   const currency = summary?.totals.currency || latest.entry.standard_currency
   const latestComparison = latest.comparison
   const budgetLines = summary?.budget_lines ?? latestComparison.budget_lines
-  // Service codes define the business order but remain hidden in the report.
-  const services = budgetLines
-    .filter(line => line.cost_group === 'Services')
-    .sort((left, right) => left.item_code.localeCompare(right.item_code, undefined, { numeric: true, sensitivity: 'base' }))
-    .slice(0, 8)
-  // Consumables are an executive category summary, never a list of chemicals,
-  // additives, fuel items or individual bits. Drill Bits is one cumulative row.
-  const consumableOrder = ['Fuel', 'Mud Chemicals', 'Cement Additives', 'Drill Bits']
-  const consumableGroups = new Map<string, typeof budgetLines[number]>()
-  for (const line of budgetLines.filter(item => item.cost_group === 'Consumables')) {
-    const source = `${line.budget_kind} ${line.budget_key} ${line.item_code} ${line.item_name}`.toLowerCase()
-    const category = source.includes('drill_bit') || source.includes('drill bit')
-      ? 'Drill Bits'
-      : source.includes('mud chemicals')
-        ? 'Mud Chemicals'
-        : source.includes('cement additives')
-          ? 'Cement Additives'
-          : source.includes('fuel')
-            ? 'Fuel'
-            : 'Other Consumables'
-    const current = consumableGroups.get(category)
-    const planned = asNumber(current?.planned) + asNumber(line.planned)
-    const actual = asNumber(current?.actual_to_date) + asNumber(line.actual_to_date)
-    consumableGroups.set(category, {
-      ...line,
-      budget_key: `consumable-summary:${category}`,
-      budget_kind: 'consumable_summary',
-      item_code: category,
-      item_name: category,
-      planned: String(planned),
-      actual_to_date: String(actual),
-      balance: String(planned - actual),
-      is_planned: Boolean(current?.is_planned || line.is_planned),
-    })
-  }
-  const consumables = [...consumableGroups.values()].sort((left, right) => {
-    const leftIndex = consumableOrder.indexOf(left.item_name)
-    const rightIndex = consumableOrder.indexOf(right.item_name)
-    return (leftIndex < 0 ? consumableOrder.length : leftIndex) - (rightIndex < 0 ? consumableOrder.length : rightIndex)
-  })
+  // Codes define business order but remain hidden; consumables are four category totals.
+  const costRows = reportCostRows(budgetLines)
+  const services = costRows.services.slice(0, 8)
+  const consumables = costRows.consumables
   const groupPosition = (group: 'Services' | 'Consumables' | 'Tangibles') => {
     if (summary) {
       const factor = summary.factors.find(item => item.dimension === 'cost_group')?.rows.find(row => row.code === group)
@@ -208,10 +191,26 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     hole_section_id: key, section_code: key, section_name: key, from_depth: '0', to_depth: depth, total_days: '0', phases: [],
   }))
   const mudSections = report.mudReconciliation?.sections ?? summary?.mud_cost?.sections ?? []
+  const mudBalances = new Map((report.mudBalance?.rows ?? []).map(row => [row.section_id, row]))
   const npt = incidentRows(coverDays, 'NPT')
   const upa = incidentRows(coverDays, 'UPA')
+  const nptDays = npt.reduce((sum, row) => sum + row.days, 0)
+  const upaDays = upa.reduce((sum, row) => sum + row.days, 0)
+  const plannedActivityDays = Math.max(0, actualDays - nptDays - upaDays)
   const printed = new Date().toLocaleString()
   const reportDate = summary?.as_of ?? latest.entry.cost_date
+  type MudSection = typeof mudSections[number]
+  const mudMatrixRows: { label: string; value: (row: MudSection) => string }[] = [
+    { label: 'Opening Stock', value: row => decimalText(mudBalances.get(row.section_id)?.opening_stock) },
+    { label: 'Receipt', value: row => decimalText(mudBalances.get(row.section_id)?.receipt) },
+    { label: 'Additions', value: row => decimalText(optionalText(row, 'additions') ?? mudBalances.get(row.section_id)?.additions) },
+    { label: 'Total Mud', value: row => decimalText(optionalText(row, 'total_mud') ?? asNumber(mudBalances.get(row.section_id)?.receipt) + asNumber(mudBalances.get(row.section_id)?.additions)) },
+    { label: 'Losses', value: row => decimalText(row.consumption_losses) },
+    { label: 'Closing Stock', value: row => decimalText(mudBalances.get(row.section_id)?.closing_stock) },
+    { label: 'Meterage (current depth)', value: row => depthText(sectionDepths.get(optionalText(row, 'hole_section_id') ?? row.section_id), 'm') },
+    { label: 'Cost / BBL', value: row => row.cost_per_bbl == null ? '—' : dailyMoney(row.cost_per_bbl, currency) },
+    { label: 'Reconciled Cost', value: row => row.reconciled_cost == null ? '—' : dailyMoney(row.reconciled_cost, currency) },
+  ]
 
   const CostTable = ({ title, rows, position }: {
     title: string; rows: typeof budgetLines; position: { planned: number; actual: number }
@@ -228,7 +227,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     <table><thead><tr><th>Activity</th><th>Days</th><th>Cost</th><th>Responsible party</th><th>Remarks</th></tr></thead>
       <tbody>{rows.slice(0, 4).map((row, index) => <tr key={`${row.label}-${index}`}><td>{row.label}</td><td className="num">{row.days ? decimalText(row.days) : '—'}</td><td className="num">{dailyMoney(row.amount, currency)}</td><td>{row.party}</td><td>{row.remarks}</td></tr>)}
       {!rows.length && <tr><td colSpan={5} className="dcr-none">No {title.split(' ')[0]} cost recorded.</td></tr>}</tbody>
-      <tfoot><tr><th>Total</th><th className="num">{decimalText(rows.reduce((sum, row) => sum + row.days, 0))}</th><th className="num">{dailyMoney(total, currency)}</th><th colSpan={2}>{rows.length > 4 ? `${rows.length - 4} additional incident(s) continue in the detailed pages.` : ''}</th></tr></tfoot>
+      <tfoot><tr><th>Total</th><th className="num">{decimalText(rows.reduce((sum, row) => sum + row.days, 0))}</th><th className="num">{dailyMoney(total, currency)}</th><th colSpan={2}>{rows.length > 4 ? `${rows.length - 4} additional incident(s) are included in this total.` : ''}</th></tr></tfoot>
     </table>
   </section>
 
@@ -240,9 +239,9 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     <div className="dcr-layout">
       <div className="dcr-main">
         <div className="dcr-topline">
-          <section className="dcr-panel dcr-milestone"><h2>Reporting milestone</h2><dl><dt>Spud date &amp; time</dt><dd>{spud ? `${spud.replace('T', ' ').slice(0, 16)} hrs` : 'Not recorded'}</dd><dt>Current report date</dt><dd>{displayDate(reportDate)} · 24:00 hrs</dd></dl></section>
+          <section className="dcr-panel dcr-milestone"><h2>Reporting milestone</h2><dl><dt>{report.milestoneLabel?.trim() || 'Spud date & time'}</dt><dd>{spud ? `${spud.replace('T', ' ').slice(0, 16)} hrs` : 'Not recorded'}</dd><dt>Current report date</dt><dd>{displayDate(reportDate)} · 24:00 hrs</dd></dl></section>
           <section className="dcr-panel dcr-depth"><h2>Section-wise planned depth &amp; current depth</h2><table><thead><tr><th>Section</th><th>Planned depth (m)</th><th>Current depth (m)</th></tr></thead><tbody>{sections.map(section => <tr key={section.hole_section_id}><td>{section.section_name}</td><td className="num">{depthText(section.to_depth, 'm')}</td><td className="num">{depthText(sectionDepths.get(section.hole_section_id), 'm')}</td></tr>)}</tbody></table></section>
-          <section className="dcr-panel dcr-time"><h2>Time position</h2><dl><dt>Planned</dt><dd>{decimalText(plannedDays)} days</dd><dt>Actual from spud</dt><dd>{decimalText(actualDays)} days</dd><dt>NPT</dt><dd>{decimalText(npt.reduce((sum, row) => sum + row.days, 0))} days</dd><dt>UPA</dt><dd>{decimalText(upa.reduce((sum, row) => sum + row.days, 0))} days</dd></dl></section>
+          <section className="dcr-panel dcr-time"><h2>Time position</h2><dl><dt>Planned</dt><dd>{decimalText(plannedDays)} days</dd><dt>Actual from spud</dt><dd>{decimalText(actualDays)} days</dd><dt>Actual against planned activities</dt><dd>{decimalText(plannedActivityDays)} days</dd><dt>NPT</dt><dd>{decimalText(nptDays)} days</dd><dt>UPA</dt><dd>{decimalText(upaDays)} days</dd></dl></section>
         </div>
         <CostTable title="Services cost · AFE vs cumulative actual" rows={services} position={servicePosition}/>
         <CostTable title="Consumables cost · AFE vs cumulative actual" rows={consumables} position={consumablePosition}/>
@@ -257,100 +256,57 @@ function ReportCover({ report }: { report: CostPrintReport }) {
         </div>
       </div>
       <aside className="dcr-side">
-        <section className="dcr-panel dcr-mud-analysis"><h2>Mud cost analysis · section / mud type</h2><table><thead><tr><th>Section</th><th>Mud</th><th>Receipt</th><th>Additions</th><th>Total mud</th><th>Loss</th><th>Balance</th><th>Cost / BBL</th><th>Reconciled</th></tr></thead><tbody>{mudSections.map(row => {
-          const receipt = 'extra_obm_received' in row ? asNumber(String(row.extra_obm_received ?? 0)) : 0
-          const additions = 'additions' in row ? asNumber(String(row.additions ?? 0)) : 0
-          const totalMud = 'total_mud' in row ? asNumber(String(row.total_mud ?? 0)) : receipt + additions
-          const losses = asNumber(row.consumption_losses)
-          return <tr key={row.section_id}><td>{nameOnly(row.section_label)}</td><td>{row.mud_type ?? '—'}</td><td className="num">{decimalText(receipt)}</td><td className="num">{decimalText(additions)}</td><td className="num">{decimalText(totalMud)}</td><td className="num">{decimalText(losses)}</td><td className="num">{decimalText(totalMud - losses)}</td><td className="num">{row.cost_per_bbl == null ? '—' : dailyMoney(row.cost_per_bbl, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : dailyMoney(row.reconciled_cost, currency)}</td></tr>
-        })}{!mudSections.length && <tr><td colSpan={9} className="dcr-none">No mud material-balance data for this reporting period.</td></tr>}</tbody></table></section>
+        <section className="dcr-panel dcr-mud-analysis"><h2>Mud cost analysis · section / mud type</h2><table><thead><tr><th>Measure</th>{mudSections.map(row => <th key={row.section_id}>{nameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
+          {mudMatrixRows.map(metric => <tr key={metric.label}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
+          {!mudSections.length && <tr><td colSpan={2} className="dcr-none">No mud material-balance data for this reporting period.</td></tr>}
+        </tbody></table></section>
         <IncidentTable title="NPT summary" rows={npt} total={asNumber(summary?.totals.npt ?? latestComparison.npt_to_date)}/>
         <IncidentTable title="UPA summary" rows={upa} total={asNumber(summary?.totals.upa ?? latestComparison.upa_to_date)}/>
       </aside>
     </div>
-    <footer className="dcr-footer"><span>Prepared from saved Daily Cost Management records · all figures in {currency}</span><span>Printed {printed} · detailed schedules begin on page 2</span></footer>
+    <footer className="dcr-footer"><span>Prepared from saved Daily Cost Management records · all figures in {currency}</span><span>Printed {printed} · cumulative schedules begin on page 2</span></footer>
   </section>
 }
 
-function DailySections({ day }: { day: DailyCostDay }) {
-  const { entry, comparison } = day
-  const money = (value: string) => dailyMoney(value, entry.standard_currency)
-  const milestone = (value: string | null) => (value ? `${value.replace('T', ' ').slice(0, 16)} hrs` : '—')
-  const progress = day.progress
-  return <section>
-    <h2>Daily cost · {displayDate(entry.cost_date)}</h2>
-    <h3>1. Well, AFE and daily sheet details</h3>
-    <table><tbody>
-      <tr><th>Well</th><td>{entry.well_name}</td><th>Rig</th><td>{entry.rig_name}</td></tr>
-      <tr><th>AFE</th><td>{entry.afe_name} ({entry.afe_status})</td><th>Sheet status</th><td>{entry.status} · {entry.standard_currency}{entry.is_deleted ? ` · Deleted ${entry.deleted_at}` : ''}</td></tr>
-      {progress && <>
-        <tr>
-          <th>Well spud date &amp; time ({progress.scope_label.toLowerCase()})</th><td>{milestone(progress.spud_at)}</td>
-          <th>{progress.progress_label}</th><td>{milestone(progress.progress_completed_at)}{progress.is_completed ? ' — day count stopped' : ''}</td>
-        </tr>
-        <tr>
-          <th>Actual days (from spud, to sheet date)</th><td>{decimalText(progress.actual_days)}</td>
-          <th>Planned days · difference (actual − planned)</th>
-          <td>{decimalText(progress.planned_days)} · {progress.days_variance === null ? '—' : `${Number(progress.days_variance) > 0 ? '+' : ''}${decimalText(progress.days_variance)}`}</td>
-        </tr>
-      </>}
-      <tr><th>Actual depth (standardized)</th><td>{depthText(entry.actual_depth, 'm')}</td><th>USD total (FX {decimalText(entry.usd_exchange_rate ?? '1')})</th><td>{dailyMoney(entry.total_cost_usd ?? entry.total_cost, 'USD')}</td></tr>
-      <tr><th>Budget locked</th><td>{entry.budget_baseline_locked_at}</td><th>Rates locked</th><td>{entry.rate_baseline_locked_at}</td></tr>
-      <tr><th>Created</th><td>{entry.created_at} · {entry.created_by}</td><th>Updated</th><td>{entry.updated_at} · {entry.updated_by}</td></tr>
-      <tr><th>Submitted</th><td>{entry.submitted_at || '—'} · {entry.submitted_by || '—'}</td><th>Status remarks</th><td>{entry.status_remarks || '—'}</td></tr>
-      <tr><th>Daily / shift remarks</th><td colSpan={3} className="ps-notes">{entry.remarks || '—'}</td></tr>
-    </tbody></table>
-    <h3>2. Daily actuals and this AFE's position as of {displayDate(comparison.effective_on)}</h3>
-    <table><tbody>
-      <tr><th>Daily actual</th><td>{money(entry.total_cost)}</td><th>Daily UPA / NPT (included in actual)</th><td>{money(entry.upa_total)} / {money(entry.npt_total)}</td></tr>
-      <tr><th>Daily other expenses</th><td>{money(entry.other_expenses_total)}</td><th>Other expenses on this sheet</th><td>{day.other_expenses.length} line(s)</td></tr>
-      <tr><th>Locked AFE budget</th><td>{money(comparison.planned_total)}</td><th>AFE actual to sheet date</th><td>{money(comparison.actual_to_date)}</td></tr>
-      <tr><th>Less other expenses to sheet date</th><td>{money(comparison.other_expenses_to_date)}</td><th>Services, consumables and tangibles to sheet date</th><td>{money(comparison.tracked_actual_to_date)}</td></tr>
-      <tr><th>AFE remaining</th><td>{money(comparison.balance)}</td><th>AFE UPA / NPT to sheet date</th><td>{money(comparison.upa_to_date)} / {money(comparison.npt_to_date)}</td></tr>
-    </tbody></table>
-    <p>Other expenses (Lost In Hole, hole problems, claims) carry no AFE allowance. They are recorded separately and deducted from the locked AFE total, which is why the remaining figure above is the AFE budget less every actual including those charges.</p>
-    <p>AFE reconciliation includes {comparison.includes_draft_entries ? 'draft and submitted' : 'submitted'} sheets through the sheet date, including records outside a selected report period.</p>
-    <PrintLines title="3. Services" lines={day.services} names={day.services.map(line => `${line.service_name} · ${line.charging_basis} · ${line.charge_category}`)} standard={entry.standard_currency}/>
-    <PrintLines title="4. Consumables" lines={day.consumables} names={day.consumables.map(line => `${line.category} · ${line.item_name} · UOM ${line.uom}`)} standard={entry.standard_currency}/>
-    <PrintLines title="5. Tangibles" lines={day.tangibles} names={day.tangibles.map(line => `${line.tangible_name} · UOM ${line.uom}`)} standard={entry.standard_currency}/>
-    <PrintLines title="6. Other expenses (LIH, hole problems and similar charges)" lines={day.other_expenses}
-      names={day.other_expenses.map(line => `${line.expense_type_label}${line.expense_description ? ` · ${line.expense_description}` : ''}`)}
-      standard={entry.standard_currency} remarkRequired/>
-    <h3>7. AFE budget reconciliation</h3>
-    <table><thead><tr><th>Budget line</th><th>Cost group</th><th>Planned</th><th>Actual to sheet date</th><th>Balance</th></tr></thead><tbody>
-      {comparison.budget_lines.map(line => <tr key={line.budget_key}><td>{costName(line.item_name)}{line.is_planned ? '' : ' · unbudgeted'}</td><td>{line.cost_group}</td><td className="num">{money(line.planned)}</td><td className="num">{money(line.actual_to_date)}</td><td className="num">{money(line.balance)}</td></tr>)}
-    </tbody></table>
-    {day.warnings.length > 0 && <div className="ps-warnings"><strong>Sheet warnings</strong><ul>{day.warnings.map(warning => <li key={warning.code}>{warning.message}</li>)}</ul></div>}
+function CumulativeSchedule({ title, rows, currency }: { title: string; rows: DailyCostComparisonLine[]; currency: string }) {
+  return <section className="dcr-cumulative-section">
+    <h2>{title}</h2>
+    <table><thead><tr><th>Cost item</th><th>AFE</th><th>Cumulative actual</th><th>Balance</th><th>Used</th></tr></thead>
+      <tbody>{rows.map(row => <tr key={row.budget_key}><td>{costName(row.item_name)}</td><td className="num">{dailyMoney(row.planned, currency)}</td><td className="num">{dailyMoney(row.actual_to_date, currency)}</td><td className="num">{dailyMoney(row.balance, currency)}</td><td className="num">{percent(asNumber(row.actual_to_date), asNumber(row.planned))}</td></tr>)}
+      {!rows.length && <tr><td colSpan={5} className="dcr-none">No cumulative cost recorded.</td></tr>}</tbody>
+    </table>
   </section>
 }
 
-function PrintLines({ title, lines, names, standard, remarkRequired }: {
-  title: string; names: string[]; standard: string
-  lines: DailyCostLineOutput[]
-  /** Other-expense remarks are mandatory, so the print says so instead of a dash. */
-  remarkRequired?: boolean
-}) {
-  return <>
-    <h3>{title} ({lines.length})</h3>
-    {!lines.length ? <p className="ps-empty">No lines recorded.</p> : <table>
-      <thead><tr><th>Item / service and classification</th><th>Section / phase</th><th>Actual depth (m)</th><th>Activity / sub activity</th><th>Quantity</th><th>Rate</th><th>Native amount</th><th>Standard amount</th></tr></thead>
-      <tbody>{lines.map((line, index) => <Fragment key={line.id}>
-        <tr><td>{names[index]}<div className="ps-sub">{line.classification}</div></td>
-          <td>{line.section_name}<div className="ps-sub">{line.phase_name}</div></td>
-          <td className="num">{depthText(line.actual_depth, 'm')}</td>
-          <td>{line.activity_name}<div className="ps-sub">{line.sub_activity_name}</div></td>
-          <td>{decimalText(line.quantity)} {line.quantity_unit}</td><td className="num">{dailyMoney(line.effective_rate, line.currency)}</td>
-          <td className="num">{dailyMoney(line.amount, line.currency)}</td><td className="num">{dailyMoney(line.standard_amount, standard)}</td></tr>
-        <tr className="ps-component"><td colSpan={8}>
-          <strong>Responsible party:</strong> {line.party_name || line.vendor_name || '—'} · Vendor {line.vendor_name || '—'} · Sub activity party {line.sub_activity_party || '—'}<br/>
-          <strong>Rate trace:</strong> {line.rate_source} · captured {dailyMoney(line.captured_rate, line.currency)} · FX {decimalText(line.exchange_rate)} to {standard} · USD {dailyMoney(line.usd_amount ?? line.standard_amount, 'USD')} · revision {line.rate_revision_number ?? '—'} · effective {displayDate(line.rate_effective_date)}<br/>
-          <strong>Override:</strong> {line.override_rate === null ? 'None' : dailyMoney(line.override_rate, line.currency)} · {line.override_reason || '—'}<br/>
-          <strong>Budget:</strong> {costName(line.budget_name || 'Unbudgeted')}<br/>
-          <strong>Remarks{remarkRequired ? ' (mandatory)' : ''}:</strong> <span className="ps-notes">{line.remarks || '—'}</span>
-        </td></tr>
-      </Fragment>)}</tbody>
-    </table>}
-  </>
+function CumulativeReportDetails({ report }: { report: CostPrintReport }) {
+  const groups = new Map<string, DailyCostDay[]>()
+  for (const day of report.overviewDays?.length ? report.overviewDays : report.days) {
+    const key = `${day.entry.afe_id}:${day.entry.standard_currency}`
+    groups.set(key, [...(groups.get(key) ?? []), day])
+  }
+  const scopes = report.summary
+    ? [{ key: 'well', label: `${report.summary.well.well_name} · all compatible AFEs`, currency: report.summary.totals.currency, rows: report.summary.budget_lines }]
+    : [...groups.entries()].map(([key, days]) => {
+      const latest = [...days].sort((left, right) => left.entry.cost_date.localeCompare(right.entry.cost_date)).at(-1)!
+      return { key, label: `${latest.entry.well_name} · ${latest.entry.afe_name}`, currency: latest.entry.standard_currency, rows: latest.comparison.budget_lines }
+    })
+  return <div className="daily-report-details">
+    <header>
+      <div className="ps-eyebrow">WellCosting Pro · cumulative saved costs</div>
+      <h1>{report.title}</h1>
+      <p>{report.period} · Printed {new Date().toLocaleString()}</p>
+      <p>These schedules consolidate saved daily sheets. Daily line-by-line breakdowns are intentionally omitted; currencies and incompatible AFEs remain separate.</p>
+    </header>
+    {scopes.map(scope => {
+      const rows = reportCostRows(scope.rows)
+      return <section className="dcr-cumulative-scope" key={scope.key}>
+        <h1>{scope.label} ({scope.currency})</h1>
+        <CumulativeSchedule title="Service-wise cumulative cost" rows={rows.services.filter(row => asNumber(row.actual_to_date) !== 0)} currency={scope.currency}/>
+        <CumulativeSchedule title="Consumables cumulative cost · four categories" rows={rows.consumables} currency={scope.currency}/>
+        <CumulativeSchedule title="Tangibles cumulative cost · item-wise" rows={rows.tangibles.filter(row => asNumber(row.actual_to_date) !== 0)} currency={scope.currency}/>
+      </section>
+    })}
+  </div>
 }
 
 /** Mount the print-only portal synchronously before opening the browser dialog. */
