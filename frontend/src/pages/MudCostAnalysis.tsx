@@ -377,11 +377,11 @@ export default function MudCostAnalysis() {
     { headerName: 'INITIAL OPENING STOCK', field: 'opening_stock', minWidth: 185, headerTooltip: 'Initial inventory for this section and its configured mud type; included once in ALPHA', valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'EXTRA OBM RECEIVED', field: 'extra_obm_received', minWidth: 170, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'ACTUAL MUD COST', field: 'actual_cost', minWidth: 155, valueFormatter: params => dailyMoney(String(params.value ?? '0'), reconciliation?.currency ?? '') },
-    { headerName: 'TOTAL MUD (CUM.)', field: 'total_mud', minWidth: 150, headerTooltip: 'Extra OBM received + additions, cumulative to this date', valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
-    { headerName: 'ALPHA', field: 'alpha', minWidth: 130, headerTooltip: '(Initial opening stock + Extra OBM received) × Cost/BBL base rate', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
-    { headerName: 'BETA', field: 'beta', minWidth: 135, headerTooltip: 'ALPHA + actual mud chemicals cost', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+    { headerName: 'TOTAL MUD (CUM.)', field: 'total_mud', minWidth: 150, headerTooltip: 'Opening Stock + Extra OBM received + Additions, cumulative to this date', valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'ALPHA', field: 'alpha', minWidth: 130, headerTooltip: '(Opening Stock + Extra OBM received) × Cost/BBL base rate', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+    { headerName: 'BETA', field: 'beta', minWidth: 135, headerTooltip: 'ALPHA + actual mud chemicals cost (section & mud type scoped)', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
     {
-      headerName: 'COST / BBL', field: 'cost_per_bbl', minWidth: 140, headerTooltip: 'BETA ÷ total mud; the latest value drives cumulative reconciliation',
+      headerName: 'COST / BBL', field: 'cost_per_bbl', minWidth: 140, headerTooltip: 'BETA ÷ Total Mud we have; the latest value drives cumulative reconciliation',
       cellRenderer: (params: ICellRendererParams<MudCostReconciliationRow>) => {
         if (params.value == null) return <Typography fontSize={12} color="text.secondary" sx={{ py: 1.2 }}>—</Typography>
         return <Typography fontSize={12} fontWeight={800}>{dailyMoney(String(params.value), reconciliation?.currency ?? '')}</Typography>
@@ -845,8 +845,8 @@ export default function MudCostAnalysis() {
           </Box>
           {reconDateFrom && reconDateTo && reconDateFrom > reconDateTo && <Alert severity="error" sx={{ mb: 1.4 }}>The start date must not be after the end date.</Alert>}
           <Typography color="text.secondary" fontSize={11.5} mb={1.4}>
-            Total mud = Extra OBM received + Additions. ALPHA = (Initial opening stock + Extra OBM received) × Cost/BBL base rate; BETA = ALPHA + actual mud chemicals cost;
-            Cost/BBL = BETA ÷ total mud. Reconciled cost = Consumption/Losses × the latest Cost/BBL. Every section is calculated and shown separately;
+            Total Mud we have = Opening Stock + Extra OBM received + Additions. ALPHA = (Opening Stock + Extra OBM received) × Cost/BBL base rate; BETA = ALPHA + actual mud chemicals cost (section & mud type scoped);
+            Cost/BBL = BETA ÷ Total Mud we have. Reconciled Cost = (Consumption/Losses) × Cost/BBL. Every section is calculated and shown separately;
             cumulative figures run from that section&apos;s first entry. Section summary totals cover the selected period while
             Cost/BBL stays the latest cumulative rate to the To date.
           </Typography>
