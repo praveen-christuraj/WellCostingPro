@@ -204,7 +204,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     { label: 'Opening Stock', value: row => decimalText(mudBalances.get(row.section_id)?.opening_stock) },
     { label: 'Receipt', value: row => decimalText(mudBalances.get(row.section_id)?.receipt) },
     { label: 'Additions', value: row => decimalText(optionalText(row, 'additions') ?? mudBalances.get(row.section_id)?.additions) },
-    { label: 'Total Mud', value: row => decimalText(optionalText(row, 'total_mud') ?? asNumber(mudBalances.get(row.section_id)?.receipt) + asNumber(mudBalances.get(row.section_id)?.additions)) },
+    { label: 'Total Mud', value: row => decimalText(optionalText(row, 'total_mud') ?? asNumber(mudBalances.get(row.section_id)?.opening_stock) + asNumber(mudBalances.get(row.section_id)?.receipt) + asNumber(mudBalances.get(row.section_id)?.additions)) },
     { label: 'Losses', value: row => decimalText(row.consumption_losses) },
     { label: 'Closing Stock', value: row => decimalText(mudBalances.get(row.section_id)?.closing_stock) },
     { label: 'Meterage (current depth)', value: row => depthText(sectionDepths.get(optionalText(row, 'hole_section_id') ?? row.section_id), 'm') },

@@ -4,9 +4,9 @@ export type MudCostMudType = 'WBM' | 'OBM' | 'SOBM' | 'OTHERS'
 
 export const MUD_COST_MUD_TYPES: { value: MudCostMudType; label: string; help: string }[] = [
   { value: 'WBM', label: 'WBM — Water Based Mud', help: 'No reconciliation arithmetic. The Daily Cost mud chemicals actual is the actual cost.' },
-  { value: 'OBM', label: 'OBM — Oil Based Mud', help: 'Extra OBM + Additions form total mud; ALPHA, BETA and Cost/BBL drive the reconciled cost.' },
-  { value: 'SOBM', label: 'SOBM — Synthetic Oil Based Mud', help: 'Same reconciliation formula as OBM, using this section’s Cost/BBL base rate.' },
-  { value: 'OTHERS', label: 'OTHERS — Other mud system', help: 'Same formula as OBM. Remarks are mandatory so the mud system is documented.' },
+  { value: 'OBM', label: 'OBM — Oil Based Mud', help: 'Opening Stock + Extra OBM + Additions form total mud; ALPHA, BETA and Cost/BBL drive the reconciled cost.' },
+  { value: 'SOBM', label: 'SOBM — Synthetic Oil Based Mud', help: 'Same reconciliation formula as OBM, using this section’s Cost/BBL base rate. Total mud includes Opening Stock.' },
+  { value: 'OTHERS', label: 'OTHERS — Other mud system', help: 'Same formula as OBM (Opening + Extra + Additions). Remarks are mandatory so the mud system is documented.' },
 ]
 
 export const MUD_COST_MUD_TYPE_LABELS: Record<MudCostMudType, string> = {

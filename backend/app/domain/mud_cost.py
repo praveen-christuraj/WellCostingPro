@@ -117,13 +117,13 @@ RECONCILIATION_QUANT = Decimal("0.0000000001")
 class MudCostReconciliation:
     """One section's derived mud cost for a point in time.
 
-    ``total_mud`` is Extra OBM received + Additions (barrels). ``alpha`` values
-    initial opening stock + Extra OBM at the section's Cost/BBL base rate;
-    ``beta`` adds the
-    actual mud-chemical spend from the Daily Cost register, and ``cost_per_bbl``
-    is beta divided by the total mud. ``reconciled_cost`` values the mud that
-    was consumed or lost at that cost per barrel. ``None`` means the mud type
-    needs no rate (WBM) or the section has no configuration yet.
+    ``total_mud`` is Opening Stock + Extra OBM received + Additions (barrels).
+    ``alpha`` values initial opening stock + Extra OBM at the section's
+    Cost/BBL base rate; ``beta`` adds the actual mud-chemical spend from the
+    Daily Cost register, and ``cost_per_bbl`` is beta divided by the total mud.
+    ``reconciled_cost`` values the mud that was consumed or lost at that cost
+    per barrel. ``None`` means the mud type needs no rate (WBM) or the section
+    has no configuration yet.
     """
 
     total_mud: Decimal
@@ -153,8 +153,15 @@ def reconcile_mud(
     is the reconciled cost. A section without a mud type returns no reconciled
     figure so the caller can surface the configuration gap instead of silently
     treating it as WBM.
+
+    Total mud is the section opening stock plus the extra OBM received and the
+    additions entered for that section/mud type; ALPHA values the opening stock
+    plus extra OBM at the Cost/BBL base rate entered once per section, BETA adds
+    the section-scoped actual mud chemical cost from the Daily Cost register,
+    Cost/BBL is BETA divided by total mud, and reconciled cost is
+    consumption/losses priced at that Cost/BBL.
     """
-    total_mud = _q(extra_obm_received + additions)
+    total_mud = _q(opening_stock + extra_obm_received + additions)
     if mud_type is None:
         return MudCostReconciliation(
             total_mud=total_mud, alpha=None, beta=None, cost_per_bbl=None, reconciled_cost=None,

@@ -1558,7 +1558,7 @@ def reconcile_well(
         actual = sum((row.actual_cost for row in window), ZERO)
         consumption = sum((row.consumption_losses for row in window), ZERO)
         latest_rate = section_daily_rows[-1].cost_per_bbl if section_daily_rows else None
-        total_mud = _recon_amount(extra_obm + additions)
+        total_mud = _recon_amount(opening_stock + extra_obm + additions)
         alpha = _recon_amount((opening_stock + extra_obm) * base_rate) if is_configured and not is_wbm else None
         beta = _recon_amount(alpha + actual) if alpha is not None else None
         if not is_configured:

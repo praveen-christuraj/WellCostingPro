@@ -368,14 +368,17 @@ def test_opening_stock_is_valued_once_and_zero_total_mud_has_no_rate(mud_type):
                   extra_obm_received=Decimal("50"), additions=Decimal("150"),
                   actual_cost=Decimal("1500"), consumption_losses=Decimal("30"))
     result = reconcile_mud(**values)
-    assert result.total_mud == Decimal("200")  # opening stock is NOT in the denominator
+    assert result.total_mud == Decimal("300")  # opening stock IS in total mud per updated spec
     assert result.alpha == Decimal("300")
     assert result.beta == Decimal("1800")
-    assert result.cost_per_bbl == Decimal("9")
-    assert result.reconciled_cost == Decimal("270")
+    assert result.cost_per_bbl == Decimal("6")
+    assert result.reconciled_cost == Decimal("180")
     empty = reconcile_mud(**{**values, "extra_obm_received": Decimal("0"), "additions": Decimal("0")})
+    assert empty.total_mud == Decimal("100")
     assert empty.alpha == Decimal("200")
-    assert empty.cost_per_bbl is None and empty.reconciled_cost is None
+    assert empty.beta == Decimal("1700")
+    assert empty.cost_per_bbl == Decimal("17")
+    assert empty.reconciled_cost == Decimal("510")
 
 
 def test_opening_stock_correction_permission_recalculates_balances_and_well_cost():
@@ -403,8 +406,8 @@ def test_opening_stock_correction_permission_recalculates_balances_and_well_cost
         before = _json(client, "get", recon_path, headers)
         obm = next(row for row in before["sections"] if row["mud_type"] == "OBM")
         assert Decimal(obm["opening_stock"]) == 100
-        assert Decimal(obm["cost_per_bbl"]) == 9
-        assert Decimal(obm["reconciled_cost"]) == 270
+        assert Decimal(obm["cost_per_bbl"]) == 6
+        assert Decimal(obm["reconciled_cost"]) == 180
         other_before = next(row for row in before["sections"] if row["mud_type"] == "SOBM")
 
         endpoint = f"/api/v1/mud-cost/entries/{first['id']}/opening-stock"
@@ -456,9 +459,9 @@ def test_opening_stock_correction_permission_recalculates_balances_and_well_cost
         obm = next(row for row in after["sections"] if row["mud_type"] == "OBM")
         assert Decimal(obm["alpha"]) == 500
         assert Decimal(obm["beta"]) == 2000
-        assert Decimal(obm["total_mud"]) == 200
-        assert Decimal(obm["cost_per_bbl"]) == 10
-        assert Decimal(obm["reconciled_cost"]) == 300
+        assert Decimal(obm["total_mud"]) == 400
+        assert Decimal(obm["cost_per_bbl"]) == 5
+        assert Decimal(obm["reconciled_cost"]) == 150
         assert next(row for row in after["sections"] if row["mud_type"] == "SOBM") == other_before
         daily = [row for row in after["rows"] if row["mud_type"] == "OBM"]
         assert all(Decimal(row["opening_stock"]) == 200 for row in daily)
@@ -466,8 +469,8 @@ def test_opening_stock_correction_permission_recalculates_balances_and_well_cost
         window = _json(client, "get", recon_path + "&from=2026-10-12", headers)
         obm_window = next(row for row in window["sections"] if row["mud_type"] == "OBM")
         assert Decimal(obm_window["opening_stock"]) == 200
-        assert Decimal(obm_window["cost_per_bbl"]) == 10
-        assert Decimal(obm_window["reconciled_cost"]) == 200
+        assert Decimal(obm_window["cost_per_bbl"]) == 5
+        assert Decimal(obm_window["reconciled_cost"]) == 100
         summary = _json(client, "get", f"/api/v1/daily-cost/wells/{scope['well']['id']}/cost-summary", headers)
         assert Decimal(summary["mud_cost"]["reconciled_cost"]) == Decimal(after["total_reconciled_cost"])
         with SessionLocal() as db:
