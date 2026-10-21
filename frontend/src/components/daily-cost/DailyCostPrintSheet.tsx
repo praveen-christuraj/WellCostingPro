@@ -90,6 +90,13 @@ function nameOnly(label: string) {
   return parts.length > 1 ? parts.slice(1).join(' · ') : (label || '—')
 }
 
+function costName(label: string) {
+  return label
+    .replace(/\bMud Chemicals\s+allowance\b/gi, 'Mud Chemicals')
+    .replace(/\bCement Additives\s+allowance\b/gi, 'Cement Additives')
+    .trim()
+}
+
 function percent(actual: number, planned: number) {
   return planned > 0 ? `${decimalText(actual / planned * 100)}%` : '—'
 }
@@ -133,12 +140,46 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   const currency = summary?.totals.currency || latest.entry.standard_currency
   const latestComparison = latest.comparison
   const budgetLines = summary?.budget_lines ?? latestComparison.budget_lines
-  const groupLines = (group: string, limit: number) => budgetLines
-    .filter(line => line.cost_group === group)
-    .sort((left, right) => asNumber(right.actual_to_date) - asNumber(left.actual_to_date))
-    .slice(0, limit)
-  const services = groupLines('Services', 8)
-  const consumables = groupLines('Consumables', 5)
+  // Service codes define the business order but remain hidden in the report.
+  const services = budgetLines
+    .filter(line => line.cost_group === 'Services')
+    .sort((left, right) => left.item_code.localeCompare(right.item_code, undefined, { numeric: true, sensitivity: 'base' }))
+    .slice(0, 8)
+  // Consumables are an executive category summary, never a list of chemicals,
+  // additives, fuel items or individual bits. Drill Bits is one cumulative row.
+  const consumableOrder = ['Fuel', 'Mud Chemicals', 'Cement Additives', 'Drill Bits']
+  const consumableGroups = new Map<string, typeof budgetLines[number]>()
+  for (const line of budgetLines.filter(item => item.cost_group === 'Consumables')) {
+    const source = `${line.budget_kind} ${line.budget_key} ${line.item_code} ${line.item_name}`.toLowerCase()
+    const category = source.includes('drill_bit') || source.includes('drill bit')
+      ? 'Drill Bits'
+      : source.includes('mud chemicals')
+        ? 'Mud Chemicals'
+        : source.includes('cement additives')
+          ? 'Cement Additives'
+          : source.includes('fuel')
+            ? 'Fuel'
+            : 'Other Consumables'
+    const current = consumableGroups.get(category)
+    const planned = asNumber(current?.planned) + asNumber(line.planned)
+    const actual = asNumber(current?.actual_to_date) + asNumber(line.actual_to_date)
+    consumableGroups.set(category, {
+      ...line,
+      budget_key: `consumable-summary:${category}`,
+      budget_kind: 'consumable_summary',
+      item_code: category,
+      item_name: category,
+      planned: String(planned),
+      actual_to_date: String(actual),
+      balance: String(planned - actual),
+      is_planned: Boolean(current?.is_planned || line.is_planned),
+    })
+  }
+  const consumables = [...consumableGroups.values()].sort((left, right) => {
+    const leftIndex = consumableOrder.indexOf(left.item_name)
+    const rightIndex = consumableOrder.indexOf(right.item_name)
+    return (leftIndex < 0 ? consumableOrder.length : leftIndex) - (rightIndex < 0 ? consumableOrder.length : rightIndex)
+  })
   const groupPosition = (group: 'Services' | 'Consumables' | 'Tangibles') => {
     if (summary) {
       const factor = summary.factors.find(item => item.dimension === 'cost_group')?.rows.find(row => row.code === group)
@@ -177,7 +218,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   }) => <section className="dcr-panel dcr-cost-panel">
     <h2>{title}</h2>
     <table><thead><tr><th>Cost item</th><th>AFE</th><th>Cumulative actual</th><th>Balance</th><th>Used</th></tr></thead>
-      <tbody>{rows.map(row => <tr key={row.budget_key}><td>{row.item_name}</td><td className="num">{dailyMoney(row.planned, currency)}</td><td className="num">{dailyMoney(row.actual_to_date, currency)}</td><td className="num">{dailyMoney(row.balance, currency)}</td><td className="num">{percent(asNumber(row.actual_to_date), asNumber(row.planned))}</td></tr>)}</tbody>
+      <tbody>{rows.map(row => <tr key={row.budget_key}><td>{costName(row.item_name)}</td><td className="num">{dailyMoney(row.planned, currency)}</td><td className="num">{dailyMoney(row.actual_to_date, currency)}</td><td className="num">{dailyMoney(row.balance, currency)}</td><td className="num">{percent(asNumber(row.actual_to_date), asNumber(row.planned))}</td></tr>)}</tbody>
       <tfoot><tr><th>{rows.length ? 'Group total' : 'No cost lines recorded'}</th><th className="num">{dailyMoney(position.planned, currency)}</th><th className="num">{dailyMoney(position.actual, currency)}</th><th className="num">{dailyMoney(position.planned - position.actual, currency)}</th><th className="num">{percent(position.actual, position.planned)}</th></tr></tfoot>
     </table>
   </section>
@@ -277,7 +318,7 @@ function DailySections({ day }: { day: DailyCostDay }) {
       standard={entry.standard_currency} remarkRequired/>
     <h3>7. AFE budget reconciliation</h3>
     <table><thead><tr><th>Budget line</th><th>Cost group</th><th>Planned</th><th>Actual to sheet date</th><th>Balance</th></tr></thead><tbody>
-      {comparison.budget_lines.map(line => <tr key={line.budget_key}><td>{line.item_name}{line.is_planned ? '' : ' · unbudgeted'}</td><td>{line.cost_group}</td><td className="num">{money(line.planned)}</td><td className="num">{money(line.actual_to_date)}</td><td className="num">{money(line.balance)}</td></tr>)}
+      {comparison.budget_lines.map(line => <tr key={line.budget_key}><td>{costName(line.item_name)}{line.is_planned ? '' : ' · unbudgeted'}</td><td>{line.cost_group}</td><td className="num">{money(line.planned)}</td><td className="num">{money(line.actual_to_date)}</td><td className="num">{money(line.balance)}</td></tr>)}
     </tbody></table>
     {day.warnings.length > 0 && <div className="ps-warnings"><strong>Sheet warnings</strong><ul>{day.warnings.map(warning => <li key={warning.code}>{warning.message}</li>)}</ul></div>}
   </section>
@@ -304,7 +345,7 @@ function PrintLines({ title, lines, names, standard, remarkRequired }: {
           <strong>Responsible party:</strong> {line.party_name || line.vendor_name || '—'} · Vendor {line.vendor_name || '—'} · Sub activity party {line.sub_activity_party || '—'}<br/>
           <strong>Rate trace:</strong> {line.rate_source} · captured {dailyMoney(line.captured_rate, line.currency)} · FX {decimalText(line.exchange_rate)} to {standard} · USD {dailyMoney(line.usd_amount ?? line.standard_amount, 'USD')} · revision {line.rate_revision_number ?? '—'} · effective {displayDate(line.rate_effective_date)}<br/>
           <strong>Override:</strong> {line.override_rate === null ? 'None' : dailyMoney(line.override_rate, line.currency)} · {line.override_reason || '—'}<br/>
-          <strong>Budget:</strong> {line.budget_name || 'Unbudgeted'}<br/>
+          <strong>Budget:</strong> {costName(line.budget_name || 'Unbudgeted')}<br/>
           <strong>Remarks{remarkRequired ? ' (mandatory)' : ''}:</strong> <span className="ps-notes">{line.remarks || '—'}</span>
         </td></tr>
       </Fragment>)}</tbody>

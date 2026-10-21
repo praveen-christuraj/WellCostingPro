@@ -44,7 +44,15 @@ const day = {
 }
 const second = { ...day, entry: { ...day.entry, id: 'd2', afe_id: 'afe2', afe_code: 'AFE-2', daily_cost_code: 'DC-2', standard_currency: 'EUR', services_total: '0', total_cost: '100', consumables_total: '100', other_expenses_total: '0', npt_total: '0' },
   comparison: { ...day.comparison, tracked_actual_to_date: '100', other_expenses_to_date: '0', actual_to_date: '100', balance: '6900', npt_to_date: '0',
-    budget_lines: [{ budget_key: 'consumable:BAR', item_code: 'BAR', item_name: 'Barite', cost_group: 'Consumables', planned: '7000', actual_to_date: '100', balance: '6900', is_planned: true }] },
+    budget_lines: [
+      { budget_key: 'service:20', budget_kind: 'service', item_code: 'SVC-20', item_name: 'Directional drilling', cost_group: 'Services', planned: '2000', actual_to_date: '400', balance: '1600', is_planned: true },
+      { budget_key: 'service:03', budget_kind: 'service', item_code: 'SVC-03', item_name: 'Mud logging', cost_group: 'Services', planned: '1000', actual_to_date: '300', balance: '700', is_planned: true },
+      { budget_key: 'consumable:Fuel', budget_kind: 'consumable_category', item_code: 'Fuel', item_name: 'Fuel allowance', cost_group: 'Consumables', planned: '7000', actual_to_date: '100', balance: '6900', is_planned: true },
+      { budget_key: 'consumable:Mud Chemicals', budget_kind: 'consumable_category', item_code: 'Mud Chemicals', item_name: 'Mud Chemicals allowance', cost_group: 'Consumables', planned: '2000', actual_to_date: '250', balance: '1750', is_planned: true },
+      { budget_key: 'consumable:Cement Additives', budget_kind: 'consumable_category', item_code: 'Cement Additives', item_name: 'Cement Additives allowance', cost_group: 'Consumables', planned: '1500', actual_to_date: '125', balance: '1375', is_planned: true },
+      { budget_key: 'drill-bit:BIT-A', budget_kind: 'drill_bit', item_code: 'BIT-A', item_name: 'Bit Alpha', cost_group: 'Consumables', planned: '3000', actual_to_date: '800', balance: '2200', is_planned: true },
+      { budget_key: 'drill-bit:BIT-B', budget_kind: 'drill_bit', item_code: 'BIT-B', item_name: 'Bit Beta', cost_group: 'Consumables', planned: '2500', actual_to_date: '700', balance: '1800', is_planned: true },
+    ] },
   services: [], other_expenses: [],
   consumables: [{ ...line, id: 'chemical1', currency: 'EUR', category: 'Mud Chemicals', item_code: 'BAR', item_name: 'Barite', uom: 'MT', quantity_unit: 'unit', override_rate: '50', override_reason: 'Justified daily override' }],
   tangibles: [{ ...line, id: 'tangible1', tangible_code: 'T1', tangible_name: 'Casing', uom: 'm' }],
@@ -57,6 +65,18 @@ assert.equal(sheet.parentElement, document.body)
 assert.ok(sheet.classList.contains('daily-cost-print-sheet'), 'daily costing opts into the landscape report page')
 assert.ok(sheet.querySelector('.daily-report-cover'), 'the model-report summary is page one')
 assert.ok(sheet.querySelector('.daily-report-details'), 'the retained detailed schedules follow the cover')
+const coverPanels = sheet.querySelectorAll('.daily-report-cover .dcr-cost-panel')
+const serviceNames = [...coverPanels[0].querySelectorAll('tbody tr')].map(row => row.cells[0].textContent)
+assert.deepEqual(serviceNames, ['Mud logging', 'Directional drilling'], 'services follow hidden natural service-code order')
+const consumableRows = [...coverPanels[1].querySelectorAll('tbody tr')]
+const consumableNames = consumableRows.map(row => row.cells[0].textContent)
+assert.deepEqual(consumableNames, ['Fuel', 'Mud Chemicals', 'Cement Additives', 'Drill Bits'], 'consumables print category totals only')
+assert.equal(consumableNames.filter(name => name === 'Drill Bits').length, 1, 'drill bits print as one cumulative row')
+const drillBitsRow = consumableRows.find(row => row.cells[0].textContent === 'Drill Bits')
+assert.ok(drillBitsRow.textContent.includes('EUR 5,500.00') && drillBitsRow.textContent.includes('EUR 1,500.00'), 'drill bit AFE and actual values are cumulative')
+for (const hidden of ['SVC-03', 'SVC-20', 'Bit Alpha', 'Bit Beta', 'Mud Chemicals allowance', 'Cement Additives allowance']) {
+  assert.ok(!sheet.querySelector('.daily-report-cover').textContent.includes(hidden), `${hidden} is hidden from the summary`)
+}
 for (const heading of [
   'Reporting milestone', 'Section-wise planned depth & current depth', 'Services cost · AFE vs cumulative actual',
   'Consumables cost · AFE vs cumulative actual', 'Tangibles cost · AFE vs actual', 'AFE vs actual summary',
@@ -125,7 +145,7 @@ assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog
 assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
 assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
-console.log('Daily cost checks passed: name-only entities, two-decimal measurements, revised time position, landscape model-report cover, retained complete print sections with other-expense deduction, 120 rows, separate AFE/currency totals, escaped remarks, synchronous print portal, cleanup, list-only register, other-expense wiring on sheet and analysis.')
+console.log('Daily cost checks passed: code-ordered/name-only services, category-only consumables with cumulative drill bits, cleaned allowance labels, two-decimal measurements, revised time position, landscape model-report cover, retained complete print sections with other-expense deduction, 120 rows, separate AFE/currency totals, escaped remarks, synchronous print portal, cleanup, list-only register, other-expense wiring on sheet and analysis.')
 
 dom.window.close()
 process.exit(0)
