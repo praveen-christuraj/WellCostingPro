@@ -62,3 +62,33 @@ def test_calculated_stock_migration_preserves_measurements_and_rebuilds_openings
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute("UPDATE mud_cost_entry_lines SET amount = -1 WHERE id = 'later-shakers'")
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_opening_stock_permission_migration_grants_only_owners(tmp_path):
+    database = tmp_path / "permissions.sqlite3"
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database}"}
+    backend = Path(__file__).resolve().parents[1]
+
+    def migrate(action, target):
+        subprocess.run([sys.executable, "-m", "alembic", action, target], cwd=backend,
+                       env=environment, check=True, capture_output=True, text=True)
+
+    migrate("upgrade", "c4a7e1b93d52")
+    with sqlite3.connect(database) as connection:
+        for org in ("one", "two"):
+            connection.execute("INSERT INTO organizations (id, slug, name, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)", (org, org, org))
+            for role, is_owner in (("owner", 1), ("editor", 0)):
+                connection.execute("INSERT INTO roles (id, organization_id, name, description, is_owner, created_at) VALUES (?, ?, ?, '', ?, CURRENT_TIMESTAMP)", (f"{org}-{role}", org, role, is_owner))
+    for _ in range(2):
+        migrate("upgrade", "head")
+    with sqlite3.connect(database) as connection:
+        permission_ids = dict(connection.execute("SELECT organization_id, id FROM permissions WHERE key = 'mud-cost:opening-stock-update'"))
+        assert set(permission_ids) == {"one", "two"}
+        assert set(connection.execute("SELECT role_id, permission_id FROM role_permissions")) == {
+            (f"{org}-owner", permission_ids[org]) for org in ("one", "two")
+        }
+    migrate("downgrade", "c4a7e1b93d52")
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM permissions WHERE key = 'mud-cost:opening-stock-update'").fetchone()[0] == 0
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    migrate("upgrade", "head")

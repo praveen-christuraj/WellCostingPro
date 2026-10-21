@@ -223,7 +223,7 @@ export type MudCostReconciliationRow = {
   section_code: string; section_name: string; section_label: string
   mud_type: MudCostMudType | null; mud_type_label: string
   is_configured: boolean; is_wbm: boolean
-  cost_date: string; currency: string; base_rate: string
+  cost_date: string; currency: string; base_rate: string; opening_stock: string
   additions: string; extra_obm_received: string; actual_cost: string
   total_mud: string; alpha: string | null; beta: string | null
   cost_per_bbl: string | null
@@ -241,7 +241,7 @@ export type MudCostReconciliationSection = {
   section_code: string; section_name: string; section_label: string
   mud_type: MudCostMudType | null; mud_type_label: string
   remarks: string; is_configured: boolean; is_current: boolean; is_wbm: boolean
-  currency: string; base_rate: string
+  currency: string; base_rate: string; opening_stock: string
   first_date: string | null; last_date: string | null; entry_count: number
   additions: string; extra_obm_received: string; actual_cost: string
   total_mud: string; alpha: string | null; beta: string | null

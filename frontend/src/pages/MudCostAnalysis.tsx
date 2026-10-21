@@ -12,6 +12,7 @@ import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
 import { ImportDialog } from '../components/ImportDialog'
 import { MudCostEntryDialog, type MudCostEditorPayload } from '../components/mud-cost/MudCostEntryDialog'
+import { MudCostOpeningStockDialog } from '../components/mud-cost/MudCostOpeningStockDialog'
 import { MudCostSectionSettingsDialog } from '../components/mud-cost/MudCostSectionSettingsDialog'
 import { useMudCostPrint } from '../components/mud-cost/MudCostPrintSheet'
 import { useAuth } from '../context/AuthContext'
@@ -83,6 +84,7 @@ export default function MudCostAnalysis() {
   const [selectedRows, setSelectedRows] = useState<MudCostEntry[]>([])
   const [selectionResetKey, setSelectionResetKey] = useState(0)
   const [entryDialogOpen, setEntryDialogOpen] = useState(false)
+  const [openingStockEntry, setOpeningStockEntry] = useState<MudCostEntry | null>(null)
   const [editingEntry, setEditingEntry] = useState<MudCostEntry | null>(null)
   const [entryError, setEntryError] = useState('')
   const [savingEntry, setSavingEntry] = useState(false)
@@ -318,7 +320,7 @@ export default function MudCostAnalysis() {
     { headerName: 'OTHERS', field: 'others', minWidth: 110, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'CLOSING STOCK', field: 'closing_stock', minWidth: 145, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     {
-      headerName: 'ACTIONS', field: 'id', minWidth: deletedView ? 210 : 160, width: deletedView ? 220 : 185, sortable: false,
+      headerName: 'ACTIONS', field: 'id', minWidth: deletedView ? 210 : 310, width: deletedView ? 220 : 330, sortable: false,
       cellRenderer: (params: ICellRendererParams<MudCostEntry>) => {
         const record = params.data
         if (!record) return null
@@ -327,13 +329,14 @@ export default function MudCostAnalysis() {
             {can('daily-cost:restore') && <Button size="small" onClick={() => { setActionError(''); setPendingAction({ kind: 'restore', rows: [record] }) }}>Restore</Button>}
             {can('daily-cost:permanent-delete') && <Button size="small" color="error" aria-label={`Permanently delete Mud Cost entry ${record.entry_date}`} onClick={() => { setActionError(''); setPendingAction({ kind: 'purge', rows: [record] }) }}><DeleteForeverOutlined sx={{ fontSize: 17 }}/></Button>}
           </> : <>
+            {can('mud-cost:opening-stock-update') && !existingRows.some(row => !row.is_deleted && row.section_id === record.section_id && row.entry_date < record.entry_date) && <Button size="small" onClick={() => setOpeningStockEntry(record)}>Opening stock</Button>}
             {can('daily-cost:update') && <Button size="small" onClick={() => { setEditingEntry(record); setEntryError(''); setEntryDialogOpen(true) }}>Edit</Button>}
             {can('daily-cost:delete') && <Button size="small" color="error" aria-label={`Move Mud Cost entry ${record.entry_date} to Deleted Entries`} onClick={() => { setActionError(''); setPendingAction({ kind: 'delete', rows: [record] }) }}><DeleteOutlineRounded sx={{ fontSize: 17 }}/></Button>}
           </>}
         </Box>
       },
     },
-  ], [can, deletedView])
+  ], [can, deletedView, existingRows])
 
   const detailedExportColumns = useMemo<ExportColumn<MudCostEntry>[]>(() => [
     { header: 'entry_date', value: row => row.entry_date },
@@ -371,10 +374,11 @@ export default function MudCostAnalysis() {
     { headerName: 'SECTION', field: 'section_label', minWidth: 250, flex: 1.1 },
     { headerName: 'MUD TYPE', field: 'mud_type', minWidth: 130, cellRenderer: mudTypeCell },
     { headerName: 'ADDITIONS', field: 'additions', minWidth: 120, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'INITIAL OPENING STOCK', field: 'opening_stock', minWidth: 185, headerTooltip: 'Initial inventory for this section and its configured mud type; included once in ALPHA', valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'EXTRA OBM RECEIVED', field: 'extra_obm_received', minWidth: 170, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'ACTUAL MUD COST', field: 'actual_cost', minWidth: 155, valueFormatter: params => dailyMoney(String(params.value ?? '0'), reconciliation?.currency ?? '') },
     { headerName: 'TOTAL MUD (CUM.)', field: 'total_mud', minWidth: 150, headerTooltip: 'Extra OBM received + additions, cumulative to this date', valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
-    { headerName: 'ALPHA', field: 'alpha', minWidth: 130, headerTooltip: 'Extra OBM received × Cost/BBL base rate', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
+    { headerName: 'ALPHA', field: 'alpha', minWidth: 130, headerTooltip: '(Initial opening stock + Extra OBM received) × Cost/BBL base rate', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
     { headerName: 'BETA', field: 'beta', minWidth: 135, headerTooltip: 'ALPHA + actual mud chemicals cost', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
     {
       headerName: 'COST / BBL', field: 'cost_per_bbl', minWidth: 140, headerTooltip: 'BETA ÷ total mud; the latest value drives cumulative reconciliation',
@@ -394,6 +398,7 @@ export default function MudCostAnalysis() {
     { headerName: 'MUD TYPE', field: 'mud_type', minWidth: 130, cellRenderer: mudTypeCell },
     { headerName: 'BASE RATE', field: 'base_rate', minWidth: 135, valueFormatter: params => dailyMoney(String(params.value ?? '0'), reconciliation?.currency ?? '') },
     { headerName: 'ADDITIONS', field: 'additions', minWidth: 120, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
+    { headerName: 'INITIAL OPENING STOCK', field: 'opening_stock', minWidth: 185, headerTooltip: 'Initial inventory for this section and its configured mud type; included once in ALPHA', valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'EXTRA OBM RECEIVED', field: 'extra_obm_received', minWidth: 170, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'ACTUAL MUD COST', field: 'actual_cost', minWidth: 155, valueFormatter: params => dailyMoney(String(params.value ?? '0'), reconciliation?.currency ?? '') },
     { headerName: 'TOTAL MUD', field: 'total_mud', minWidth: 135, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
@@ -840,7 +845,7 @@ export default function MudCostAnalysis() {
           </Box>
           {reconDateFrom && reconDateTo && reconDateFrom > reconDateTo && <Alert severity="error" sx={{ mb: 1.4 }}>The start date must not be after the end date.</Alert>}
           <Typography color="text.secondary" fontSize={11.5} mb={1.4}>
-            Total mud = Extra OBM received + Additions. ALPHA = Extra OBM received × Cost/BBL base rate; BETA = ALPHA + actual mud chemicals cost;
+            Total mud = Extra OBM received + Additions. ALPHA = (Initial opening stock + Extra OBM received) × Cost/BBL base rate; BETA = ALPHA + actual mud chemicals cost;
             Cost/BBL = BETA ÷ total mud. Reconciled cost = Consumption/Losses × the latest Cost/BBL. Every section is calculated and shown separately;
             cumulative figures run from that section&apos;s first entry. Section summary totals cover the selected period while
             Cost/BBL stays the latest cumulative rate to the To date.
@@ -898,6 +903,17 @@ export default function MudCostAnalysis() {
         </Box>}
       </Paper>
     </>}
+
+    <MudCostOpeningStockDialog
+      entry={openingStockEntry}
+      onClose={() => setOpeningStockEntry(null)}
+      onSave={async (entry, payload) => {
+        await api(`/mud-cost/entries/${entry.id}/opening-stock`, { method: 'PUT', body: body(payload) })
+        setOpeningStockEntry(null)
+        setNotice('Initial opening stock saved. Section balances and reconciliation recalculated.')
+        await Promise.all([loadEntries(), loadBalance(), loadReconciliation()])
+      }}
+    />
 
     <MudCostEntryDialog
       open={entryDialogOpen}

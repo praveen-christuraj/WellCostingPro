@@ -9,6 +9,7 @@ from app.schemas.mud_cost import (
     MudCostEntryCreate,
     MudCostEntryOut,
     MudCostEntryUpdate,
+    MudCostOpeningStockIn,
     MudCostExportAudit,
     MudCostIDs,
     MudCostImportRequest,
@@ -154,6 +155,17 @@ def update_entry(
     user: Current,
 ) -> MudCostEntryOut:
     return service.update_entry(db, user.organization_id, entry_id, data, user, request)
+
+
+@router.put(
+    "/entries/{entry_id}/opening-stock",
+    response_model=MudCostEntryOut,
+    dependencies=[Depends(require("mud-cost:opening-stock-update"))],
+)
+def update_opening_stock(
+    entry_id: str, data: MudCostOpeningStockIn, request: Request, db: Db, user: Current,
+) -> MudCostEntryOut:
+    return service.update_opening_stock(db, user.organization_id, entry_id, data, user, request)
 
 
 @router.get(

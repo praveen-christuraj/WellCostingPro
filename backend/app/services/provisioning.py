@@ -52,6 +52,7 @@ CAPABILITIES = {resource: actions for resource, actions in {
         # Amend allows reopening submitted sheets well after their cost date.
         "amend",
     ),
+    "mud-cost": ("opening-stock-update",),
     "costing-sets": ("read", "create", "update", "delete", "import", "export"),
 }.items()}
 

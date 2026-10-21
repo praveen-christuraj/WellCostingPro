@@ -358,3 +358,120 @@ def test_reconciliation_uses_actual_daily_cost_and_latest_cost_per_bbl():
                 AuditLog.summary.like("%mud cost reconciliation%"),
             ))
             assert exported is not None
+
+
+@pytest.mark.parametrize("mud_type", ["OBM", "SOBM", "OTHERS"])
+def test_opening_stock_is_valued_once_and_zero_total_mud_has_no_rate(mud_type):
+    from app.domain.mud_cost import reconcile_mud
+
+    values = dict(mud_type=mud_type, base_rate=Decimal("2"), opening_stock=Decimal("100"),
+                  extra_obm_received=Decimal("50"), additions=Decimal("150"),
+                  actual_cost=Decimal("1500"), consumption_losses=Decimal("30"))
+    result = reconcile_mud(**values)
+    assert result.total_mud == Decimal("200")  # opening stock is NOT in the denominator
+    assert result.alpha == Decimal("300")
+    assert result.beta == Decimal("1800")
+    assert result.cost_per_bbl == Decimal("9")
+    assert result.reconciled_cost == Decimal("270")
+    empty = reconcile_mud(**{**values, "extra_obm_received": Decimal("0"), "additions": Decimal("0")})
+    assert empty.alpha == Decimal("200")
+    assert empty.cost_per_bbl is None and empty.reconciled_cost is None
+
+
+def test_opening_stock_correction_permission_recalculates_balances_and_well_cost():
+    with TestClient(app) as client:
+        headers = login(client)
+        scope = setup_well(client, headers)
+        first = create_mud_entry(client, headers, scope, "2026-10-11", 0, [
+            line("opening_stock", "100", "Initial inventory"),
+            line("extra_obm_received", "50"), line("drill_water", "100"), line("shakers", "10"),
+        ])
+        later = create_mud_entry(client, headers, scope, "2026-10-12", 0, [
+            line("barite", "50"), line("centrifuge", "20"),
+        ])
+        other = create_mud_entry(client, headers, scope, "2026-10-13", 1, [
+            line("opening_stock", "900"), line("drill_water", "10"), line("shakers", "5"),
+        ])
+        seed_daily_cost(scope, section_costs=[
+            ("2026-10-11", 0, Decimal("1000")), ("2026-10-12", 0, Decimal("500")),
+            ("2026-10-13", 1, Decimal("200")),
+        ])
+        configure_section(client, headers, scope, 0, "OBM", "2")
+        configure_section(client, headers, scope, 1, "SOBM", "1")
+        params = f"rig_id={scope['rig']['id']}&well_id={scope['well']['id']}&to=2026-10-13"
+        recon_path = f"/api/v1/mud-cost/reconciliation?{params}"
+        before = _json(client, "get", recon_path, headers)
+        obm = next(row for row in before["sections"] if row["mud_type"] == "OBM")
+        assert Decimal(obm["opening_stock"]) == 100
+        assert Decimal(obm["cost_per_bbl"]) == 9
+        assert Decimal(obm["reconciled_cost"]) == 270
+        other_before = next(row for row in before["sections"] if row["mud_type"] == "SOBM")
+
+        endpoint = f"/api/v1/mud-cost/entries/{first['id']}/opening-stock"
+        assert client.put(endpoint, json={"amount": "200"}).status_code == 401
+        assert client.put(endpoint, headers=login(client, "south"), json={"amount": "200"}).status_code == 404
+        assert client.put(f"/api/v1/mud-cost/entries/{later['id']}/opening-stock", headers=headers,
+                          json={"amount": "200"}).status_code == 409
+        for invalid in ("-1", "0.00000000001", "1000000000000000", "NaN"):
+            assert client.put(endpoint, headers=headers, json={"amount": invalid}).status_code == 422
+
+        # An ordinary editor cannot correct inventory. Assigning just the new
+        # capability (plus read) allows corrections without general entry edits.
+        with SessionLocal() as db:
+            org = db.scalar(select(Organization).where(Organization.slug == "north"))
+            editor_role = Role(organization_id=org.id, name="Mud editor", permissions=[
+                db.scalar(select(Permission).where(Permission.organization_id == org.id,
+                                                   Permission.key == "daily-cost:read")),
+                db.scalar(select(Permission).where(Permission.organization_id == org.id,
+                                                   Permission.key == "daily-cost:update")),
+            ])
+            db.add(User(organization_id=org.id, email="editor@example.com", full_name="Mud editor",
+                        password_hash=hash_password("correct-password-123"), roles=[editor_role]))
+            db.commit()
+        signed_in = client.post("/api/v1/auth/login", json={"organization": "north", "email": "editor@example.com",
+                                                           "password": "correct-password-123"})
+        editor = {"Authorization": f"Bearer {signed_in.json()['access_token']}"}
+        assert client.put(endpoint, headers=editor, json={"amount": "200"}).status_code == 403
+        # Ordinary entry updates still cannot override a saved opening.
+        _json(client, "put", f"/api/v1/mud-cost/entries/{first['id']}", editor, {
+            "entry_date": "2026-10-11", "lines": [line("opening_stock", "999"),
+            line("extra_obm_received", "50"), line("drill_water", "100"), line("shakers", "10")],
+        })
+        assert Decimal(_json(client, "get", f"/api/v1/mud-cost/entries/{first['id']}", headers)["opening_stock"]) == 100
+        with SessionLocal() as db:
+            role = db.scalar(select(Role).where(Role.name == "Mud editor"))
+            permission = Permission(organization_id=role.organization_id, key="mud-cost:opening-stock-update",
+                                    description="Correct mud opening stock")
+            role.permissions = [p for p in role.permissions if p.key == "daily-cost:read"] + [permission]
+            db.commit()
+        corrected = _json(client, "put", endpoint, editor, {"amount": "200", "remarks": "Corrected tank survey"})
+        assert Decimal(corrected["opening_stock"]) == 200
+        assert corrected["opening_stock_remarks"] == "Corrected tank survey"
+        later_after = _json(client, "get", f"/api/v1/mud-cost/entries/{later['id']}", headers)
+        assert Decimal(later_after["opening_stock"]) == 340
+        assert Decimal(later_after["closing_stock"]) == 370
+        assert Decimal(_json(client, "get", f"/api/v1/mud-cost/entries/{other['id']}", headers)["opening_stock"]) == 900
+
+        after = _json(client, "get", recon_path, headers)
+        obm = next(row for row in after["sections"] if row["mud_type"] == "OBM")
+        assert Decimal(obm["alpha"]) == 500
+        assert Decimal(obm["beta"]) == 2000
+        assert Decimal(obm["total_mud"]) == 200
+        assert Decimal(obm["cost_per_bbl"]) == 10
+        assert Decimal(obm["reconciled_cost"]) == 300
+        assert next(row for row in after["sections"] if row["mud_type"] == "SOBM") == other_before
+        daily = [row for row in after["rows"] if row["mud_type"] == "OBM"]
+        assert all(Decimal(row["opening_stock"]) == 200 for row in daily)
+        assert all(Decimal(row["alpha"]) == 500 for row in daily)  # never use carried-forward 340
+        window = _json(client, "get", recon_path + "&from=2026-10-12", headers)
+        obm_window = next(row for row in window["sections"] if row["mud_type"] == "OBM")
+        assert Decimal(obm_window["opening_stock"]) == 200
+        assert Decimal(obm_window["cost_per_bbl"]) == 10
+        assert Decimal(obm_window["reconciled_cost"]) == 200
+        summary = _json(client, "get", f"/api/v1/daily-cost/wells/{scope['well']['id']}/cost-summary", headers)
+        assert Decimal(summary["mud_cost"]["reconciled_cost"]) == Decimal(after["total_reconciled_cost"])
+        with SessionLocal() as db:
+            audit = db.scalar(select(AuditLog).where(AuditLog.entity_type == "mud_cost_opening_stock"))
+            assert audit.actor_email == "editor@example.com"
+            assert "100" in audit.summary and "200" in audit.summary
+            assert "Corrected tank survey" in audit.summary
