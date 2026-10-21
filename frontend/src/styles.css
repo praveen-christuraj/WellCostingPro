@@ -276,6 +276,13 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .afe-cost-print-sheet .ps-warnings { margin-top: 1mm; font-size: 7.6pt; }
   .afe-cost-print-sheet .ps-warnings ul { margin: .8mm 0 1mm; padding-left: 5mm; }
 
+  /* Model AFE grouping: a separate heading, numbered service lines, then a bold total.
+     Keep these rules AFE-only; Daily Cost still uses the shared inline group captions. */
+  .afe-cost-print-sheet .ps-service-group-heading { font-weight: 800; break-after: avoid; }
+  .afe-cost-print-sheet .ps-service-group-heading th,
+  .afe-cost-print-sheet .ps-service-group-total th { text-transform: uppercase; }
+  .afe-cost-print-sheet .ps-service-group-total { break-before: avoid; }
+
   /* Larger service schedules get one further density step so page one retains the
      entered rates, including per-section breakdowns, amounts and remarks. */
   .afe-cost-print-sheet .ps-afe-dense { font-size: 7.1pt; line-height: 1.1; }

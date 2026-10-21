@@ -1,7 +1,7 @@
 import { createPortal } from 'react-dom'
 import { depthToMeters } from '../../lib/units'
-import { amountText, STATUS_LABEL, type AfeEstimate, type AfeStatusEvent, type ServiceLineOut } from '../../lib/afe'
-import { compareServiceCodes, compareServiceGroups, serviceGroupLabel } from '../../lib/serviceGroups'
+import { amountText, STATUS_LABEL, type AfeEstimate, type AfeStatusEvent, type CurrencySetup, type ServiceLineOut } from '../../lib/afe'
+import { groupServiceOptions, sortServicesByGroup } from '../../lib/serviceGroups'
 
 // Print layout for a saved AFE, in the fixed two-page AFE format:
 //   page 1 - title, well and AFE metadata, the service schedule with remarks,
@@ -58,12 +58,35 @@ function basisDetail(line: ServiceLineOut) {
   </>
 }
 
+// Report-only subtotals use the saved, non-negative ten-place amounts and FX rates.
+// Convert each priced component and round half-up, just like the existing AFE summary;
+// adding native-currency line amounts together would give incorrect mixed-currency totals.
+const AMOUNT_SCALE = 10_000_000_000n
+const amountUnits = (value: string): bigint => {
+  const [whole, fraction = ''] = value.split('.')
+  return BigInt(whole || '0') * AMOUNT_SCALE + BigInt(fraction.padEnd(10, '0'))
+}
+
+function serviceGroupTotal(lines: ServiceLineOut[], currency: CurrencySetup): string | null {
+  if (!currency.converted) return null
+  const rates = new Map(currency.exchange_rates.map(rate => [rate.currency_code, amountUnits(rate.rate)]))
+  let total = 0n
+  for (const line of lines) {
+    const factor = line.currency === currency.standard_currency ? AMOUNT_SCALE : rates.get(line.currency)
+    if (factor === undefined) return null
+    // Older payloads may have only the already-priced line amount.
+    for (const component of line.components.length ? line.components : [line]) {
+      total += (amountUnits(component.amount) * factor + AMOUNT_SCALE / 2n) / AMOUNT_SCALE
+    }
+  }
+  return `${total / AMOUNT_SCALE}.${String(total % AMOUNT_SCALE).padStart(10, '0')}`
+}
+
 export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
   const { afe, well, services, consumables, tangibles, summary } = estimate
-  // Report order is the fixed service-group sequence, then natural service code.
-  const printServices = [...services].sort((left, right) =>
-    compareServiceGroups(left.service_group, right.service_group)
-    || compareServiceCodes(left.service_code, right.service_code))
+  // Keep the existing group order and natural service-code order within each block.
+  const printServices = sortServicesByGroup(services)
+  const printGroups = groupServiceOptions(printServices)
   const standard = summary.currency.standard_currency
   const printedAt = new Date().toLocaleString()
   const multiCurrency = summary.currency.multi_currency
@@ -89,10 +112,10 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
   ]
 
   const lineCount = (count: number): string => (count ? `${count} line(s)` : 'no lines')
-  // Multiple entered rates occupy multiple lines within Basis, even for one service.
+  // Count entered-rate detail plus each group's heading and total for print compaction.
   const serviceDetailRows = printServices.reduce((count, line) => count + Math.max(1,
     line.charging_basis === 'Per Section Rate' ? line.section_rates.length
-      : line.charging_basis === 'Day Rate' ? line.rates.length : 1), 0)
+      : line.charging_basis === 'Day Rate' ? line.rates.length : 1), 0) + printGroups.length * 2
 
   return createPortal(<div className="afe-print-sheet afe-cost-print-sheet" aria-hidden="true">
     {/* Page 1 - compact summary: metadata, services, group lump sums and total. */}
@@ -151,20 +174,34 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
               <th>#</th><th>Service</th><th>Basis / entered rates</th><th className="num">Amount</th><th>Remarks</th>
             </tr>
           </thead>
-          <tbody>
-            {printServices.map((line, index) => (
-              <tr className="ps-line" key={line.client_key ?? line.id ?? line.service_id}>
-                <td>{index + 1}</td>
-                <td>
-                  {serviceGroupLabel(line.service_group) && line.service_group !== printServices[index - 1]?.service_group
-                    && <span className="ps-group">{line.service_group} · </span>}
-                  <strong>{line.service_name}</strong><div className="ps-sub">{[line.provider_type, line.vendor_name || 'No vendor'].join(' · ')}</div>
-                </td>
-                <td>{line.charging_basis}{basisDetail(line)}</td>
-                <td className="num">{amountText(line.amount, line.currency)}</td>
-                <td className="ps-notes">{line.remarks || '—'}</td>
+          {printGroups.map(({ group, options: lines }, groupIndex) => {
+            const label = group || 'Unclassified services'
+            const total = serviceGroupTotal(lines, summary.currency)
+            return <tbody className="ps-service-group-block" key={group}>
+              <tr className="ps-service-group-heading">
+                <td>{groupIndex + 1}.0</td>
+                <th colSpan={4} scope="rowgroup">{label}</th>
               </tr>
-            ))}
+              {lines.map((line, index) => (
+                <tr className="ps-line" key={line.client_key ?? line.id ?? line.service_id}>
+                  <td>{groupIndex + 1}.{index + 1}</td>
+                  <td>
+                    <strong>{line.service_name}</strong><div className="ps-sub">{[line.provider_type, line.vendor_name || 'No vendor'].join(' · ')}</div>
+                  </td>
+                  <td>{line.charging_basis}{basisDetail(line)}</td>
+                  <td className="num">{amountText(line.amount, line.currency)}</td>
+                  <td className="ps-notes">{line.remarks || '—'}</td>
+                </tr>
+              ))}
+              <tr className="ps-subtotal ps-total ps-service-group-total">
+                <td/>
+                <th colSpan={2} scope="row">Total {label}{standard ? ` (${standard})` : ''}</th>
+                <td className="num">{total === null ? pending : amountText(total, standard)}</td>
+                <td/>
+              </tr>
+            </tbody>
+          })}
+          <tbody>
             <tr className="ps-subtotal">
               <td colSpan={3}>Services total{standard ? ` (${standard})` : ''}</td>
               <td className="num">{summary.services_total === null ? pending : amountText(summary.services_total, standard)}</td>
