@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from app.core.precision import Decimal10
 from app.domain.afe_costing import CHARGE_CATEGORIES, CHARGING_BASES, CONSUMABLE_CATEGORIES
@@ -30,6 +30,14 @@ assert set(CHARGING_BASES) == set(ChargingBasis.__args__)
 assert set(CONSUMABLE_CATEGORIES) == set(ConsumableCategory.__args__)
 
 MAX_LINES = 500
+
+
+class DecimalResponseModel(BaseModel):
+    """Serialize API decimals without exponent notation for editable number fields."""
+
+    @field_serializer("*", when_used="json", check_fields=False)
+    def plain_decimal(self, value: Any) -> Any:
+        return format(value, "f") if isinstance(value, Decimal) else value
 
 
 def _trim(value: Any) -> Any:
@@ -104,7 +112,7 @@ class AfeStatusIn(BaseModel):
         return _trim(value)
 
 
-class AfeOut(BaseModel):
+class AfeOut(DecimalResponseModel):
     configuration_scope: Literal["drilling", "completion"] = "drilling"
     id: str
     rig_id: str
@@ -329,12 +337,12 @@ class EstimateIn(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class CurrencyTotalOut(BaseModel):
+class CurrencyTotalOut(DecimalResponseModel):
     currency: str
     amount: Decimal
 
 
-class ExchangeRateOut(BaseModel):
+class ExchangeRateOut(DecimalResponseModel):
     currency_code: str
     rate: Decimal
 
@@ -349,7 +357,7 @@ class CurrencySetupOut(BaseModel):
     exchange_rates: list[ExchangeRateOut]
 
 
-class ComponentOut(BaseModel):
+class ComponentOut(DecimalResponseModel):
     group: str
     category: str
     description: str
@@ -363,18 +371,18 @@ class ComponentOut(BaseModel):
     unit: str
 
 
-class RateOut(BaseModel):
+class RateOut(DecimalResponseModel):
     category: str
     unit_rate: Decimal
 
 
-class ChargeOut(BaseModel):
+class ChargeOut(DecimalResponseModel):
     category: str
     quantity: Decimal
     quantity_unit: str
 
 
-class SectionRateOut(BaseModel):
+class SectionRateOut(DecimalResponseModel):
     hole_section_id: str
     section_label: str
     phase_id: str | None
@@ -382,7 +390,7 @@ class SectionRateOut(BaseModel):
     amount: Decimal
 
 
-class ServiceLineOut(BaseModel):
+class ServiceLineOut(DecimalResponseModel):
     id: str | None
     client_key: str | None
     service_id: str
@@ -407,7 +415,7 @@ class ServiceLineOut(BaseModel):
     components: list[ComponentOut]
 
 
-class ConsumableLineOut(BaseModel):
+class ConsumableLineOut(DecimalResponseModel):
     id: str | None
     client_key: str | None
     category: str
@@ -437,7 +445,7 @@ class ConsumableLineOut(BaseModel):
     components: list[ComponentOut]
 
 
-class TangibleLineOut(BaseModel):
+class TangibleLineOut(DecimalResponseModel):
     id: str | None
     client_key: str | None
     tangible_id: str
@@ -460,7 +468,7 @@ class TangibleLineOut(BaseModel):
     components: list[ComponentOut]
 
 
-class SectionSummaryOut(BaseModel):
+class SectionSummaryOut(DecimalResponseModel):
     hole_section_id: str | None
     label: str
     planned_days: Decimal
@@ -482,14 +490,14 @@ class EstimateSummaryOut(BaseModel):
     warnings: list[str]
 
 
-class ScopePhaseOut(BaseModel):
+class ScopePhaseOut(DecimalResponseModel):
     phase_id: str
     phase_code: str
     phase_name: str
     days: Decimal
 
 
-class ScopeSectionOut(BaseModel):
+class ScopeSectionOut(DecimalResponseModel):
     hole_section_id: str
     section_code: str
     section_name: str
@@ -501,7 +509,7 @@ class ScopeSectionOut(BaseModel):
     phases: list[ScopePhaseOut]
 
 
-class WellScopeOut(BaseModel):
+class WellScopeOut(DecimalResponseModel):
     scope: Literal["drilling", "completion"] = "drilling"
     well_id: str
     well_code: str
@@ -551,7 +559,7 @@ class AfeOverviewStatus(BaseModel):
     count: int
 
 
-class AfeOverviewWell(BaseModel):
+class AfeOverviewWell(DecimalResponseModel):
     well_id: str
     label: str
     total: Decimal
@@ -595,7 +603,7 @@ class AfeReferenceRig(BaseModel):
     display_name: str
 
 
-class AfeReferenceWell(BaseModel):
+class AfeReferenceWell(DecimalResponseModel):
     completion_config_status: str = "draft"
     completion_status: str = "active"
     completion_section_count: int = 0
@@ -623,7 +631,7 @@ class AfeReferenceService(BaseModel):
     description: str
 
 
-class AfeReferenceTangible(BaseModel):
+class AfeReferenceTangible(DecimalResponseModel):
     id: str
     tangible_code: str
     tangible_name: str
@@ -640,7 +648,7 @@ class AfeReferenceTangible(BaseModel):
     display_name: str
 
 
-class AfeReferenceDrillBit(BaseModel):
+class AfeReferenceDrillBit(DecimalResponseModel):
     id: str
     bit_code: str
     bit_name: str

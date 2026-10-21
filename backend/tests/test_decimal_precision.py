@@ -12,7 +12,14 @@ from app.core.database import Base
 from app.core.precision import Decimal10
 from app.core.units import depth_to_meters
 from app.domain.afe_costing import money as afe_money
-from app.schemas.afe import ExchangeRateIn, RateIn
+from app.schemas.afe import (
+    ConsumableLineOut,
+    ExchangeRateIn,
+    ExchangeRateOut,
+    RateIn,
+    ServiceLineOut,
+    TangibleLineOut,
+)
 from app.schemas.catalogue import FuelRevise
 from app.schemas.daily_cost import DailyCostEntryCreate
 from app.schemas.mud_cost import MudCostLineIn
@@ -95,4 +102,28 @@ def test_calculation_helpers_do_not_round_before_ten_places():
     assert _fx(value) == value
     assert final_cost(value, Decimal("100")) == value
     assert depth_to_meters(value, "m") == value
+
+
+@pytest.mark.parametrize(
+    ("model", "values", "expected"),
+    [
+        (ServiceLineOut, {"service_amount": Decimal("0E-10")}, '"service_amount":"0.0000000000"'),
+        (
+            ConsumableLineOut,
+            {
+                "quantity": Decimal("12.0000000000"),
+                "override_rate": Decimal("0E-10"),
+                "estimated_amount": Decimal("0.7300000000"),
+            },
+            '"estimated_amount":"0.7300000000"',
+        ),
+        (TangibleLineOut, {"quantity": Decimal("1E+2")}, '"quantity":"100"'),
+        (ExchangeRateOut, {"currency_code": "EUR", "rate": Decimal("1.2300000000")}, '"rate":"1.2300000000"'),
+    ],
+)
+def test_afe_editable_decimal_responses_use_plain_notation(model, values, expected):
+    serialized = model.model_construct(**values).model_dump_json()
+    assert expected in serialized
+    assert "E-" not in serialized
+    assert "E+" not in serialized
 
