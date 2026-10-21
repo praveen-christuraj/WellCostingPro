@@ -86,7 +86,10 @@ app itself hidden while printing.
 2. Metadata: rig, well, AFE number, AFE name, objective of the well, location / block, well plan
    status, total depth, planned days, AFE type and plan scope, AFE status, and who saved the
    estimate when.
-3. Services and cost: one row per service line — name, provider / vendor, charging basis with
+3. Services and cost: rows print in the fixed Master Data reporting order — Rig Operations,
+   Formation Evaluation, Well Services, Land Facilities and Preparation, Miscellaneous Services,
+   Supervisions — with the group captioned once at the start of its block and service-code order
+   inside each block. One row per service line: name, provider / vendor, charging basis with
    its entered-currency rate detail (unit rate × charged quantity, fixed amount, or **each** section
    and phase with its entered section rate), amount in the entered currency and **remarks**.
    Scoped day-rate and per-service lines include their section / phase in the Basis cell;

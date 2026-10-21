@@ -10,16 +10,24 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import Current, Db, require
+from app.domain.service_groups import (
+    DEFAULT_SERVICE_GROUP,
+    SERVICE_GROUPS,
+    normalize_service_group,
+    service_group_rank,
+)
 from app.models import Service, Vendor
 from app.models.service_master import SERVICE_CATEGORIES, SERVICE_PROVIDER_TYPES
 from app.schemas.master_data import MasterDataBulkActionResponse, MasterDataIDs, MasterDataImportRequest, MasterDataImportResponse
 from app.schemas.service_master import (
     ServiceBreakdown,
     ServiceCreate,
+    ServiceGroupAssignment,
     ServiceOut,
     ServiceOverview,
     ServiceUpdate,
     normalize_provider_type,
+    normalize_service_category,
 )
 from app.services import audit
 from app.services.dependencies import assert_no_dependencies
@@ -51,6 +59,7 @@ def _service_out(service: Service) -> ServiceOut:
         service_code=service.service_code,
         service_name=service.service_name,
         service_category=service.service_category,
+        service_group=service.service_group,
         provider_type=service.provider_type,
         vendor_id=service.vendor_id,
         vendor_code=vendor.vendor_code if vendor else None,
@@ -158,6 +167,7 @@ def _validate_service_payload(
         "service_code": payload["service_code"].strip().upper(),
         "service_name": payload["service_name"].strip(),
         "service_category": payload["service_category"],
+        "service_group": payload.get("service_group") or DEFAULT_SERVICE_GROUP,
         "provider_type": payload["provider_type"],
         "vendor_id": vendor.id,
         "description": payload.get("description", "").strip() if payload.get("description") else "",
@@ -256,12 +266,23 @@ def _normalize_import_row(row: dict[str, Any]) -> dict[str, Any]:
                 return value
         return None
 
+    # Older spreadsheets used a column named `service_group` for the drilling /
+    # completion category. Keep reading those files: a group-named value that is
+    # a known category feeds the category, otherwise it is the reporting group.
+    raw_group = first("service_group", "group", "service grouping")
+    legacy_category = normalize_service_category(raw_group) if raw_group is not None else None
+    category = first("service_category", "category")
+    if category is None and legacy_category in SERVICE_CATEGORIES:
+        category = legacy_category
+    reporting_group = None if legacy_category in SERVICE_CATEGORIES else raw_group
+
     return {
         "service_code": first("service_code", "code"),
         "service_name": first("service_name", "name", "service"),
         # The legacy Services tab did not carry this category; its records keep
         # working on import by defaulting to the drilling-services catalogue.
-        "service_category": first("service_category", "category", "service_group") or "Drilling Services",
+        "service_category": category or "Drilling Services",
+        "service_group": reporting_group or DEFAULT_SERVICE_GROUP,
         "provider_type": first("provider_type", "provider", "service_provider_type", "provider_type_name"),
         "vendor_reference": first("vendor_code", "vendor_id", "vendor", "supplier_code", "supplier", "service_provider"),
         "description": first("description", "desc", "remarks", "notes") or "",
@@ -321,6 +342,7 @@ def list_services(
     user: Current,
     search: str | None = Query(default=None, max_length=200),
     service_category: str | None = Query(default=None, max_length=50),
+    service_group: str | None = Query(default=None, max_length=60),
     provider_type: str | None = Query(default=None, max_length=30),
     vendor_id: str | None = Query(default=None, max_length=36),
 ) -> list[ServiceOut]:
@@ -336,18 +358,24 @@ def list_services(
                 Service.service_name.ilike(like),
                 Service.description.ilike(like),
                 Service.service_category.ilike(like),
+                Service.service_group.ilike(like),
                 Service.provider_type.ilike(like),
             )
         )
     if service_category:
         statement = statement.where(Service.service_category == service_category)
+    if service_group:
+        statement = statement.where(Service.service_group == normalize_service_group(service_group))
     if provider_type:
         statement = statement.where(Service.provider_type == provider_type)
     if vendor_id:
         statement = statement.where(Service.vendor_id == vendor_id)
-    services = db.scalars(
-        statement.order_by(Service.service_code, Service.created_at.desc())
-    ).all()
+    services = db.scalars(statement).all()
+    # Report order: the six groups in their fixed sequence, then service code.
+    services = sorted(
+        services,
+        key=lambda service: (service_group_rank(service.service_group), service.service_code),
+    )
     return [_service_out(service) for service in services]
 
 
@@ -356,8 +384,12 @@ def list_deleted_services(db: Db, user: Current) -> list[ServiceOut]:
     services = db.scalars(
         select(Service)
         .where(Service.organization_id == user.organization_id, Service.is_deleted.is_(True))
-        .order_by(Service.deleted_at.desc(), Service.service_code)
+        .order_by(Service.service_code)
     ).all()
+    services = sorted(
+        services,
+        key=lambda service: (service_group_rank(service.service_group), service.service_code),
+    )
     return [_service_out(service) for service in services]
 
 
@@ -383,14 +415,24 @@ def service_overview(db: Db, user: Current) -> ServiceOverview:
         .where(Service.organization_id == organization_id, active)
         .group_by(Service.provider_type)
     ).all()
+    group_rows = db.execute(
+        select(Service.service_group, func.count(Service.id))
+        .where(Service.organization_id == organization_id, active)
+        .group_by(Service.service_group)
+    ).all()
     category_counts = dict(category_rows)
     provider_counts = dict(provider_rows)
+    group_counts = dict(group_rows)
     return ServiceOverview(
         active_count=active_count,
         deleted_count=deleted_count,
         category_counts=[
             ServiceBreakdown(key=category, label=category, count=category_counts.get(category, 0))
             for category in SERVICE_CATEGORIES
+        ],
+        group_counts=[
+            ServiceBreakdown(key=group, label=group, count=group_counts.get(group, 0))
+            for group in SERVICE_GROUPS
         ],
         provider_type_counts=[
             ServiceBreakdown(key=provider, label=provider, count=provider_counts.get(provider, 0))
@@ -432,7 +474,10 @@ def create_service(data: ServiceCreate, request: Request, db: Db, user: Current)
         service=service,
         user=user,
         action=ServiceAction.CREATE,
-        summary=f"Created {service.service_category.lower()} service {service.service_code} — {service.service_name}",
+        summary=(
+            f"Created {service.service_category.lower()} service {service.service_code} — {service.service_name} "
+            f"in {service.service_group}"
+        ),
         request=request,
     )
     _commit(db)
@@ -456,6 +501,7 @@ def update_service(
         "service_code": service.service_code,
         "service_name": service.service_name,
         "service_category": service.service_category,
+        "service_group": service.service_group,
         "provider_type": service.provider_type,
         "vendor_id": service.vendor_id,
         "description": service.description or "",
@@ -580,6 +626,35 @@ def bulk_soft_delete_services(
     return MasterDataBulkActionResponse(affected_count=len(services))
 
 
+@router.post("/bulk-group", response_model=MasterDataBulkActionResponse, dependencies=[Depends(require("master-data:update"))])
+def bulk_assign_service_group(
+    data: ServiceGroupAssignment,
+    request: Request,
+    db: Db,
+    user: Current,
+) -> MasterDataBulkActionResponse:
+    """Classify existing services by reporting group in one audited action."""
+    services = _services_for_ids(db, data.ids, user.organization_id, deleted=False)
+    changed = [service for service in services if service.service_group != data.service_group]
+    for service in changed:
+        previous_group = service.service_group
+        service.service_group = data.service_group
+        _audit_service(
+            db,
+            service=service,
+            user=user,
+            action=ServiceAction.UPDATE,
+            summary=(
+                f"Assigned service {service.service_code} to {data.service_group}"
+                + (f" from {previous_group}" if previous_group else "")
+            ),
+            request=request,
+        )
+    if changed:
+        _commit(db)
+    return MasterDataBulkActionResponse(affected_count=len(changed))
+
+
 @router.post("/bulk-restore", response_model=MasterDataBulkActionResponse, dependencies=[Depends(require("master-data:restore"))])
 def bulk_restore_services(
     data: MasterDataIDs,
@@ -654,6 +729,7 @@ def import_services(
                     "service_code": normalized.get("service_code"),
                     "service_name": normalized.get("service_name"),
                     "service_category": normalized.get("service_category"),
+                    "service_group": normalized.get("service_group"),
                     "provider_type": provider_type,
                     "vendor_id": vendor_id,
                     "description": normalized.get("description") or "",

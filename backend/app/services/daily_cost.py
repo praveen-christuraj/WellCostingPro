@@ -67,6 +67,7 @@ from app.services import audit
 from app.services import mud_cost as mud_cost_service
 from app.models.catalogue import CatalogueOption
 from app.core.precision import DECIMAL_QUANT
+from app.domain.service_groups import service_group_rank
 
 MONEY = DECIMAL_QUANT
 RATE = DECIMAL_QUANT
@@ -496,11 +497,12 @@ def _make_budget_line(
     item_key: str, item_code: str, item_name: str, source_line_id: str,
     section_id: str | None, phase_id: str | None, quantity: Decimal,
     unit_rate: Decimal, native_amount: Decimal, currency: str, fx_rate: Decimal,
-    uom: str, sort_order: int,
+    uom: str, sort_order: int, service_group: str = "",
 ) -> DailyCostBaselineBudgetLine:
     return DailyCostBaselineBudgetLine(
         id=uid(), organization_id=organization_id, baseline_id=baseline.id, cost_group=cost_group,
         budget_kind=budget_kind, item_key=item_key, item_code_snapshot=item_code, item_name_snapshot=item_name,
+        service_group=(service_group or "").strip(),
         source_afe_line_id=source_line_id, section_id=section_id, phase_id=phase_id,
         quantity=Decimal(quantity), unit_rate=_rate(unit_rate), native_amount=_money(native_amount),
         currency=(currency or "").strip().upper(), exchange_rate=_fx(fx_rate),
@@ -582,7 +584,7 @@ def _ensure_afe_baseline(
                 item_code=line.service_code, item_name=line.service_name, source_line_id=line.id,
                 section_id=line.hole_section_id, phase_id=line.phase_id, quantity=Decimal("1"),
                 unit_rate=Decimal(line.service_amount), native_amount=Decimal(line.amount), currency=currency,
-                fx_rate=factor, uom="", sort_order=order,
+                fx_rate=factor, uom="", sort_order=order, service_group=line.service_group,
             ))
             order += 1
             if line.charging_basis == "Day Rate":
@@ -722,7 +724,8 @@ def _baseline_out(baseline: DailyCostBaseline, rate_baseline: DailyCostWellRateB
         service_rates=[_daily_rate_option(row, section_names, phase_names) for row in baseline.service_rates],
         budget_lines=[DailyCostBaselineBudgetOut(
             id=row.id, cost_group=row.cost_group, budget_kind=row.budget_kind, item_key=row.item_key,
-            item_code=row.item_code_snapshot, item_name=row.item_name_snapshot, source_afe_line_id=row.source_afe_line_id,
+            item_code=row.item_code_snapshot, item_name=row.item_name_snapshot, service_group=row.service_group,
+            source_afe_line_id=row.source_afe_line_id,
             section_id=row.section_id, phase_id=row.phase_id, quantity=Decimal(row.quantity), unit_rate=Decimal(row.unit_rate),
             native_amount=Decimal(row.native_amount), currency=row.currency, exchange_rate=Decimal(row.exchange_rate),
             planned_amount=Decimal(row.planned_amount), uom=row.uom,
@@ -755,6 +758,7 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
         select(Service).options(joinedload(Service.vendor))
         .where(Service.organization_id == organization_id, Service.is_deleted.is_(False)).order_by(Service.service_code)
     ).unique().all()
+    services = sorted(services, key=lambda service: (service_group_rank(service.service_group), service.service_code))
     vendors = db.scalars(select(Vendor).where(
         Vendor.organization_id == organization_id, Vendor.is_deleted.is_(False), Vendor.status == "active"
     ).order_by(Vendor.vendor_code)).all()
@@ -833,7 +837,8 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
         ) for row in sub_activities],
         services=[{
             "id": row.id, "service_code": row.service_code, "service_name": row.service_name,
-            "service_category": row.service_category, "provider_type": row.provider_type,
+            "service_category": row.service_category, "service_group": row.service_group,
+            "provider_type": row.provider_type,
             "vendor_id": row.vendor_id, "vendor_code": row.vendor.vendor_code if row.vendor else "",
             "vendor_name": row.vendor.vendor_name if row.vendor else "",
             "display_name": _label(row.service_code, row.service_name),
@@ -1431,6 +1436,7 @@ def _normalise_service(
             "service_id": service.id,
             "service_code_snapshot": service.service_code,
             "service_name_snapshot": service.service_name,
+            "service_group_snapshot": service.service_group,
             "charging_basis": basis,
             "charge_category": line.charge_category,
             "baseline_service_rate_id": rate_id,
@@ -2049,7 +2055,7 @@ def _line_out(line: Any, labels: dict[str, DailyCostBaselineBudgetLine]) -> Any:
     if isinstance(line, DailyCostServiceLine):
         return DailyCostServiceLineOut(
             **common, cost_items=[{"description": item.description, "amount": item.amount} for item in line.cost_items], service_id=line.service_id, service_code=line.service_code_snapshot,
-            service_name=line.service_name_snapshot, charging_basis=line.charging_basis,
+            service_name=line.service_name_snapshot, service_group=line.service_group_snapshot, charging_basis=line.charging_basis,
             charge_category=line.charge_category, baseline_service_rate_id=line.baseline_service_rate_id,
         )
     if isinstance(line, DailyCostConsumableLine):
@@ -2320,7 +2326,7 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
     # service-wise report can print planned / UPA / NPT actuals per budget line.
     actual_by_class: dict[tuple[str, str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     actual_by_group_class: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
-    unplanned_meta: dict[tuple[str, str], tuple[str, str]] = {}
+    unplanned_meta: dict[tuple[str, str], tuple[str, str, str]] = {}
     actual_all: list[tuple[str, Any]] = []
     if entries:
         for model, group in LINE_MODELS:
@@ -2342,9 +2348,10 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
                 actual_by_group_class[(group, row.classification)] += amount
                 actual_all.append((group, row))
                 if (group, row.budget_key) not in planned_keys:
+                    line_group = ""
                     if isinstance(row, DailyCostServiceLine):
                         code, name = row.service_code_snapshot, row.service_name_snapshot
-                        kind = "service"
+                        kind, line_group = "service", row.service_group_snapshot
                     elif isinstance(row, DailyCostConsumableLine):
                         code, name = row.item_code_snapshot, row.item_name_snapshot
                         kind = "consumable"
@@ -2355,7 +2362,7 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
                     else:
                         code, name = row.tangible_code_snapshot, row.tangible_name_snapshot
                         kind = "tangible"
-                    unplanned_meta[(group, row.budget_key)] = (code, name or kind)
+                    unplanned_meta[(group, row.budget_key)] = (code, name or kind, line_group)
 
     comparison_lines: list[DailyCostBudgetComparison] = []
     keys = set(planned_keys) | set(actual_by_key)
@@ -2366,8 +2373,11 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
         if metadata:
             code, name = metadata.item_code_snapshot, metadata.item_name_snapshot
             kind = metadata.budget_kind
+            service_group = metadata.service_group
         else:
-            code, name = unplanned_meta.get((group, key), ("", "Unbudgeted actual"))
+            code, name, service_group = unplanned_meta.get(
+                (group, key), ("", "Unbudgeted actual", "")
+            )
             kind = key.split(":", 1)[0]
         comparison_lines.append(
             DailyCostBudgetComparison(
@@ -2376,6 +2386,7 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
                 budget_kind=kind,
                 item_code=code,
                 item_name=name,
+                service_group=service_group,
                 planned=planned,
                 actual_to_date=actual,
                 balance=_money(planned - actual),
@@ -3152,6 +3163,7 @@ def _line_union(
             model.vendor_name_snapshot.label("vendor_name"),
             model.party_name.label("party_name"),
             model.classification.label("classification"),
+            _service_group_column(model).label("service_group"),
             model.rate_source.label("rate_source"),
             model.currency.label("currency"),
             model.exchange_rate.label("exchange_rate"),
@@ -3172,6 +3184,11 @@ def _line_union(
             statement = statement.where(DailyCostEntry.cost_date <= date_to)
         parts.append(statement)
     return union_all(*parts).subquery("daily_cost_lines")
+
+
+def _service_group_column(model: type[Any]) -> Any:
+    """Reporting group where the line stores one; blank for non-service costs."""
+    return model.service_group_snapshot if model is DailyCostServiceLine else literal("")
 
 
 def _item_columns(model: type[Any], name: bool = False) -> Any:
@@ -4047,6 +4064,7 @@ def well_cost_summary(
             planned_by_key[key] = planned_by_key.get(key, Decimal("0")) + Decimal(budget_line.planned_amount)
             meta.setdefault(key, budget_line)
     unplanned_names: dict[tuple[str, str], str] = {}
+    unplanned_groups: dict[tuple[str, str], str] = {}
     for row in db.execute(
         select(
             lines.c.cost_group, lines.c.budget_key,
@@ -4055,28 +4073,33 @@ def well_cost_summary(
             # aggregated. min() keeps the same one-label-per-budget-key shape and
             # makes the chosen label deterministic on every dialect.
             func.min(lines.c.activity_name), func.min(lines.c.party_name),
+            func.min(lines.c.service_group),
         )
         .select_from(lines)
         .where(lines.c.budget_key.like("unplanned:%"))
         .group_by(lines.c.cost_group, lines.c.budget_key)
     ).all():
         unplanned_names[(str(row[0]), str(row[1]))] = f"Unbudgeted {row[0].lower()} — {row[2] or row[3] or UNASSIGNED}"
+        unplanned_groups[(str(row[0]), str(row[1]))] = str(row[4] or "")
     budget_lines: list[DailyCostBudgetComparison] = []
     for key in sorted(set(planned_by_key) | set(actual_by_key), key=lambda value: -abs(actual_by_key.get(value, Decimal("0")))):
         budget_line = meta.get(key)
         if budget_line is not None:
             group = budget_line.cost_group
             code, name, kind = budget_line.item_code_snapshot, budget_line.item_name_snapshot, budget_line.budget_kind
+            service_group = budget_line.service_group
         else:
             group = group_by_key.get(key, "Services")
             kind = key.split(":", 1)[0] if key else "unplanned"
             code = "" if key.startswith("unplanned:") else key.split(":", 1)[-1][:50]
             name = unplanned_names.get((str(group), key), f"Unbudgeted {str(group).lower()}")
+            service_group = unplanned_groups.get((str(group), key), "")
         planned_value = planned_by_key.get(key)
         actual_value = _money(actual_by_key.get(key, Decimal("0")))
         split_planned, split_upa, split_npt = class_by_key.get(key, (Decimal("0"),) * 3)
         budget_lines.append(DailyCostBudgetComparison(
             budget_key=key, cost_group=group, budget_kind=kind, item_code=code, item_name=name,
+            service_group=service_group,
             planned=_money(planned_value) if planned_value is not None else Decimal("0.00"),
             actual_to_date=actual_value,
             balance=_money((planned_value or Decimal("0")) - actual_value),

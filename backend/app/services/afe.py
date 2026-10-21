@@ -33,6 +33,7 @@ from app.core.units import depth_to_meters
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.domain import afe_costing as engine
+from app.domain.service_groups import service_group_rank
 from app.models import AuditLog, DailyCostBaseline, DailyCostEntry, Rig, Well, WellSection
 from app.models.afe import (
     AFE_STATUSES,
@@ -790,6 +791,7 @@ def _service_out(
         service_code=service.service_code if service else "",
         service_name=service.service_name if service else "Removed service",
         service_category=service.service_category if service else "",
+        service_group=service.service_group if service else "",
         provider_type=service.provider_type if service else "",
         vendor_name=(service.vendor.vendor_name if service and service.vendor else ""),
         charging_basis=row.basis,
@@ -1756,6 +1758,8 @@ def reference_data(db: Session, organization_id: str) -> AfeReference:
             .order_by(Service.service_code)
         ).unique().all()
     )
+    # Picker and report order: reporting group first, then natural service code.
+    services.sort(key=lambda service: (service_group_rank(service.service_group), service.service_code))
     tangibles = list(
         db.scalars(
             select(Tangible).where(Tangible.organization_id == organization_id, Tangible.is_deleted.is_(False)).order_by(Tangible.tangible_code)
@@ -1804,6 +1808,7 @@ def reference_data(db: Session, organization_id: str) -> AfeReference:
                 service_code=service.service_code,
                 service_name=service.service_name,
                 service_category=service.service_category,
+                service_group=service.service_group,
                 provider_type=service.provider_type,
                 vendor_name=service.vendor.vendor_name if service.vendor else "",
                 display_name=_label(service.service_code, service.service_name),

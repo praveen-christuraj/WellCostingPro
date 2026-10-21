@@ -397,6 +397,7 @@ class ServiceLineOut(DecimalResponseModel):
     service_code: str
     service_name: str
     service_category: str
+    service_group: str = ""
     provider_type: str
     vendor_name: str
     charging_basis: str
@@ -625,6 +626,7 @@ class AfeReferenceService(BaseModel):
     service_code: str
     service_name: str
     service_category: str
+    service_group: str = ""
     provider_type: str
     vendor_name: str
     display_name: str

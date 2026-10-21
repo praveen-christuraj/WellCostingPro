@@ -39,6 +39,7 @@ export type DailyCostSubActivityOption = {
 }
 export type DailyCostServiceOption = {
   id: string; service_code: string; service_name: string; service_category: string
+  service_group: string
   provider_type: string; vendor_id: string | null; vendor_code: string; vendor_name: string; display_name: string
 }
 export type DailyCostCatalogueOption = {
@@ -69,7 +70,7 @@ export type DailyCostRateOption = {
 export type DailyCostBudgetLine = {
   id: string; cost_group: 'Services' | 'Consumables' | 'Tangibles'
   budget_kind: 'service' | 'consumable_category' | 'drill_bit' | 'tangible' | string
-  item_key: string; item_code: string; item_name: string; source_afe_line_id: string
+  item_key: string; item_code: string; item_name: string; service_group?: string; source_afe_line_id: string
   section_id: string | null; phase_id: string | null; quantity: string; unit_rate: string
   native_amount: string; currency: string; exchange_rate: string; planned_amount: string; uom: string
 }
@@ -160,7 +161,8 @@ export type DailyCostLineOutput = DailyCostLineBase & {
 }
 export type DailyCostServiceLine = DailyCostLineOutput & {
   cost_items?: ServiceCostItem[]
-  service_id: string; service_code: string; service_name: string; charging_basis: ChargingBasis
+  service_id: string; service_code: string; service_name: string; service_group?: string
+  charging_basis: ChargingBasis
   charge_category: ChargeCategory; baseline_service_rate_id: string | null
 }
 export type DailyCostConsumableLine = DailyCostLineOutput & {
@@ -185,7 +187,8 @@ export type DailyCostComparisonGroup = {
 }
 export type DailyCostComparisonLine = {
   budget_key: string; cost_group: DailyCostGroup; budget_kind: string
-  item_code: string; item_name: string; planned: string; actual_to_date: string; balance: string; is_planned: boolean
+  item_code: string; item_name: string; service_group?: string
+  planned: string; actual_to_date: string; balance: string; is_planned: boolean
   /** Cumulative actual under Planned / UPA / NPT; `actual_planned` is the default case. */
   actual_planned?: string; actual_upa?: string; actual_npt?: string
 }

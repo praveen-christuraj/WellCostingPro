@@ -25,6 +25,7 @@ import {
   type EstimateInput, type ExchangeRateInput, type ServiceLineInput, type ServiceLineOut, type TangibleLineInput, type TangibleLineOut, type WellScope,
 } from '../lib/afe'
 import { defaultCurrencyCode } from '../lib/masterData'
+import { compareServiceCodes, compareServiceGroups } from '../lib/serviceGroups'
 import type { CostingSet, CostingSetGroup } from '../lib/costingSets'
 
 type LineKind = 'service' | 'consumable' | 'tangible'
@@ -41,7 +42,7 @@ function inputsFor(estimate: AfeEstimate, reference: AfeReference | null): Estim
 
 // Flattened rows for the grids. Fields are top-level so search, filters and export work on them.
 type ServiceRow = {
-  key: string; service: string; basis: string; scope: string; currency: string; basis_detail: string
+  key: string; service: string; code: string; group: string; basis: string; scope: string; currency: string; basis_detail: string
   amount: number | null; amount_text: string; status: string; warnings: number; problems: string[]
   line: ServiceLineInput; out: ServiceLineOut | null
 }
@@ -265,6 +266,8 @@ export default function AfeEstimate() {
       return {
         key: line.client_key,
         service: service ? `${service.service_code} · ${service.service_name}` : 'Service removed from master data',
+        code: service?.service_code ?? '',
+        group: service?.service_group ?? out?.service_group ?? '',
         basis: line.charging_basis,
         basis_detail: basisDetail,
         scope: line.charging_basis === 'Per Section Rate' ? 'Per section' : [sectionLabel(saved.well, line.hole_section_id), phaseLabel(saved.well, line.hole_section_id, line.phase_id)].filter(Boolean).join(' · '),
@@ -277,7 +280,8 @@ export default function AfeEstimate() {
         line,
         out,
       }
-    })
+      // Report order: group first, then natural service code; unknown groups last.
+    }).sort((left, right) => compareServiceGroups(left.group, right.group) || compareServiceCodes(left.code, right.code))
   }, [inputs.services, shown, reference, saved])
 
   const consumableRows = useMemo<ConsumableRow[]>(() => {
@@ -611,6 +615,7 @@ export default function AfeEstimate() {
   const estimateReady = Boolean(saved?.persisted) && toNumber(saved?.summary.total) > 0
 
   const serviceColumns = useMemo<ColDef<ServiceRow>[]>(() => [
+    { headerName: 'SERVICE GROUP', field: 'group', minWidth: 190, flex: .85, comparator: (left, right) => compareServiceGroups(left, right), valueFormatter: params => params.data?.group || 'Unclassified' },
     { headerName: 'SERVICE', field: 'service', minWidth: 230, flex: 1.4 },
     { headerName: 'BASIS', field: 'basis', minWidth: 150, flex: .9, valueFormatter: params => params.data ? `${params.data.basis} · ${params.data.basis_detail}` : '' },
     { headerName: 'SCOPE', field: 'scope', minWidth: 190, flex: 1.1 },
@@ -903,7 +908,7 @@ export default function AfeEstimate() {
         rowKey="key"
         rows={serviceRows}
         columns={serviceColumns}
-        searchPlaceholder="Search services by code, name, basis or section..."
+        searchPlaceholder="Search services by code, name, group, basis or section..."
         exportName={`afe-${afe.afe_code}-services`}
         canExport={can('afe:export')}
         selectable={editable}

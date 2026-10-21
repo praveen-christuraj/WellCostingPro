@@ -3,10 +3,12 @@
 from sqlalchemy import CheckConstraint, ForeignKey, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.domain.service_groups import DEFAULT_SERVICE_GROUP, SERVICE_GROUPS
 from app.models.master_data import MasterDataRecord
 
 SERVICE_CATEGORIES = ("Drilling Services", "Completion Services")
 SERVICE_PROVIDER_TYPES = ("In House Services", "Third Party Services")
+_SERVICE_GROUP_CHECK = "service_group IN (" + ", ".join(f"'{group}'" for group in SERVICE_GROUPS) + ")"
 
 
 class Service(MasterDataRecord):
@@ -23,6 +25,7 @@ class Service(MasterDataRecord):
             "provider_type IN ('In House Services', 'Third Party Services')",
             name="ck_services_provider_type",
         ),
+        CheckConstraint(_SERVICE_GROUP_CHECK, name="ck_services_group"),
         CheckConstraint(
             "(provider_type = 'Third Party Services' AND vendor_id IS NOT NULL) OR "
             "provider_type = 'In House Services'",
@@ -41,6 +44,9 @@ class Service(MasterDataRecord):
     service_code: Mapped[str] = mapped_column(String(50), nullable=False)
     service_name: Mapped[str] = mapped_column(String(200), nullable=False)
     service_category: Mapped[str] = mapped_column(String(50), nullable=False)
+    service_group: Mapped[str] = mapped_column(
+        String(60), nullable=False, default=DEFAULT_SERVICE_GROUP, server_default=DEFAULT_SERVICE_GROUP
+    )
     provider_type: Mapped[str] = mapped_column(String(30), nullable=False)
     vendor_id: Mapped[str | None] = mapped_column(
         ForeignKey("vendors.id", ondelete="RESTRICT"), nullable=True, index=True

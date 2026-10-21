@@ -108,7 +108,7 @@ def _setup_daily_sheet(client, headers, *, with_sub_activities=True, create_entr
     })
     service = _post(client, "/api/v1/master-data/services", headers, {
         "service_code": "MUD-LOG", "service_name": "Mud logging", "service_category": "Drilling Services",
-        "provider_type": "Third Party Services", "vendor_id": vendor["id"], "description": "Wellsite logging crew",
+        "service_group": "Formation Evaluation", "provider_type": "Third Party Services", "vendor_id": vendor["id"], "description": "Wellsite logging crew",
     })
     rig = _post(client, "/api/v1/rig-well/rigs", headers, {"rig_code": "RIG-01", "rig_name": "Rig One", "remarks": ""})
     well = _post(client, "/api/v1/rig-well/wells", headers, {
@@ -253,6 +253,13 @@ def test_daily_cost_locks_rates_prices_bulk_actuals_and_tracks_submission():
         updated = client.put(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers, json=payload)
         assert updated.status_code == 200, updated.text
         assert Decimal(updated.json()["entry"]["upa_total"]) == Decimal("300.00")
+        assert updated.json()["services"][1]["service_group"] == "Formation Evaluation"
+        unplanned_row = next(
+            row for row in updated.json()["comparison"]["budget_lines"]
+            if row["budget_key"].startswith("unplanned:service:")
+        )
+        # An unplanned service still prints in its Master Data group at entry time.
+        assert unplanned_row["service_group"] == "Formation Evaluation"
         assert updated.json()["warnings"]
 
         imported = client.post(f"/api/v1/daily-cost/entries/{entry_id}/import", headers=headers, json={"rows": [{
@@ -482,6 +489,13 @@ def test_well_cost_summary_reports_daily_and_factor_views():
         # The service-wise report prints the cumulative actual split by the
         # activity classification of the daily lines (Planned / UPA / NPT).
         service_row = planned_keys[f"service:{rate['source_afe_line_id']}"]
+        # The locked AFE snapshot carries the Master Data reporting group into the report.
+        assert service_row["service_group"] == "Formation Evaluation"
+        baseline_budget = client.get(f"/api/v1/daily-cost/entries/{entry_id}/baseline", headers=headers)
+        assert baseline_budget.status_code == 200, baseline_budget.text
+        assert next(
+            row for row in baseline_budget.json()["budget_lines"] if row["budget_kind"] == "service"
+        )["service_group"] == "Formation Evaluation"
         assert Decimal(service_row["actual_planned"]) == Decimal("100.00")
         assert Decimal(service_row["actual_upa"]) == Decimal("0.00")
         assert Decimal(service_row["actual_npt"]) == Decimal("0.00")

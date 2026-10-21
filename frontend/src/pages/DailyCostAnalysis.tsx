@@ -22,6 +22,7 @@ import {
   dailyMoney, displayDate, DAILY_COST_STATUSES, type DailyCostDailyRow, type DailyCostFactorGroup,
   type DailyCostFactorRow, type DailyCostWellOption, type DailyCostWellSummary, type WellProgressScope,
 } from '../lib/dailyCost'
+import { compareServiceGroups } from '../lib/serviceGroups'
 import { formatDepthMeters } from '../lib/units'
 
 function StatCard({ label, value, hint, icon, tone = 'default' }: {
@@ -480,7 +481,12 @@ export default function DailyCostAnalysis() {
           columns={[
             { headerName: 'BUDGET LINE', field: 'item_code', minWidth: 160, valueGetter: params => String(params.data?.item_code || params.data?.item_name || 'Unbudgeted actual') },
             { headerName: 'NAME', field: 'item_name', minWidth: 200, flex: 1 },
-            { headerName: 'GROUP', field: 'cost_group', minWidth: 130 },
+            { headerName: 'GROUP', field: 'cost_group', minWidth: 125 },
+            {
+              headerName: 'SERVICE GROUP', field: 'service_group', minWidth: 190,
+              comparator: (left, right) => compareServiceGroups(left, right),
+              valueFormatter: params => params.data?.service_group || '—',
+            },
             { headerName: 'PLANNED', field: 'planned', minWidth: 150, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
             { headerName: 'ACTUAL', field: 'actual_to_date', minWidth: 150, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
             {

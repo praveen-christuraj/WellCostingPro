@@ -102,6 +102,7 @@ def create_service(
     *,
     name: str = "Cement Bond Logging",
     category: str = "Drilling Services",
+    group: str = "Miscellaneous Services",
     provider: str = "In House",
     vendor_id: str | None = None,
 ) -> dict:
@@ -115,6 +116,7 @@ def create_service(
             "service_code": name.upper().replace(" ", "-"),
             "service_name": name,
             "service_category": category,
+            "service_group": group,
             "provider_type": provider,
             "vendor_id": vendor_id,
             "description": "Service master test record",
@@ -558,3 +560,116 @@ def test_import_uses_manual_codes_and_reports_invalid_rows_without_partial_updat
         assert conflict.json()['error_count'] == 1
         current = client.get(f"/api/v1/master-data/services/{original['id']}", headers=headers).json()
         assert current['service_name'] == 'Renamed'
+
+
+def test_service_groups_drive_register_order_bulk_assignment_and_imports():
+    with TestClient(app) as client:
+        headers = login(client)
+        vendor = create_vendor(client, headers)
+
+        drill_support = create_service(client, headers, name="Drilling Support", group="Well Services", vendor_id=vendor["id"])
+        wireline = create_service(client, headers, name="Wireline Logging", group="Formation Evaluation", vendor_id=vendor["id"])
+        camp = create_service(client, headers, name="Camp Facilities", group="Land Facilities and Preparation", vendor_id=vendor["id"])
+        supervisor = create_service(client, headers, name="Night Supervisor", group="Supervisions", vendor_id=vendor["id"])
+        rig = create_service(client, headers, name="Rig Move", group="Rig Operations", vendor_id=vendor["id"])
+        create_service(client, headers, name="Unclassified Service", group="Miscellaneous Services", vendor_id=vendor["id"])
+
+        ordered = client.get("/api/v1/master-data/services", headers=headers).json()
+        assert [service["service_group"] for service in ordered] == [
+            "Rig Operations",
+            "Formation Evaluation",
+            "Well Services",
+            "Land Facilities and Preparation",
+            "Miscellaneous Services",
+            "Supervisions",
+        ]
+        assert ordered[1]["id"] == wireline["id"]
+        assert ordered[0]["id"] == rig["id"]
+
+        only_well = client.get(
+            "/api/v1/master-data/services", headers=headers, params={"service_group": "Well Services"}
+        ).json()
+        assert [service["id"] for service in only_well] == [drill_support["id"]]
+        searched = client.get(
+            "/api/v1/master-data/services", headers=headers, params={"search": "formation evaluation"}
+        ).json()
+        assert [service["id"] for service in searched] == [wireline["id"]]
+
+        overview = client.get("/api/v1/master-data/services/overview", headers=headers).json()
+        assert [(row["key"], row["count"]) for row in overview["group_counts"]] == [
+            ("Rig Operations", 1),
+            ("Formation Evaluation", 1),
+            ("Well Services", 1),
+            ("Land Facilities and Preparation", 1),
+            ("Miscellaneous Services", 1),
+            ("Supervisions", 1),
+        ]
+
+        assigned = client.post(
+            "/api/v1/master-data/services/bulk-group",
+            headers=headers,
+            json={"ids": [camp["id"], supervisor["id"]], "service_group": "miscellenous services"},
+        )
+        assert assigned.status_code == 200, assigned.text
+        assert assigned.json()["affected_count"] == 2
+        assert client.post(
+            "/api/v1/master-data/services/bulk-group",
+            headers=headers,
+            json={"ids": [camp["id"]], "service_group": "miscellenous services"},
+        ).json()["affected_count"] == 0
+        assert client.post(
+            "/api/v1/master-data/services/bulk-group",
+            headers=headers,
+            json={"ids": [camp["id"]], "service_group": "Not a group"},
+        ).status_code == 422
+
+        imported = client.post(
+            "/api/v1/master-data/services/import",
+            headers=headers,
+            json={"rows": [
+                {
+                    "service_code": "IMPORT-GROUPED", "service_name": "Imported Grouped Service",
+                    "service_category": "Drilling Services", "service_group": "FORMATION-EVALUATION",
+                    "provider_type": "Inhouse", "vendor_code": vendor["vendor_code"],
+                },
+                {
+                    "service_code": "IMPORT-LEGACY-GROUP-COLUMN", "service_name": "Legacy Category Column",
+                    "service_group": "Completion Services", "provider_type": "Inhouse",
+                    "vendor_code": vendor["vendor_code"],
+                },
+            ]},
+        )
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["imported_count"] == 2
+        imported_services = {row["service_code"]: row for row in client.get(
+            "/api/v1/master-data/services", headers=headers
+        ).json()}
+        assert imported_services["IMPORT-GROUPED"]["service_group"] == "Formation Evaluation"
+        # A group-named column that carries a category is still read as the category.
+        assert imported_services["IMPORT-LEGACY-GROUP-COLUMN"]["service_category"] == "Completion Services"
+        assert imported_services["IMPORT-LEGACY-GROUP-COLUMN"]["service_group"] == "Miscellaneous Services"
+
+        # Legacy clients that omit the group stay valid and land in Miscellaneous Services.
+        legacy = client.post(
+            "/api/v1/master-data/services",
+            headers=headers,
+            json={
+                "service_code": "LEGACY-CLIENT", "service_name": "Legacy Client Service",
+                "service_category": "Drilling Services", "provider_type": "InHouse",
+                "vendor_id": vendor["id"],
+            },
+        )
+        assert legacy.status_code == 201, legacy.text
+        assert legacy.json()["service_group"] == "Miscellaneous Services"
+
+        renamed = client.patch(
+            f"/api/v1/master-data/services/{rig['id']}", headers=headers, json={"service_group": "well services"}
+        )
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json()["service_group"] == "Well Services"
+        with SessionLocal() as db:
+            organization = db.scalar(select(Organization).where(Organization.slug == "north"))
+            entries = db.scalars(select(AuditLog).where(
+                AuditLog.organization_id == organization.id, AuditLog.entity_type == "service",
+            )).all()
+        assert any("Assigned service" in entry.summary for entry in entries)

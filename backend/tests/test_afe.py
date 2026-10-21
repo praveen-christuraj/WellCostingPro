@@ -115,7 +115,7 @@ def _master_setup(client, headers):
         "/api/v1/master-data/services", headers=headers,
         json={
             "service_code": "MUD-LOGGING", "service_name": "Mud logging", "service_category": "Drilling Services",
-            "provider_type": "In House Services", "vendor_id": inhouse.json()["id"], "description": "Wellsite logging crew",
+            "service_group": "Formation Evaluation", "provider_type": "In House Services", "vendor_id": inhouse.json()["id"], "description": "Wellsite logging crew",
         },
     )
     assert service_in_house.status_code == 201, service_in_house.text
@@ -123,7 +123,7 @@ def _master_setup(client, headers):
         "/api/v1/master-data/services", headers=headers,
         json={
             "service_code": "CEMENTING", "service_name": "Cementing", "service_category": "Drilling Services",
-            "provider_type": "Third Party Services", "vendor_id": vendor["id"], "description": "Cement unit",
+            "service_group": "Well Services", "provider_type": "Third Party Services", "vendor_id": vendor["id"], "description": "Cement unit",
         },
     )
     assert service_third.status_code == 201, service_third.text
@@ -376,6 +376,9 @@ def test_afe_register_requires_configured_well_and_matching_rig_and_unique_codes
         assert [row["id"] for row in reference["wells"] if row["rig_id"] == rig["id"]] == [well["id"]]
         assert reference["wells"][0]["section_count"] == 2
         assert {row["id"] for row in reference["services"]} == {master["service"], master["service_third"]}
+        # Picker order follows the reporting groups before the service code.
+        assert [row["service_code"] for row in reference["services"]] == ["MUD-LOGGING", "CEMENTING"]
+        assert [row["service_group"] for row in reference["services"]] == ["Formation Evaluation", "Well Services"]
         assert Decimal(reference["tangibles"][0]["captured_rate"]) == Decimal("1500")  # final cost with 120% uplift
 
 
@@ -403,6 +406,7 @@ def test_preview_prices_without_writing_and_save_round_trips_without_duplicates(
         assert first["persisted"] is True
         assert Decimal(first["summary"]["total"]) == Decimal("263500.00")
         assert len(first["services"]) == 1 and len(first["consumables"]) == 4 and len(first["tangibles"]) == 2
+        assert first["services"][0]["service_group"] == "Formation Evaluation"
 
         again = client.put(url, headers=headers, json=payload)
         second = again.json()

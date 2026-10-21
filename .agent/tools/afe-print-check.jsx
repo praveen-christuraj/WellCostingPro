@@ -83,6 +83,18 @@ assert.deepEqual([...orderedRows].map(row => row.cells[1].querySelector('strong'
   ['Earlier service', 'Later service'], 'services print in natural service-code order')
 assert.ok(!document.querySelector('.afe-cost-print-sheet').textContent.includes('SVC-2'), 'service codes remain hidden after ordering')
 
+const groupedEstimate = structuredClone(orderedEstimate)
+groupedEstimate.services = [
+  { ...orderedEstimate.services[0], id: 'service-line2', service_code: 'SVC-2', service_name: 'Earlier service', service_group: 'Well Services' },
+  { ...orderedEstimate.services[1], id: 'service-line10', service_code: 'SVC-10', service_name: 'Later service', service_group: 'Rig Operations' },
+]
+await act(async () => root.render(<AfePrintSheet estimate={groupedEstimate}/>))
+const groupedRows = document.querySelectorAll('.ps-afe-summary tbody tr.ps-line')
+assert.deepEqual([...groupedRows].map(row => row.cells[1].querySelector('strong').textContent),
+  ['Later service', 'Earlier service'], 'service groups print before the natural service code')
+assert.deepEqual([...groupedRows].map(row => row.cells[1].querySelector('.ps-group').textContent),
+  ['Rig Operations · ', 'Well Services · '], 'each group is captioned once at the start of its block')
+
 const sectionEstimate = structuredClone(estimate)
 sectionEstimate.services = [
   { ...estimate.services[0], charging_basis: 'Per Section Rate', currency: 'EUR', service_amount: '0', amount: '175',
@@ -121,5 +133,5 @@ assert.ok(styles.includes('.afe-cost-print-sheet .ps-afe-dense'), 'large service
 
 await act(async () => root.unmount())
 dom.window.close()
-console.log('AFE print checks passed: service-code ordering with name-only output, two-decimal measurements, five-column service schedule, entered section rates, currency labels and compact two-page grouping.')
+console.log('AFE print checks passed: service-group ordering with name-only output, two-decimal measurements, five-column service schedule, entered section rates, currency labels and compact two-page grouping.')
 process.exit(0)

@@ -223,6 +223,8 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .afe-print-sheet .num { text-align: right; white-space: nowrap; }
   .afe-print-sheet .ps-eyebrow { font-size: 8pt; letter-spacing: 1px; text-transform: uppercase; color: #4A6F96; }
   .afe-print-sheet .ps-sub { font-size: 8pt; color: #4A6F96; margin-top: .5mm; }
+  /* Group caption appears once at the start of each group in report order. */
+  .afe-print-sheet .ps-group { font-size: 6.6pt; font-weight: 800; letter-spacing: .3pt; text-transform: uppercase; color: #123A63; }
   .afe-print-sheet .ps-line td { background: #FBFCFE; }
   .afe-print-sheet .ps-component td { font-size: 8.5pt; color: #333; }
   .afe-print-sheet .ps-notes { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -367,6 +369,9 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-cost-panel table th:first-child { width: 45%; }
   .daily-cost-print-sheet .dcr-cost-panel table th:not(:first-child) { width: 13.75%; }
   .daily-cost-print-sheet .dcr-cost-panel tbody tr:nth-child(n+9) { display: none; }
+  /* Group caption prints once at the start of each reporting group. */
+  .daily-cost-print-sheet .dcr-group { font-size: 4.45pt; font-weight: 800; letter-spacing: .2pt; text-transform: uppercase; color: #4A6F96; }
+  .daily-cost-print-sheet .dcr-cost-panel--split .dcr-group { font-size: 4.2pt; }
   /* The services table alone also prints the actual cost by activity
      classification (Planned / UPA / NPT), so it is compacted — smaller type,
      tighter cells and eight narrower columns — while every other cost table

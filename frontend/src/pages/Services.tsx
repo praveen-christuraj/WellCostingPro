@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import { AddRounded, DeleteOutlineRounded, EditOutlined, StorefrontOutlined } from '@mui/icons-material'
-import { Alert, Box, Button, CircularProgress, Paper, Typography } from '@mui/material'
+import { Alert, Box, Button, CircularProgress, MenuItem, Paper, TextField, Typography } from '@mui/material'
 import type { ColDef } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading } from '../components/Common'
@@ -21,6 +21,7 @@ import {
   type ServiceOverview,
   type ServicePayload,
 } from '../lib/serviceMaster'
+import { SERVICE_GROUPS, compareServiceGroups, type ServiceGroup } from '../lib/serviceGroups'
 import type { VendorOption } from '../lib/vendorMaster'
 
 function StatCard({ label, value, hint }: { label: string; value: number; hint: string }) {
@@ -46,6 +47,11 @@ export default function Services() {
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [groupFilter, setGroupFilter] = useState<ServiceGroup | ''>('')
+  const [groupOpen, setGroupOpen] = useState(false)
+  const [groupValue, setGroupValue] = useState<ServiceGroup | ''>('')
+  const [groupError, setGroupError] = useState('')
+  const [groupBusy, setGroupBusy] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteRecord, setDeleteRecord] = useState<Service | null>(null)
   const [deleteError, setDeleteError] = useState('')
@@ -139,6 +145,33 @@ export default function Services() {
     }
   }
 
+  const openGroupDialog = () => {
+    const shared = selectedRows[0]?.service_group ?? ''
+    setGroupValue(selectedRows.every(row => row.service_group === shared) ? shared : '')
+    setGroupError('')
+    setGroupOpen(true)
+  }
+
+  const assignGroup = async () => {
+    if (!groupValue) return
+    setGroupBusy(true)
+    setGroupError('')
+    try {
+      const result = await api<{ affected_count: number }>('/master-data/services/bulk-group', {
+        method: 'POST',
+        body: body({ ids: selectedRows.map(service => service.id), service_group: groupValue }),
+      })
+      setGroupOpen(false)
+      setSelectedRows([])
+      setNotice(`${result.affected_count} ${result.affected_count === 1 ? 'service was' : 'services were'} assigned to ${groupValue}.`)
+      await load()
+    } catch (caught) {
+      setGroupError(caught instanceof Error ? caught.message : 'Could not assign this service group')
+    } finally {
+      setGroupBusy(false)
+    }
+  }
+
   const importRows = async (importedRows: ImportRow[]): Promise<string[]> => {
     const result = await api<{ imported_count: number; error_count: number; errors: string[] }>(
       '/master-data/services/import',
@@ -163,6 +196,7 @@ export default function Services() {
   const columns = useMemo<ColDef<Service>[]>(() => [
     { headerName: 'SERVICE CODE', field: 'service_code', minWidth: 125, flex: .7 },
     { headerName: 'SERVICE NAME', field: 'service_name', minWidth: 190, flex: 1.2 },
+    { headerName: 'SERVICE GROUP', field: 'service_group', minWidth: 205, flex: 1.1, comparator: (left, right) => compareServiceGroups(left, right) },
     { headerName: 'SERVICE CATEGORY', field: 'service_category', minWidth: 165, flex: .95 },
     { headerName: 'PROVIDER TYPE', field: 'provider_type', minWidth: 125, flex: .8 },
     {
@@ -184,6 +218,8 @@ export default function Services() {
 
   const categoryCount = (label: string) => overview?.category_counts.find(item => item.label === label)?.count ?? 0
   const providerCount = (label: string) => overview?.provider_type_counts.find(item => item.label === label)?.count ?? 0
+  const groupCount = (label: string) => overview?.group_counts?.find(item => item.label === label)?.count ?? 0
+  const visibleRows = groupFilter ? rows.filter(row => row.service_group === groupFilter) : rows
 
   return <>
     <PageHeading
@@ -205,6 +241,38 @@ export default function Services() {
       <StatCard label="Third Party Services" value={providerCount('Third Party Services')} hint="Linked to workspace vendors"/>
     </Box>}
 
+    {overview && <Paper variant="outlined" sx={{ borderRadius: 2, borderColor: 'divider', overflow: 'hidden', mb: 2.5 }}>
+      <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap" sx={{ px: 2, py: 1.4, borderBottom: 1, borderColor: 'divider' }}>
+        <Box>
+          <Typography fontWeight={800} fontSize={13}>Service groups</Typography>
+          <Typography color="text.secondary" fontSize={11.5}>AFE cost estimates and Daily Cost reports print services in this order. Select a group to filter the register.</Typography>
+        </Box>
+        <Button size="small" variant={groupFilter ? 'outlined' : 'contained'} onClick={() => setGroupFilter('')}>All services</Button>
+      </Box>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', lg: 'repeat(6, 1fr)' } }}>
+        {SERVICE_GROUPS.map((group, index) => {
+          const active = groupFilter === group
+          return <Box
+            component="button"
+            type="button"
+            key={group}
+            aria-pressed={active}
+            onClick={() => setGroupFilter(current => current === group ? '' : group)}
+            sx={{
+              textAlign: 'left', border: 0, borderRight: index === SERVICE_GROUPS.length - 1 ? 0 : 1,
+              borderBottom: { xs: 1, lg: 0 }, borderColor: 'divider', bgcolor: active ? 'action.selected' : 'transparent',
+              p: 1.7, cursor: 'pointer', color: 'inherit', font: 'inherit',
+              '&:hover': { bgcolor: active ? 'action.selected' : 'action.hover' },
+            }}
+          >
+            <Typography fontSize={10.5} fontWeight={800} letterSpacing={.55} textTransform="uppercase" color={active ? 'primary' : 'text.secondary'} minHeight={28}>{group}</Typography>
+            <Typography fontSize={23} fontWeight={800} lineHeight={1.15} mt={.4}>{groupCount(group)}</Typography>
+            <Typography fontSize={10.5} color="text.secondary">{overview.active_count ? `${(groupCount(group) / overview.active_count * 100).toFixed(0)}% of active` : 'No services yet'}</Typography>
+          </Box>
+        })}
+      </Box>
+    </Paper>}
+
     <Paper variant="outlined" sx={{ borderRadius: 2, borderColor: 'divider', overflow: 'hidden' }}>
       <MasterDataTabs active="services"/>
       <Box sx={{ p: { xs: 1.5, sm: 2.5 } }}>
@@ -212,29 +280,37 @@ export default function Services() {
           <Box>
             <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>Service register</Typography>
             <Typography color="text.secondary" fontSize={12} mt={.35}>
-              {rows.length} active {rows.length === 1 ? 'service' : 'services'}. Enter service codes manually and select a vendor for both provider types.
+              {visibleRows.length} {groupFilter ? `${groupFilter} ` : 'active '}{visibleRows.length === 1 ? 'service' : 'services'}{groupFilter ? ` of ${rows.length} active` : ''}. Enter service codes manually and select a vendor for both provider types.
             </Typography>
           </Box>
-          {can('master-data:delete') && <Button
-            color="error"
-            variant="outlined"
-            startIcon={<DeleteOutlineRounded/>}
-            disabled={!selectedRows.length}
-            onClick={() => openDelete()}
-          >Move {selectedRows.length || ''} to deleted entries</Button>}
+          <Box display="flex" gap={1} flexWrap="wrap">
+            {can('master-data:update') && <Button
+              variant="outlined"
+              startIcon={<EditOutlined/>}
+              disabled={!selectedRows.length}
+              onClick={openGroupDialog}
+            >Assign group {selectedRows.length || ''}</Button>}
+            {can('master-data:delete') && <Button
+              color="error"
+              variant="outlined"
+              startIcon={<DeleteOutlineRounded/>}
+              disabled={!selectedRows.length}
+              onClick={() => openDelete()}
+            >Move {selectedRows.length || ''} to deleted entries</Button>}
+          </Box>
         </Box>
         {notice && <Alert severity="success" onClose={() => setNotice('')} sx={{ mb: 1.5 }}>{notice}</Alert>}
         <ErrorMessage message={error}/>
         {loading ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <DataTable
           fillHeight
-          rows={rows}
+          rows={visibleRows}
           columns={columns}
-          searchPlaceholder="Search services by code, name, category, provider, or vendor..."
+          searchPlaceholder="Search services by code, name, group, category, provider, or vendor..."
           exportName="services"
           onImport={can('master-data:import') ? () => setImportOpen(true) : undefined}
           canExport={can('master-data:export')}
           onExport={logExport}
-          selectable={can('master-data:delete')}
+          selectable={can('master-data:delete') || can('master-data:update')}
           onSelectionChange={setSelectedRows}
         />}
       </Box>
@@ -252,6 +328,35 @@ export default function Services() {
       onClose={() => { if (!saving) { setFormOpen(false); setFormRecord(null) } }}
       onSubmit={payload => void save(payload)}
     />
+
+    <FormDialog
+      open={groupOpen}
+      title="Assign service group"
+      subtitle="The group controls the order services appear in AFE cost estimates and Daily Cost reports."
+      onClose={() => { if (!groupBusy) setGroupOpen(false) }}
+      onSubmit={() => void assignGroup()}
+      busy={groupBusy}
+      submitDisabled={!groupValue}
+      submitLabel="Assign group"
+    >
+      <Box display="grid" gap={1.8} pt={.5}>
+        <Typography fontSize={13}>
+          {selectedRows.length} selected {selectedRows.length === 1 ? 'service' : 'services'} will move to the chosen group.
+        </Typography>
+        <TextField
+          select
+          label="Service group"
+          required
+          value={groupValue}
+          onChange={event => setGroupValue(event.target.value as ServiceGroup)}
+          error={!groupValue}
+          helperText="AFE and Daily Cost reports list Rig Operations first and Supervisions last."
+        >
+          {SERVICE_GROUPS.map(group => <MenuItem key={group} value={group}>{group}</MenuItem>)}
+        </TextField>
+        <ErrorMessage message={groupError}/>
+      </Box>
+    </FormDialog>
 
     <FormDialog
       open={deleteOpen}
@@ -276,13 +381,14 @@ export default function Services() {
       open={importOpen}
       onClose={() => setImportOpen(false)}
       title="Import services"
-      subtitle="Preview rows before import. Service codes and vendors are required. Existing codes are updated and deleted matches are restored. The category column is optional for legacy spreadsheets and defaults to Drilling Services; legacy Inhouse and 3rd Party labels are accepted."
+      subtitle="Preview rows before import. Service codes and vendors are required. Existing codes are updated and deleted matches are restored. Category and group are optional: blank categories default to Drilling Services and blank groups to Miscellaneous Services; legacy Inhouse and 3rd Party labels are accepted."
       headers={SERVICE_IMPORT_HEADERS}
       optionalHeaders={SERVICE_OPTIONAL_IMPORT_HEADERS}
       sample={{
         service_code: 'MUD-LOG',
         service_name: 'Mud Logging',
         service_category: 'Drilling Services',
+        service_group: 'Formation Evaluation',
         provider_type: 'Third Party Services',
         vendor_code: 'VEND-01',
         description: 'Mud logging while drilling',

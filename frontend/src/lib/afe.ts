@@ -137,6 +137,7 @@ export type ServiceLineOut = {
   service_code: string
   service_name: string
   service_category: string
+  service_group?: string
   provider_type: string
   vendor_name: string
   charging_basis: ChargingBasis
@@ -315,8 +316,8 @@ export type AfeReference = {
     config_status: string; total_days: string; total_depth: string | null; depth_unit: string; section_count: number
   }[]
   services: {
-    id: string; service_code: string; service_name: string; service_category: string; provider_type: string
-    vendor_name: string; display_name: string; description: string
+    id: string; service_code: string; service_name: string; service_category: string; service_group?: string
+    provider_type: string; vendor_name: string; display_name: string; description: string
   }[]
   tangibles: {
     id: string; tangible_code: string; tangible_name: string; scope: string; category_name: string; subcategory_name: string
