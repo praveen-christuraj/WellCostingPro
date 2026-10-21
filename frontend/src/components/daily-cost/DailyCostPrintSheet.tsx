@@ -89,6 +89,8 @@ function reportCostRows(budgetLines: DailyCostComparisonLine[]) {
     const current = consumableGroups.get(category)
     const planned = asNumber(current?.planned) + asNumber(line.planned)
     const actual = asNumber(current?.actual_to_date) + asNumber(line.actual_to_date)
+    const currentSplit = current ? classificationSplit(current) : { planned: '0', upa: '0', npt: '0' }
+    const lineSplit = classificationSplit(line)
     consumableGroups.set(category, {
       ...line,
       budget_key: `consumable-summary:${category}`,
@@ -97,6 +99,9 @@ function reportCostRows(budgetLines: DailyCostComparisonLine[]) {
       item_name: category,
       planned: String(planned),
       actual_to_date: String(actual),
+      actual_planned: String(asNumber(currentSplit.planned) + asNumber(lineSplit.planned)),
+      actual_upa: String(asNumber(currentSplit.upa) + asNumber(lineSplit.upa)),
+      actual_npt: String(asNumber(currentSplit.npt) + asNumber(lineSplit.npt)),
       balance: String(planned - actual),
       is_planned: Boolean(current?.is_planned || line.is_planned),
     })
@@ -109,6 +114,7 @@ function reportCostRows(budgetLines: DailyCostComparisonLine[]) {
     item_name: category,
     cost_group: 'Consumables' as const,
     planned: '0', actual_to_date: '0', balance: '0', is_planned: Boolean(example?.is_planned),
+    actual_planned: '0', actual_upa: '0', actual_npt: '0',
   })
   const tangibles = [...budgetLines]
     .filter(line => line.cost_group === 'Tangibles')
@@ -118,6 +124,20 @@ function reportCostRows(budgetLines: DailyCostComparisonLine[]) {
 
 function percent(actual: number, planned: number) {
   return planned > 0 ? `${decimalText(actual / planned * 100)}%` : '—'
+}
+
+/**
+ * Cumulative actual split by the activity classification it was recorded under.
+ * Older payloads without the split are read as wholly planned, so a report never
+ * shows a total that its three columns cannot explain.
+ */
+function classificationSplit(line: {
+  actual_to_date: string; actual_planned?: string; actual_upa?: string; actual_npt?: string
+}) {
+  if (line.actual_planned === undefined && line.actual_upa === undefined && line.actual_npt === undefined) {
+    return { planned: line.actual_to_date, upa: '0', npt: '0' }
+  }
+  return { planned: line.actual_planned ?? '0', upa: line.actual_upa ?? '0', npt: line.actual_npt ?? '0' }
 }
 
 function durationInDays(line: DailyCostLineOutput) {
@@ -173,6 +193,26 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     return { planned: asNumber(groupRow?.planned), actual: asNumber(groupRow?.actual_to_date) }
   }
   const servicePosition = groupPosition('Services')
+  // Actual services cost by activity classification. The well summary carries the
+  // whole-group split; the per-day comparison carries it on the Services group.
+  const serviceGroupRow = latestComparison.groups?.find(item => item.cost_group === 'Services')
+  const serviceSplit = summary
+    ? {
+      planned: summary.totals.services_actual_planned,
+      upa: summary.totals.services_actual_upa,
+      npt: summary.totals.services_actual_npt,
+    }
+    : {
+      planned: serviceGroupRow?.actual_planned,
+      upa: serviceGroupRow?.actual_upa,
+      npt: serviceGroupRow?.actual_npt,
+    }
+  const serviceSplitTotals = classificationSplit({
+    actual_to_date: String(servicePosition.actual),
+    actual_planned: serviceSplit.planned,
+    actual_upa: serviceSplit.upa,
+    actual_npt: serviceSplit.npt,
+  })
   const consumablePosition = groupPosition('Consumables')
   const tangiblePosition = groupPosition('Tangibles')
   const totalPlanned = asNumber(summary?.totals.planned ?? latestComparison.planned_total)
@@ -212,14 +252,42 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     { label: 'Reconciled Cost', value: row => row.reconciled_cost == null ? '—' : dailyMoney(row.reconciled_cost, currency) },
   ]
 
-  const CostTable = ({ title, rows, position }: {
+  /**
+   * Service-wise cost. The services table also prints the cumulative actual by
+   * activity classification (Planned / UPA / NPT) between the AFE and the total
+   * actual; every other cost table keeps its five columns, so only this table is
+   * compacted to make room.
+   */
+  const CostTable = ({ title, rows, position, split = false, splitTotals }: {
     title: string; rows: typeof budgetLines; position: { planned: number; actual: number }
-  }) => <section className="dcr-panel dcr-cost-panel">
+    split?: boolean; splitTotals?: { planned: string; upa: string; npt: string }
+  }) => <section className={`dcr-panel dcr-cost-panel${split ? ' dcr-cost-panel--split' : ''}`}>
     <h2>{title}</h2>
-    <table><thead><tr><th>Cost item</th><th>AFE</th><th>Cumulative actual</th><th>Balance</th><th>Used</th></tr></thead>
-      <tbody>{rows.map(row => <tr key={row.budget_key}><td>{costName(row.item_name)}</td><td className="num">{dailyMoney(row.planned, currency)}</td><td className="num">{dailyMoney(row.actual_to_date, currency)}</td><td className="num">{dailyMoney(row.balance, currency)}</td><td className="num">{percent(asNumber(row.actual_to_date), asNumber(row.planned))}</td></tr>)}</tbody>
-      <tfoot><tr><th>{rows.length ? 'Group total' : 'No cost lines recorded'}</th><th className="num">{dailyMoney(position.planned, currency)}</th><th className="num">{dailyMoney(position.actual, currency)}</th><th className="num">{dailyMoney(position.planned - position.actual, currency)}</th><th className="num">{percent(position.actual, position.planned)}</th></tr></tfoot>
-    </table>
+    {split
+      ? <table>
+        <thead>
+          <tr><th rowSpan={2}>Cost item</th><th rowSpan={2}>AFE</th><th colSpan={3}>Actual cost by activity</th><th rowSpan={2}>Total actual</th><th rowSpan={2}>Balance</th><th rowSpan={2}>Used</th></tr>
+          <tr><th>Planned</th><th>UPA</th><th>NPT</th></tr>
+        </thead>
+        <tbody>{rows.map(row => {
+          const rowSplit = classificationSplit(row)
+          return <tr key={row.budget_key}>
+            <td>{costName(row.item_name)}</td>
+            <td className="num">{dailyMoney(row.planned, currency)}</td>
+            <td className="num">{dailyMoney(rowSplit.planned, currency)}</td>
+            <td className="num">{dailyMoney(rowSplit.upa, currency)}</td>
+            <td className="num">{dailyMoney(rowSplit.npt, currency)}</td>
+            <td className="num">{dailyMoney(row.actual_to_date, currency)}</td>
+            <td className="num">{dailyMoney(row.balance, currency)}</td>
+            <td className="num">{percent(asNumber(row.actual_to_date), asNumber(row.planned))}</td>
+          </tr>
+        })}</tbody>
+        <tfoot><tr><th>{rows.length ? 'Group total' : 'No cost lines recorded'}</th><th className="num">{dailyMoney(position.planned, currency)}</th><th className="num">{dailyMoney(splitTotals?.planned, currency)}</th><th className="num">{dailyMoney(splitTotals?.upa, currency)}</th><th className="num">{dailyMoney(splitTotals?.npt, currency)}</th><th className="num">{dailyMoney(position.actual, currency)}</th><th className="num">{dailyMoney(position.planned - position.actual, currency)}</th><th className="num">{percent(position.actual, position.planned)}</th></tr></tfoot>
+      </table>
+      : <table><thead><tr><th>Cost item</th><th>AFE</th><th>Cumulative actual</th><th>Balance</th><th>Used</th></tr></thead>
+        <tbody>{rows.map(row => <tr key={row.budget_key}><td>{costName(row.item_name)}</td><td className="num">{dailyMoney(row.planned, currency)}</td><td className="num">{dailyMoney(row.actual_to_date, currency)}</td><td className="num">{dailyMoney(row.balance, currency)}</td><td className="num">{percent(asNumber(row.actual_to_date), asNumber(row.planned))}</td></tr>)}</tbody>
+        <tfoot><tr><th>{rows.length ? 'Group total' : 'No cost lines recorded'}</th><th className="num">{dailyMoney(position.planned, currency)}</th><th className="num">{dailyMoney(position.actual, currency)}</th><th className="num">{dailyMoney(position.planned - position.actual, currency)}</th><th className="num">{percent(position.actual, position.planned)}</th></tr></tfoot>
+      </table>}
   </section>
 
   const IncidentTable = ({ title, rows, total }: { title: string; rows: CoverIncident[]; total: number }) => <section className="dcr-panel dcr-incident">
@@ -243,7 +311,8 @@ function ReportCover({ report }: { report: CostPrintReport }) {
           <section className="dcr-panel dcr-depth"><h2>Section-wise planned depth &amp; current depth</h2><table><thead><tr><th>Section</th><th>Planned depth (m)</th><th>Current depth (m)</th></tr></thead><tbody>{sections.map(section => <tr key={section.hole_section_id}><td>{section.section_name}</td><td className="num">{depthText(section.to_depth, 'm')}</td><td className="num">{depthText(sectionDepths.get(section.hole_section_id), 'm')}</td></tr>)}</tbody></table></section>
           <section className="dcr-panel dcr-time"><h2>Time position</h2><dl><dt>Planned</dt><dd>{decimalText(plannedDays)} days</dd><dt>Actual from spud</dt><dd>{decimalText(actualDays)} days</dd><dt>Actual against planned activities</dt><dd>{decimalText(plannedActivityDays)} days</dd><dt>NPT</dt><dd>{decimalText(nptDays)} days</dd><dt>UPA</dt><dd>{decimalText(upaDays)} days</dd></dl></section>
         </div>
-        <CostTable title="Services cost · AFE vs cumulative actual" rows={services} position={servicePosition}/>
+        <CostTable title="Services cost · AFE vs cumulative actual by activity" rows={services} position={servicePosition}
+          split splitTotals={serviceSplitTotals}/>
         <CostTable title="Consumables cost · AFE vs cumulative actual" rows={consumables} position={consumablePosition}/>
         <section className="dcr-panel dcr-tangibles"><h2>Tangibles cost · AFE vs actual</h2><div><span>AFE <strong>{dailyMoney(tangiblePosition.planned, currency)}</strong></span><span>Actual <strong>{dailyMoney(tangiblePosition.actual, currency)}</strong></span><span>Balance <strong>{dailyMoney(tangiblePosition.planned - tangiblePosition.actual, currency)}</strong></span><span>Used <strong>{percent(tangiblePosition.actual, tangiblePosition.planned)}</strong></span></div></section>
         <div className="dcr-bottomline">

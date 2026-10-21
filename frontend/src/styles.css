@@ -355,6 +355,21 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-cost-panel table th:first-child { width: 45%; }
   .daily-cost-print-sheet .dcr-cost-panel table th:not(:first-child) { width: 13.75%; }
   .daily-cost-print-sheet .dcr-cost-panel tbody tr:nth-child(n+9) { display: none; }
+  /* The services table alone also prints the actual cost by activity
+     classification (Planned / UPA / NPT), so it is compacted — smaller type,
+     tighter cells and eight narrower columns — while every other cost table
+     keeps the five-column layout above. */
+  .daily-cost-print-sheet .dcr-cost-panel--split table { font-size: 5.15pt; line-height: 1.05; }
+  .daily-cost-print-sheet .dcr-cost-panel--split th,
+  .daily-cost-print-sheet .dcr-cost-panel--split td { padding: .3mm .32mm; }
+  .daily-cost-print-sheet .dcr-cost-panel--split thead th { font-size: 4.7pt; line-height: 1.02; }
+  .daily-cost-print-sheet .dcr-cost-panel--split thead tr:first-child th { padding-top: .22mm; padding-bottom: .22mm; }
+  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:first-child { width: 26%; }
+  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:nth-child(2),
+  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:nth-child(4),
+  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:nth-child(5) { width: 11.5%; }
+  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:nth-child(3) { width: 30%; }
+  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:nth-child(6) { width: 9%; }
   .daily-cost-print-sheet .dcr-milestone dl,
   .daily-cost-print-sheet .dcr-time dl { margin: 0; padding: 1mm 1.2mm; display: grid; grid-template-columns: 1fr auto; gap: .65mm 1mm; }
   .daily-cost-print-sheet .dcr-milestone dt,

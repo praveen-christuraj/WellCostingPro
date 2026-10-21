@@ -479,6 +479,24 @@ def test_well_cost_summary_reports_daily_and_factor_views():
         planned_keys = {row["budget_key"]: row for row in data["budget_lines"]}
         assert Decimal(planned_keys[f"service:{rate['source_afe_line_id']}"]["actual_to_date"]) == Decimal("100.00")
 
+        # The service-wise report prints the cumulative actual split by the
+        # activity classification of the daily lines (Planned / UPA / NPT).
+        service_row = planned_keys[f"service:{rate['source_afe_line_id']}"]
+        assert Decimal(service_row["actual_planned"]) == Decimal("100.00")
+        assert Decimal(service_row["actual_upa"]) == Decimal("0.00")
+        assert Decimal(service_row["actual_npt"]) == Decimal("0.00")
+        # A budget key can mix classifications; the split still adds up to its actual.
+        for row in data["budget_lines"]:
+            assert Decimal(row["actual_planned"]) + Decimal(row["actual_upa"]) + Decimal(row["actual_npt"]) == Decimal(row["actual_to_date"])
+        assert Decimal(data["totals"]["services_actual_planned"]) == Decimal("100.00")
+        assert Decimal(data["totals"]["services_actual_upa"]) == Decimal("0.00")
+        assert Decimal(data["totals"]["services_actual_npt"]) == Decimal("0.00")
+        # The report title needs the well scope of the AFEs behind the sheets.
+        assert [afe["configuration_scope"] for afe in data["well"]["afes"]] == ["drilling"]
+        reference = client.get("/api/v1/daily-cost/reference", headers=headers)
+        assert reference.status_code == 200, reference.text
+        assert [afe["configuration_scope"] for afe in reference.json()["afes"]] == ["drilling"]
+
         # Submitted-only and date-range views narrow the same ledger.
         submitted_only = client.get(
             f"/api/v1/daily-cost/wells/{setup['well']['id']}/cost-summary?include_draft=false", headers=headers)
@@ -496,6 +514,32 @@ def test_well_cost_summary_reports_daily_and_factor_views():
         assert [row["cost_date"] for row in filtered.json()] == ["2026-10-11"]
         assert client.get(
             "/api/v1/daily-cost/entries?status=submitted&from=2030-01-01", headers=headers).json() == []
+
+
+def test_cost_report_exposes_the_well_scope_used_by_the_print_title():
+    """A report titles itself "Drilling" or "Completions" from the AFE it costs."""
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+
+        from app.models import Afe
+        with SessionLocal() as db:
+            afe = db.get(Afe, setup["afe"]["id"])
+            afe.configuration_scope = "completion"
+            db.commit()
+
+        summary = client.get(f"/api/v1/daily-cost/wells/{setup['well']['id']}/cost-summary", headers=headers)
+        assert summary.status_code == 200, summary.text
+        assert [row["configuration_scope"] for row in summary.json()["well"]["afes"]] == ["completion"]
+
+        report = client.get(
+            f"/api/v1/daily-cost/wells/{setup['well']['id']}/cost-report?to=2026-10-10", headers=headers)
+        assert report.status_code == 200, report.text
+        assert [day["progress"]["scope"] for day in report.json()] == ["completion"]
+
+        reference = client.get("/api/v1/daily-cost/reference", headers=headers)
+        assert reference.status_code == 200, reference.text
+        assert [row["configuration_scope"] for row in reference.json()["afes"]] == ["completion"]
 
 
 def test_one_time_day_rate_is_charged_once_even_when_quantity_is_entered():
@@ -981,6 +1025,12 @@ def test_other_expenses_are_accounted_separately_and_deducted_from_the_afe():
         assert Decimal(comparison["balance"]) == Decimal("2900.00")
         groups = {group["cost_group"]: group for group in comparison["groups"]}
         assert set(groups) == {"Services", "Consumables", "Tangibles", "Other Expenses"}
+        # Classification split per group: the service is planned, the LIH charge NPT.
+        assert Decimal(groups["Services"]["actual_planned"]) == Decimal("100.00")
+        assert Decimal(groups["Services"]["actual_upa"]) == Decimal("0.00")
+        assert Decimal(groups["Services"]["actual_npt"]) == Decimal("0.00")
+        assert Decimal(groups["Other Expenses"]["actual_planned"]) == Decimal("0.00")
+        assert Decimal(groups["Other Expenses"]["actual_npt"]) == Decimal("3000.00")
         assert Decimal(groups["Other Expenses"]["planned"]) == Decimal("0.00")
         assert Decimal(groups["Other Expenses"]["actual_to_date"]) == Decimal("3000.00")
         assert Decimal(groups["Other Expenses"]["balance"]) == Decimal("-3000.00")
@@ -992,6 +1042,9 @@ def test_other_expenses_are_accounted_separately_and_deducted_from_the_afe():
         assert deduction["item_name"] == "Lost In Hole (LIH)"
         assert Decimal(deduction["planned"]) == Decimal("0.00")
         assert Decimal(deduction["actual_to_date"]) == Decimal("3000.00")
+        assert Decimal(deduction["actual_planned"]) == Decimal("0.00")
+        assert Decimal(deduction["actual_upa"]) == Decimal("0.00")
+        assert Decimal(deduction["actual_npt"]) == Decimal("3000.00")
         assert deduction["is_planned"] is False
         assert any(row["code"] == "other-expenses-deducted" for row in result["warnings"])
 
