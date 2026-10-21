@@ -26,8 +26,9 @@ import {
   type DailyCostBaseline, type DailyCostComparisonLine, type DailyCostDay, type DailyCostGroup,
   type AnyDailyCostLine, type DailyCostImportResult, type DailyCostPreview, type DailyCostReference,
   type DailyCostSavePayload, type DailyCostServiceInput, type DailyQuantityUnit, type WellProgressScope,
-  type ConsumableCategory, type ConsumableKind,
+  type ConsumableCategory, type ConsumableKind, type DailyCostWellSummary,
 } from '../lib/dailyCost'
+import type { MudCostReconciliation } from '../lib/mudCost'
 import { formatDepthMeters } from '../lib/units'
 import type { CostingSet, CostingSetGroup } from '../lib/costingSets'
 
@@ -873,11 +874,24 @@ export default function DailyCostSheet() {
     try {
       // Re-fetch the saved record, never print an unsaved preview.
       const saved = await api<DailyCostDay>(`/daily-cost/entries/${entry.id}`)
+      const params = new URLSearchParams({ to: entry.cost_date, include_draft: 'true' })
+      const mudParams = new URLSearchParams({
+        rig_id: entry.rig_id, well_id: entry.well_id, to: entry.cost_date, include_draft: 'true',
+      })
+      const [overviewDays, summary, mudReconciliation] = await Promise.all([
+        api<DailyCostDay[]>(`/daily-cost/wells/${entry.well_id}/cost-report?${params}`).catch(() => [saved]),
+        api<DailyCostWellSummary>(`/daily-cost/wells/${entry.well_id}/cost-summary?${params}`).catch(() => null),
+        api<MudCostReconciliation>(`/mud-cost/reconciliation?${mudParams}`).catch(() => null),
+      ])
       await api('/daily-cost/export-audit', { method: 'POST', body: body({
         module: 'day-sheet', format: 'pdf', record_count: 1, entry_id: entry.id,
         well_id: entry.well_id, include_deleted: entry.is_deleted,
       }) })
-      print({ title: `Daily cost sheet · ${entry.daily_cost_code}`, period: displayDate(entry.cost_date), days: [saved] })
+      const well = reference?.wells.find(item => item.id === entry.well_id)
+      print({
+        title: `Daily cost report · ${entry.daily_cost_code}`, period: displayDate(entry.cost_date), days: [saved],
+        overviewDays, summary, mudReconciliation, sections: well?.sections ?? baseline?.sections, reportKind: 'daily',
+      })
     } catch (caught) {
       setPrintError(caught instanceof Error ? caught.message : 'The daily sheet could not be printed')
     } finally { setPrintBusy(false) }

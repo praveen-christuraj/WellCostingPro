@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react'
 import { Alert, Box, FormControlLabel, MenuItem, Switch, TextField } from '@mui/material'
 import { ErrorMessage, FormDialog } from '../Common'
 import { api, body } from '../../lib/api'
-import { displayDate, localToday, type DailyCostDay, type DailyCostWellOption } from '../../lib/dailyCost'
+import {
+  displayDate, localToday, type DailyCostDay, type DailyCostWellOption, type DailyCostWellSummary,
+} from '../../lib/dailyCost'
+import type { MudCostReconciliation } from '../../lib/mudCost'
 import { useCostPrint } from './DailyCostPrintSheet'
 
 export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }: {
@@ -28,15 +31,28 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
       const to = mode === 'inception' ? localToday() : dateTo
       const params = new URLSearchParams({ to, include_draft: String(includeDraft) })
       if (mode === 'range') params.set('from', dateFrom)
-      const days = await api<DailyCostDay[]>(`/daily-cost/wells/${wellId}/cost-report?${params}`)
+      const well = wells.find(item => item.id === wellId)
+      const mudParams = new URLSearchParams({
+        rig_id: well?.rig_id ?? '', well_id: wellId, to, include_draft: String(includeDraft),
+      })
+      if (mode === 'range') mudParams.set('from', dateFrom)
+      const [days, summary, mudReconciliation] = await Promise.all([
+        api<DailyCostDay[]>(`/daily-cost/wells/${wellId}/cost-report?${params}`),
+        // A mixed-standard-currency well cannot expose one combined summary;
+        // retain the existing per-AFE/currency print path in that case.
+        api<DailyCostWellSummary>(`/daily-cost/wells/${wellId}/cost-summary?${params}`).catch(() => null),
+        well?.rig_id
+          ? api<MudCostReconciliation>(`/mud-cost/reconciliation?${mudParams}`).catch(() => null)
+          : Promise.resolve(null),
+      ])
       if (!days.length) { setError('No saved daily sheets match this well and period.'); return }
       await api('/daily-cost/export-audit', { method: 'POST', body: body({
         module: 'well-cost-sheet', format: 'pdf', record_count: days.length, well_id: wellId,
         date_from: mode === 'range' ? dateFrom : null, date_to: to, include_draft: includeDraft,
       }) })
-      const well = wells.find(item => item.id === wellId)
       print({ title: `Well costing sheet · ${well?.well_code ?? days[0].entry.well_code} · ${well?.well_name ?? days[0].entry.well_name}`,
-        period: `${mode === 'range' ? displayDate(dateFrom) : 'Inception (first recorded cost)'} to ${displayDate(to)} · ${includeDraft ? 'Draft and submitted sheets' : 'Submitted sheets only'}`, days })
+        period: `${mode === 'range' ? displayDate(dateFrom) : 'Inception (first recorded cost)'} to ${displayDate(to)} · ${includeDraft ? 'Draft and submitted sheets' : 'Submitted sheets only'}`,
+        days, overviewDays: days, summary, mudReconciliation, sections: well?.sections, reportKind: 'well' })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The costing sheet could not be printed')
     } finally { setBusy(false) }

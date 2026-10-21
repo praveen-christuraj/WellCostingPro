@@ -52,6 +52,15 @@ await act(async () => root.render(<DailyCostPrintSheet report={{ title: 'Well co
 let sheet = document.querySelector('.afe-print-sheet')
 assert.ok(sheet, 'print sheet is a body portal')
 assert.equal(sheet.parentElement, document.body)
+assert.ok(sheet.classList.contains('daily-cost-print-sheet'), 'daily costing opts into the landscape report page')
+assert.ok(sheet.querySelector('.daily-report-cover'), 'the model-report summary is page one')
+assert.ok(sheet.querySelector('.daily-report-details'), 'the retained detailed schedules follow the cover')
+for (const heading of [
+  'Reporting milestone', 'Section-wise planned depth & current depth', 'Services cost · AFE vs cumulative actual',
+  'Consumables cost · AFE vs cumulative actual', 'Tangibles cost · AFE vs actual', 'AFE vs actual summary',
+  'Mud chemical cost · section-wise', 'Consumption / losses · cumulative', 'Mud cost analysis · section / mud type',
+  'NPT summary', 'UPA summary',
+]) assert.ok(sheet.textContent.includes(heading), `cover prints ${heading}`)
 assert.ok(sheet.textContent.includes('Row 119 notes'), 'all 120 rows print, no grid pagination')
 assert.equal(sheet.querySelectorAll('.ps-total').length, 2, 'separate AFE/currency totals')
 assert.ok(sheet.querySelector('.ps-total').textContent.includes('USD 6,000.00'))
@@ -101,7 +110,10 @@ for (const retained of ["headerName: 'OTHER EXPENSES'", "name: 'Other expenses'"
 const styles = readFileSync('../frontend/src/styles.css', 'utf8')
 assert.ok(styles.includes('.MuiModal-root { display: none !important; }'), 'print hides the report dialog overlay')
 assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog body scroll lock')
-console.log('Daily cost checks passed: complete print sections with other-expense deduction, 120 rows, separate AFE/currency totals, escaped remarks, synchronous print portal, cleanup, list-only register, other-expense wiring on sheet and analysis.')
+assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
+assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
+assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
+console.log('Daily cost checks passed: landscape model-report cover, retained complete print sections with other-expense deduction, 120 rows, separate AFE/currency totals, escaped remarks, synchronous print portal, cleanup, list-only register, other-expense wiring on sheet and analysis.')
 
 dom.window.close()
 process.exit(0)

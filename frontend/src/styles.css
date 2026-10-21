@@ -294,6 +294,96 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .mud-cost-print-sheet thead th,
   .mud-cost-print-sheet .ps-sub,
   .mud-cost-print-sheet .ps-note { font-size: 7pt; }
+
+  /* Daily and whole-well costing reports use the uploaded model's landscape
+     information architecture. The first sheet is the operational summary;
+     the complete pre-existing schedules always start on page two. */
+  @page daily-cost-report {
+    size: A4 landscape;
+    margin: 4mm;
+    @bottom-right { content: "Page " counter(page) " of " counter(pages); font-family: Arial, Helvetica, sans-serif; font-size: 6.5pt; color: #4A6F96; }
+  }
+  .daily-cost-print-sheet { page: daily-cost-report; font-size: 7.2pt; line-height: 1.12; }
+  .daily-cost-print-sheet .daily-report-cover {
+    height: 199mm;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    break-after: page;
+  }
+  .daily-cost-print-sheet .daily-report-details { break-before: page; }
+  .daily-cost-print-sheet .dcr-titlebar {
+    min-height: 11mm;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4mm;
+    border: .8pt solid #123A63;
+    border-bottom-width: 1.4pt;
+    padding: 1.5mm 2.2mm;
+    margin-bottom: 1.2mm;
+  }
+  .daily-cost-print-sheet .dcr-titlebar h1 { font-size: 12pt; line-height: 1.05; }
+  .daily-cost-print-sheet .dcr-eyebrow { color: #4A6F96; font-size: 6.2pt; font-weight: 700; letter-spacing: .65pt; text-transform: uppercase; margin-bottom: .6mm; }
+  .daily-cost-print-sheet .dcr-report-meta { display: grid; justify-items: end; gap: .35mm; text-align: right; white-space: nowrap; }
+  .daily-cost-print-sheet .dcr-report-meta strong { color: #0B2A47; font-size: 8pt; }
+  .daily-cost-print-sheet .dcr-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 2.12fr) minmax(0, 1fr); gap: 1.2mm; }
+  .daily-cost-print-sheet .dcr-main { min-width: 0; display: grid; grid-template-rows: auto auto auto auto 1fr; gap: 1.05mm; }
+  .daily-cost-print-sheet .dcr-side { min-width: 0; display: grid; grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1fr); gap: 1.05mm; }
+  .daily-cost-print-sheet .dcr-panel { min-width: 0; border: .55pt solid #B9CCE0; break-inside: avoid; overflow: hidden; }
+  .daily-cost-print-sheet .dcr-panel h2 {
+    font-size: 6.6pt;
+    line-height: 1.05;
+    letter-spacing: .25pt;
+    text-transform: uppercase;
+    margin: 0;
+    padding: 1mm 1.2mm;
+    border: 0;
+    border-bottom: .55pt solid #B9CCE0;
+    background: #E8EEF6 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .daily-cost-print-sheet .dcr-topline { display: grid; grid-template-columns: .85fr 1.55fr .8fr; gap: 1.05mm; }
+  .daily-cost-print-sheet .dcr-bottomline { min-height: 0; display: grid; grid-template-columns: .82fr 1fr 1.18fr; gap: 1.05mm; }
+  .daily-cost-print-sheet .dcr-panel table { table-layout: fixed; margin: 0; font-size: 5.7pt; line-height: 1.08; }
+  .daily-cost-print-sheet .dcr-panel th,
+  .daily-cost-print-sheet .dcr-panel td { padding: .42mm .55mm; border-color: #B9CCE0; }
+  .daily-cost-print-sheet .dcr-panel thead th { font-size: 5.3pt; }
+  .daily-cost-print-sheet .dcr-panel tfoot th,
+  .daily-cost-print-sheet .dcr-panel tfoot td { font-weight: 800; background: #F3F6FA !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .daily-cost-print-sheet .dcr-cost-panel table th:first-child { width: 45%; }
+  .daily-cost-print-sheet .dcr-cost-panel table th:not(:first-child) { width: 13.75%; }
+  .daily-cost-print-sheet .dcr-cost-panel tbody tr:nth-child(n+9) { display: none; }
+  .daily-cost-print-sheet .dcr-milestone dl,
+  .daily-cost-print-sheet .dcr-time dl { margin: 0; padding: 1mm 1.2mm; display: grid; grid-template-columns: 1fr auto; gap: .65mm 1mm; }
+  .daily-cost-print-sheet .dcr-milestone dt,
+  .daily-cost-print-sheet .dcr-time dt { color: #4A6F96; font-weight: 700; }
+  .daily-cost-print-sheet .dcr-milestone dd,
+  .daily-cost-print-sheet .dcr-time dd { margin: 0; font-weight: 700; text-align: right; }
+  .daily-cost-print-sheet .dcr-tangibles div { min-height: 8mm; display: grid; grid-template-columns: repeat(4, 1fr); align-items: center; }
+  .daily-cost-print-sheet .dcr-tangibles span { padding: 0 1.5mm; border-right: .5pt solid #B9CCE0; color: #4A6F96; }
+  .daily-cost-print-sheet .dcr-tangibles span:last-child { border-right: 0; }
+  .daily-cost-print-sheet .dcr-tangibles strong { display: block; margin-top: .6mm; color: #0B2A47; font-size: 7pt; }
+  .daily-cost-print-sheet .dcr-overall p { margin: 1mm; font-weight: 800; text-align: right; color: #0B2A47; }
+  .daily-cost-print-sheet .dcr-total th,
+  .daily-cost-print-sheet .dcr-total td { font-weight: 800; border-top: 1pt solid #123A63; }
+  .daily-cost-print-sheet .dcr-mud-analysis table { font-size: 4.8pt; }
+  .daily-cost-print-sheet .dcr-mud-analysis th,
+  .daily-cost-print-sheet .dcr-mud-analysis td { padding: .42mm .32mm; }
+  .daily-cost-print-sheet .dcr-mud-analysis thead th { font-size: 4.55pt; }
+  .daily-cost-print-sheet .dcr-incident table { font-size: 5.2pt; }
+  .daily-cost-print-sheet .dcr-incident th:nth-child(1) { width: 21%; }
+  .daily-cost-print-sheet .dcr-incident th:nth-child(2) { width: 9%; }
+  .daily-cost-print-sheet .dcr-incident th:nth-child(3) { width: 17%; }
+  .daily-cost-print-sheet .dcr-incident th:nth-child(4) { width: 20%; }
+  .daily-cost-print-sheet .dcr-incident th:nth-child(5) { width: 33%; }
+  .daily-cost-print-sheet .dcr-none { color: #4A6F96; font-style: italic; text-align: center !important; }
+  .daily-cost-print-sheet .dcr-footer { display: flex; justify-content: space-between; gap: 4mm; margin-top: 1mm; padding-top: .8mm; border-top: .55pt solid #B9CCE0; color: #4A6F96; font-size: 5.8pt; }
+  .daily-cost-print-sheet .daily-report-details > header { border-bottom: 1.2pt solid #123A63; padding-bottom: 1.5mm; margin-bottom: 2mm; }
+  .daily-cost-print-sheet .daily-report-details table { font-size: 6.7pt; }
+  .daily-cost-print-sheet .daily-report-details th,
+  .daily-cost-print-sheet .daily-report-details td { padding: .6mm .75mm; }
 }
 
 /* AG Grid empty state (DataTable sets this as the no-rows overlay). */
