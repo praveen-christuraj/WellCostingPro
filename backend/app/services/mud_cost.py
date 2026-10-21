@@ -38,6 +38,7 @@ from app.schemas.mud_cost import (
     MudCostEntryCreate,
     MudCostEntryOut,
     MudCostEntryUpdate,
+    MudCostOpeningStockIn,
     MudCostExportAudit,
     MudCostImportRequest,
     MudCostImportResponse,
@@ -559,6 +560,40 @@ def get_entry(db: Session, organization_id: str, entry_id: str) -> MudCostEntryO
     active = _entries_for_section(db, organization_id, entry.section_id)
     balances = _balance_values(active)
     return _entry_out(entry, balances.get(entry.id))
+
+
+def update_opening_stock(
+    db: Session,
+    organization_id: str,
+    entry_id: str,
+    data: MudCostOpeningStockIn,
+    user: User,
+    request: Request | None,
+) -> MudCostEntryOut:
+    """Correct only the initial inventory, never a daily carry-forward balance."""
+    entry = _entry_or_404(db, organization_id, entry_id, deleted=False)
+    peers = _entries_for_section(db, organization_id, entry.section_id)
+    if not peers or peers[0].id != entry.id:
+        raise HTTPException(status_code=409, detail="Edit opening stock on the first active entry of this section. Later openings are calculated from closing stock.")
+    opening = _line_map(entry)["opening_stock"]
+    old_amount = opening.amount
+    old_remarks = opening.remarks
+    opening.amount = data.amount
+    opening.remarks = data.remarks.strip()
+    entry.updated_by = user.email
+    entry.updated_at = now()
+    db.flush()
+    _recalculate_section_opening_stock(db, organization_id, entry.section_id)
+    _audit(
+        db, user=user, action="update", entity_type="mud_cost_opening_stock",
+        entity_id=entry.id, entity_label=_entry_label(entry),
+        summary=(f"Corrected initial opening stock for {entry.well_code_snapshot} / "
+                 f"{entry.section_code_snapshot} from {old_amount} to {data.amount}; "
+                 f"remarks: {old_remarks!r} -> {opening.remarks!r}; recalculated section balances"),
+        request=request,
+    )
+    _commit(db)
+    return get_entry(db, organization_id, entry.id)
 
 
 def get_deleted_entry(db: Session, organization_id: str, entry_id: str) -> MudCostEntryOut:
@@ -1415,6 +1450,7 @@ def reconcile_well(
     for key in sorted(grouped, key=lambda value: (value[0], value[1])):
         section_entries = sorted(grouped[key], key=lambda row: (row.entry_date, row.id))
         latest_entry = section_entries[-1]
+        opening_stock = _values_for_entry(section_entries[0])["opening_stock"]
         scope, hole_section_id = key
         setting = settings.get(key)
         mud_type = setting.mud_type if setting else None
@@ -1455,6 +1491,7 @@ def reconcile_well(
             calc = reconcile_mud(
                 mud_type=mud_type,
                 base_rate=base_rate if is_configured else None,
+                opening_stock=opening_stock,
                 additions=cumulative_additions,
                 extra_obm_received=cumulative_extra,
                 actual_cost=cumulative_actual,
@@ -1492,6 +1529,7 @@ def reconcile_well(
                 cost_date=cost_date,
                 currency=currency,
                 base_rate=base_rate,
+                opening_stock=_recon_amount(opening_stock),
                 additions=_recon_amount(additions),
                 extra_obm_received=_recon_amount(extra_obm),
                 actual_cost=_recon_amount(actual),
@@ -1521,7 +1559,7 @@ def reconcile_well(
         consumption = sum((row.consumption_losses for row in window), ZERO)
         latest_rate = section_daily_rows[-1].cost_per_bbl if section_daily_rows else None
         total_mud = _recon_amount(extra_obm + additions)
-        alpha = _recon_amount(extra_obm * base_rate) if is_configured and not is_wbm else None
+        alpha = _recon_amount((opening_stock + extra_obm) * base_rate) if is_configured and not is_wbm else None
         beta = _recon_amount(alpha + actual) if alpha is not None else None
         if not is_configured:
             reconciled = None
@@ -1550,6 +1588,7 @@ def reconcile_well(
             is_wbm=is_wbm,
             currency=currency,
             base_rate=base_rate,
+            opening_stock=_recon_amount(opening_stock),
             first_date=window[0].cost_date if window else None,
             last_date=window[-1].cost_date if window else None,
             entry_count=len(window),

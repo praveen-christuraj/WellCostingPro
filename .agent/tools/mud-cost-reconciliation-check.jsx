@@ -138,6 +138,43 @@ for (const mode of ['light', 'dark']) {
   rejectWith = null
 }
 
-console.log('Mud cost reconciliation checks passed: WBM rate lock, OTHERS remark rule, positive rate rule, trimmed payload and in-dialog API errors.')
+const { MudCostOpeningStockDialog } = await import('../../frontend/src/components/mud-cost/MudCostOpeningStockDialog')
+for (const mode of ['light', 'dark']) {
+  const entry = { id: 'entry-1', well_code: 'W-1', section_label: 'OBM section', entry_date: '2026-10-11', opening_stock: '100', opening_stock_remarks: 'Survey' }
+  let corrected = null
+  let closed = 0
+  let fail = false
+  await act(async () => root.render(<ThemeProvider theme={buildTheme(mode)}>
+    <MudCostOpeningStockDialog key={mode} entry={entry} onClose={() => { closed += 1 }} onSave={async (record, payload) => {
+      assert.equal(record.id, 'entry-1')
+      if (fail) throw new Error('Permission denied')
+      corrected = payload
+    }}/>
+  </ThemeProvider>))
+  assert.equal(field('Initial opening stock').value, '100')
+  assert.equal(field('Opening stock remarks').value, 'Survey')
+  const submit = async () => act(async () => [...document.querySelectorAll('button')].find(n => n.textContent === 'Save opening stock').click())
+  await setValue(field('Initial opening stock'), '-1')
+  await submit()
+  assert.equal(corrected, null)
+  assert.match(text(), /non-negative opening stock/)
+  await setValue(field('Initial opening stock'), '200.1234567890')
+  await setValue(field('Opening stock remarks'), '  Corrected survey  ')
+  await submit()
+  assert.deepEqual(corrected, { amount: '200.1234567890', remarks: 'Corrected survey' })
+  await setValue(field('Initial opening stock'), '999999999999999.9999999999')
+  await submit()
+  assert.equal(corrected.amount, '999999999999999.9999999999', 'maximum supported quantity preserves precision')
+  fail = true
+  await setValue(field('Initial opening stock'), '300')
+  await submit()
+  assert.match(text(), /Permission denied/)
+  assert.equal(closed, 0, 'failed saves do not close the dialog')
+  await act(async () => [...document.querySelectorAll('button')].find(n => n.textContent === 'Cancel').click())
+  assert.equal(closed, 0, 'Cancel protects unsaved inventory edits')
+  assert.match(text(), /Continue editing/)
+  await act(async () => [...document.querySelectorAll('button')].find(n => n.textContent === 'Continue editing').click())
+}
+console.log('Mud cost reconciliation checks passed: section configuration and opening stock correction, exact precision, validation, errors and unsaved changes in light/dark themes.')
 dom.window.close()
 process.exit(0)

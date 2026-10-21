@@ -117,8 +117,9 @@ RECONCILIATION_QUANT = Decimal("0.0000000001")
 class MudCostReconciliation:
     """One section's derived mud cost for a point in time.
 
-    ``total_mud`` is Extra OBM received + Additions (barrels), ``alpha`` is the
-    Extra OBM valued at the section's Cost/BBL base rate, ``beta`` adds the
+    ``total_mud`` is Extra OBM received + Additions (barrels). ``alpha`` values
+    initial opening stock + Extra OBM at the section's Cost/BBL base rate;
+    ``beta`` adds the
     actual mud-chemical spend from the Daily Cost register, and ``cost_per_bbl``
     is beta divided by the total mud. ``reconciled_cost`` values the mud that
     was consumed or lost at that cost per barrel. ``None`` means the mud type
@@ -140,6 +141,7 @@ def reconcile_mud(
     *,
     mud_type: str | None,
     base_rate: Decimal | None,
+    opening_stock: Decimal,
     additions: Decimal,
     extra_obm_received: Decimal,
     actual_cost: Decimal,
@@ -166,7 +168,7 @@ def reconcile_mud(
             reconciled_cost=_q(actual_cost),
         )
     rate = base_rate if base_rate is not None else Decimal("0")
-    alpha = _q(extra_obm_received * rate)
+    alpha = _q((opening_stock + extra_obm_received) * rate)
     beta = _q(alpha + actual_cost)
     cost_per_bbl = _q(beta / total_mud) if total_mud > 0 else None
     reconciled = _q(consumption_losses * cost_per_bbl) if cost_per_bbl is not None else None

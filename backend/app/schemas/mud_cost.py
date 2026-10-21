@@ -53,6 +53,11 @@ class MudCostLineIn(_Strict):
         return self
 
 
+class MudCostOpeningStockIn(_Strict):
+    amount: Decimal10 = Field(ge=0, le=MAX_QUANTITY)
+    remarks: str = Field(default="", max_length=500)
+
+
 class MudCostEntryCreate(_Strict):
     rig_id: str = Field(min_length=1, max_length=36)
     well_id: str = Field(min_length=1, max_length=36)
@@ -306,6 +311,7 @@ class MudCostReconciliationRowOut(BaseModel):
     cost_date: date
     currency: str
     base_rate: Decimal
+    opening_stock: Decimal
     additions: Decimal
     extra_obm_received: Decimal
     actual_cost: Decimal
@@ -344,6 +350,7 @@ class MudCostReconciliationSectionOut(BaseModel):
     is_wbm: bool
     currency: str
     base_rate: Decimal
+    opening_stock: Decimal
     first_date: date | None
     last_date: date | None
     entry_count: int

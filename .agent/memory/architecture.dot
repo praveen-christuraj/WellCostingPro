@@ -119,6 +119,7 @@ digraph WellCostingPro {
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx";
   "frontend/src/components/daily-cost/WellProgressPanel.tsx";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx";
+  "frontend/src/components/mud-cost/MudCostOpeningStockDialog.tsx";
   "frontend/src/components/mud-cost/MudCostPrintSheet.tsx";
   "frontend/src/components/mud-cost/MudCostSectionSettingsDialog.tsx";
   "frontend/src/context/AuthContext.tsx";
@@ -547,6 +548,7 @@ digraph WellCostingPro {
   "frontend/src/components/catalogue/ReviseRateDialog.tsx" -> "frontend/src/lib/catalogue.ts";
   "frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx" -> "frontend/src/lib/units.ts";
   "frontend/src/components/daily-cost/DailyCostLineDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/daily-cost/DailyCostLineDialog.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/components/daily-cost/DailyCostLineDialog.tsx" -> "frontend/src/lib/units.ts";
@@ -564,6 +566,8 @@ digraph WellCostingPro {
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/designSystem.ts";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/lib/mudCost.ts";
+  "frontend/src/components/mud-cost/MudCostOpeningStockDialog.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/components/mud-cost/MudCostOpeningStockDialog.tsx" -> "frontend/src/lib/mudCost.ts";
   "frontend/src/components/mud-cost/MudCostPrintSheet.tsx" -> "frontend/src/lib/mudCost.ts";
   "frontend/src/components/mud-cost/MudCostSectionSettingsDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/mud-cost/MudCostSectionSettingsDialog.tsx" -> "frontend/src/lib/mudCost.ts";
@@ -705,6 +709,7 @@ digraph WellCostingPro {
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/ImportDialog.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostEntryDialog.tsx";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostOpeningStockDialog.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostPrintSheet.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostSectionSettingsDialog.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/context/AuthContext.tsx";
