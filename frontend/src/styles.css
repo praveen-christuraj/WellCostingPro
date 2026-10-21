@@ -350,6 +350,18 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-panel th,
   .daily-cost-print-sheet .dcr-panel td { padding: .42mm .55mm; border-color: #B9CCE0; }
   .daily-cost-print-sheet .dcr-panel thead th { font-size: 5.3pt; }
+  .daily-cost-print-sheet .dcr-loss-matrix table { font-size: 4.25pt; line-height: 1; }
+  .daily-cost-print-sheet .dcr-loss-matrix th,
+  .daily-cost-print-sheet .dcr-loss-matrix td { padding: .2mm .3mm; }
+  .daily-cost-print-sheet .dcr-loss-matrix thead th { font-size: 4pt; }
+  .daily-cost-print-sheet .dcr-loss-matrix thead th:first-child { width: 31%; }
+  .daily-cost-print-sheet .dcr-loss-matrix thead span,
+  .daily-cost-print-sheet .dcr-mud-analysis thead span { display: block; margin-top: .2mm; color: #4A6F96; font-weight: 400; }
+  .daily-cost-print-sheet .dcr-loss-matrix .dcr-matrix-group th { padding: .22mm .3mm; background: #F3F6FA !important; color: #123A63; text-transform: uppercase; letter-spacing: .2pt; }
+  .daily-cost-print-sheet .dcr-loss-matrix .dcr-matrix-total th,
+  .daily-cost-print-sheet .dcr-loss-matrix .dcr-matrix-total td { font-weight: 700; background: #F8FAFC !important; }
+  .daily-cost-print-sheet .dcr-loss-matrix .dcr-matrix-grand th,
+  .daily-cost-print-sheet .dcr-loss-matrix .dcr-matrix-grand td { font-weight: 800; background: #E8EEF6 !important; border-top-width: .8pt; }
   .daily-cost-print-sheet .dcr-panel tfoot th,
   .daily-cost-print-sheet .dcr-panel tfoot td { font-weight: 800; background: #F3F6FA !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .daily-cost-print-sheet .dcr-cost-panel table th:first-child { width: 45%; }

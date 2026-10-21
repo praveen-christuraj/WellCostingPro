@@ -1,5 +1,6 @@
 export type MudCostCategory = 'opening_stock' | 'receipt' | 'additions' | 'consumption_losses' | 'others' | 'closing_stock'
 export type MudCostBalanceView = 'daily' | 'monthly' | 'section' | 'inception'
+export type MudCostLossView = 'daily' | 'monthly' | 'section' | 'inception'
 export type MudCostMudType = 'WBM' | 'OBM' | 'SOBM' | 'OTHERS'
 
 export const MUD_COST_MUD_TYPES: { value: MudCostMudType; label: string; help: string }[] = [
@@ -247,6 +248,10 @@ export type MudCostReconciliationSection = {
   total_mud: string; alpha: string | null; beta: string | null
   consumption_losses: string; cost_per_bbl: string | null
   reconciled_cost: string | null; adjustment: string | null
+  verti_g_mud_on_cuttings: string; centrifuge: string; by_pass: string; evaporation: string; trips: string
+  surface_loss_total: string
+  mud_cleaner: string; formation_seepage: string; pit_cleaning_dump: string; left_in_hole: string; other_losses: string
+  other_loss_total: string; total_losses: string
 }
 
 export type MudCostReconciliation = {
@@ -263,7 +268,7 @@ export type MudCostReconciliation = {
 
 export type MudCostImportResult = { imported_count: number; error_count: number; errors: string[]; success: boolean }
 export type MudCostExportPayload = {
-  module: 'entries' | 'deleted' | 'material_balance' | 'reconciliation'
+  module: 'entries' | 'deleted' | 'material_balance' | 'reconciliation' | 'consumption_losses'
   format: 'csv' | 'xlsx' | 'pdf' | 'print'
   record_count: number
   rig_id: string
@@ -273,6 +278,48 @@ export type MudCostExportPayload = {
   date_from?: string
   date_to?: string
 }
+
+export type MudCostLossRow = {
+  id: string; period_label: string; cost_date: string; first_entry_date: string; last_entry_date: string; entry_count: number
+  rig_id: string; rig_code: string; rig_name: string; well_id: string; well_code: string; well_name: string
+  section_id: string; hole_section_id: string; section_scope: 'drilling' | 'completion'
+  section_code: string; section_name: string; section_label: string
+  mud_type: MudCostMudType | null; mud_type_label: string
+  verti_g_mud_on_cuttings: string; centrifuge: string; by_pass: string; evaporation: string; trips: string
+  surface_loss_total: string
+  mud_cleaner: string; formation_seepage: string; pit_cleaning_dump: string; left_in_hole: string; other_losses: string
+  other_loss_total: string; total_losses: string
+}
+
+export type MudCostLossReport = {
+  view: MudCostLossView; from_date: string | null; to_date: string | null
+  selected_section_count: number; entry_count: number
+  surface_loss_total: string; other_loss_total: string; total_losses: string
+  rows: MudCostLossRow[]
+}
+
+export const MUD_COST_LOSS_METRICS = [
+  { key: 'verti_g_mud_on_cuttings', label: 'Verti-G/Mud on Cuttings', group: 'surface' },
+  { key: 'centrifuge', label: 'Centrifuge', group: 'surface' },
+  { key: 'by_pass', label: 'By-Pass', group: 'surface' },
+  { key: 'evaporation', label: 'Evaporation', group: 'surface' },
+  { key: 'trips', label: 'Trips', group: 'surface' },
+  { key: 'surface_loss_total', label: 'Surface losses total', group: 'surface-total' },
+  { key: 'mud_cleaner', label: 'Mud Cleaner', group: 'other' },
+  { key: 'formation_seepage', label: 'Formation/Seepage', group: 'other' },
+  { key: 'pit_cleaning_dump', label: 'Pit Cleaning/Dump', group: 'other' },
+  { key: 'left_in_hole', label: 'Left-In-Hole', group: 'other' },
+  { key: 'other_losses', label: 'Others', group: 'other' },
+  { key: 'other_loss_total', label: 'Other losses total', group: 'other-total' },
+  { key: 'total_losses', label: 'Total losses', group: 'grand-total' },
+] as const
+
+export const MUD_COST_LOSS_VIEWS: { value: MudCostLossView; label: string; help: string }[] = [
+  { value: 'daily', label: 'Date-wise', help: 'One drill-through row per saved Mud Cost date and section.' },
+  { value: 'monthly', label: 'Month-wise', help: 'Monthly totals per section; drill into a month to see its daily rows.' },
+  { value: 'section', label: 'Selected range', help: 'One cumulative row per section for the required date range.' },
+  { value: 'inception', label: 'Since inception', help: 'One cumulative row per section from its first record through the To date.' },
+]
 
 export const MUD_COST_BALANCE_VIEWS: { value: MudCostBalanceView; label: string; help: string }[] = [
   { value: 'daily', label: 'Date-wise', help: 'One row per entry date, with the opening stock carried forward within each section.' },

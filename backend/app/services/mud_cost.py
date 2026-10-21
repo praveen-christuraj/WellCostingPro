@@ -13,11 +13,13 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.core.units import depth_to_meters
 from app.domain.mud_cost import (
     MUD_COST_LINE_SPECS,
+    MUD_LOSS_REPORT_LINES,
     MUD_COST_MUD_TYPE_LABELS,
     ZERO,
     closing_stock,
     group_total,
     line_amounts,
+    loss_breakdown,
     reconcile_mud,
 )
 from app.models import (
@@ -43,6 +45,8 @@ from app.schemas.mud_cost import (
     MudCostImportRequest,
     MudCostImportResponse,
     MudCostLineOut,
+    MudCostLossReportOut,
+    MudCostLossRowOut,
     MudCostMaterialBalanceOut,
     MudCostReconciliationOut,
     MudCostReconciliationRowOut,
@@ -849,6 +853,155 @@ def material_balance(
     )
 
 
+_LOSS_VALUE_FIELDS = tuple(code for code, _label, _sources in MUD_LOSS_REPORT_LINES) + (
+    "surface_loss_total", "other_loss_total", "total_losses",
+)
+
+
+def _loss_values_for_entries(entries: Iterable[MudCostEntry]) -> dict[str, Decimal]:
+    totals = {field: ZERO for field in _LOSS_VALUE_FIELDS}
+    for entry in entries:
+        values = loss_breakdown(_values_for_entry(entry))
+        for field in _LOSS_VALUE_FIELDS:
+            totals[field] += values[field]
+    return {field: _recon_amount(value) for field, value in totals.items()}
+
+
+def _loss_row_for_entry(
+    entry: MudCostEntry, setting: MudCostSectionSetting | None,
+) -> MudCostLossRowOut:
+    values = _loss_values_for_entries([entry])
+    mud_type = setting.mud_type if setting else None
+    section_label = _section_label(
+        entry.section_scope, entry.section_code_snapshot, entry.section_name_snapshot,
+        Decimal(entry.section_from_depth), Decimal(entry.section_to_depth),
+    )
+    return MudCostLossRowOut(
+        id=entry.id,
+        period_label=entry.entry_date.isoformat(),
+        cost_date=entry.entry_date,
+        first_entry_date=entry.entry_date,
+        last_entry_date=entry.entry_date,
+        entry_count=1,
+        rig_id=entry.rig_id,
+        rig_code=entry.rig_code_snapshot,
+        rig_name=entry.rig_name_snapshot,
+        well_id=entry.well_id,
+        well_code=entry.well_code_snapshot,
+        well_name=entry.well_name_snapshot,
+        section_id=setting.section_id if setting else entry.section_id,
+        hole_section_id=entry.hole_section_id,
+        section_scope=entry.section_scope,
+        section_code=entry.section_code_snapshot,
+        section_name=entry.section_name_snapshot,
+        section_label=section_label,
+        mud_type=mud_type,
+        mud_type_label=MUD_COST_MUD_TYPE_LABELS.get(mud_type or "", "Not configured"),
+        **values,
+    )
+
+
+def _aggregate_loss_rows(rows: list[MudCostLossRowOut], view: str) -> list[MudCostLossRowOut]:
+    if view == "daily":
+        return rows
+    groups: dict[tuple[str, str, str], list[MudCostLossRowOut]] = defaultdict(list)
+    for row in rows:
+        period = row.cost_date.strftime("%Y-%m") if view == "monthly" else "all"
+        groups[(row.section_scope, row.hole_section_id, period)].append(row)
+    output: list[MudCostLossRowOut] = []
+    for (scope, hole_section_id, period), members in sorted(groups.items()):
+        members.sort(key=lambda item: (item.cost_date, item.id))
+        first, last = members[0], members[-1]
+        values = {
+            field: _recon_amount(sum((getattr(row, field) for row in members), ZERO))
+            for field in _LOSS_VALUE_FIELDS
+        }
+        if view == "monthly":
+            month_date = date(first.cost_date.year, first.cost_date.month, 1)
+            label = month_date.strftime("%B %Y")
+            row_id = f"{scope}:{hole_section_id}:month:{period}"
+            cost_date = month_date
+        elif view == "inception":
+            label = f"Inception · {first.cost_date.isoformat()} to {last.cost_date.isoformat()}"
+            row_id = f"{scope}:{hole_section_id}:inception"
+            cost_date = first.cost_date
+        else:
+            label = f"Selected range · {first.cost_date.isoformat()} to {last.cost_date.isoformat()}"
+            row_id = f"{scope}:{hole_section_id}:section"
+            cost_date = first.cost_date
+        output.append(MudCostLossRowOut(
+            **first.model_dump(exclude={*_LOSS_VALUE_FIELDS, "id", "period_label", "cost_date", "first_entry_date", "last_entry_date", "entry_count"}),
+            id=row_id,
+            period_label=label,
+            cost_date=cost_date,
+            first_entry_date=first.cost_date,
+            last_entry_date=last.cost_date,
+            entry_count=sum(row.entry_count for row in members),
+            **values,
+        ))
+    return output
+
+
+def consumption_loss_report(
+    db: Session,
+    organization_id: str,
+    *,
+    rig_id: str,
+    well_id: str,
+    section_id: str = "",
+    view: str = "daily",
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> MudCostLossReportOut:
+    """Loss matrix and date/month/section drill rows from the normalized ledger."""
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="The start date must not be after the end date")
+    rig, well, selected_section = _scope_or_404(
+        db, organization_id, rig_id, well_id, section_id or None,
+    )
+    if section_id and selected_section is None:
+        historical_section = db.scalar(select(MudCostEntry.id).where(
+            MudCostEntry.organization_id == organization_id,
+            MudCostEntry.well_id == well.id,
+            MudCostEntry.section_id == section_id,
+        ).limit(1))
+        if historical_section is None:
+            raise HTTPException(status_code=404, detail="Section not found for this well")
+    settings = _setting_map(db, organization_id, well.id)
+    entries = [
+        entry for entry in _entries_for_well(db, organization_id, well.id, deleted=False)
+        if entry.rig_id == rig.id
+    ]
+    if section_id:
+        entries = [
+            entry for entry in entries
+            if entry.section_id == section_id
+            or (settings.get(_setting_key(entry.section_scope, entry.hole_section_id)) is not None
+                and settings[_setting_key(entry.section_scope, entry.hole_section_id)].section_id == section_id)
+        ]
+    if view != "inception" and date_from:
+        entries = [entry for entry in entries if entry.entry_date >= date_from]
+    if date_to:
+        entries = [entry for entry in entries if entry.entry_date <= date_to]
+    daily = [
+        _loss_row_for_entry(entry, settings.get(_setting_key(entry.section_scope, entry.hole_section_id)))
+        for entry in entries
+    ]
+    rows = _aggregate_loss_rows(daily, view)
+    rows.sort(key=lambda row: (row.section_scope, row.section_label.casefold(), row.cost_date, row.period_label))
+    return MudCostLossReportOut(
+        view=view,
+        from_date=None if view == "inception" else date_from,
+        to_date=date_to,
+        selected_section_count=len({(row.section_scope, row.hole_section_id) for row in rows}),
+        entry_count=sum(row.entry_count for row in rows),
+        surface_loss_total=_recon_amount(sum((row.surface_loss_total for row in rows), ZERO)),
+        other_loss_total=_recon_amount(sum((row.other_loss_total for row in rows), ZERO)),
+        total_losses=_recon_amount(sum((row.total_losses for row in rows), ZERO)),
+        rows=rows,
+    )
+
+
 def _normalise_import_row(row: Mapping[str, Any]) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for key, value in row.items():
@@ -1077,6 +1230,7 @@ def record_export(db: Session, user: User, data: MudCostExportAudit, request: Re
     module_label = {
         "entries": "daily entries", "deleted": "deleted entries",
         "material_balance": "material balance", "reconciliation": "mud cost reconciliation",
+        "consumption_losses": "consumption and losses",
     }[data.module]
     scope = ", ".join(value for value in (data.rig_id, data.well_id, data.section_id) if value) or "all scopes"
     _audit(
@@ -1569,6 +1723,10 @@ def reconcile_well(
             reconciled = _recon_amount(consumption * latest_rate)
         else:
             reconciled = None
+        loss_values = _loss_values_for_entries(
+            entry for entry in section_entries
+            if date_from is None or entry.entry_date >= date_from
+        )
         section_rows.append(MudCostReconciliationSectionOut(
             section_id=output_section_id,
             hole_section_id=hole_section_id,
@@ -1605,6 +1763,7 @@ def reconcile_well(
                 _recon_amount(reconciled - actual)
                 if reconciled is not None else None
             ),
+            **loss_values,
         ))
         daily_rows.extend(
             row for row in section_daily_rows

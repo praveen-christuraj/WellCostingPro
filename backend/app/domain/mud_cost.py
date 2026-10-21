@@ -68,6 +68,29 @@ MUD_COST_LINE_SPECS: tuple[MudCostLineSpec, ...] = (
 MUD_COST_LINE_BY_CODE: Mapping[str, MudCostLineSpec] = {
     item.code: item for item in MUD_COST_LINE_SPECS
 }
+
+# Consumption/loss reporting keeps the user-facing matrix stable while
+# retaining older captured rows. Legacy Shakers and the former `others`
+# category roll into the final Other-loss row so Surface + Other = all stock
+# deductions for every historical and current entry.
+MUD_LOSS_SURFACE_LINES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("verti_g_mud_on_cuttings", "Verti-G/Mud on Cuttings", ("verti_g_mud_on_cuttings",)),
+    ("centrifuge", "Centrifuge", ("centrifuge",)),
+    ("by_pass", "By-Pass", ("by_pass",)),
+    ("evaporation", "Evaporation", ("evaporation",)),
+    ("trips", "Trips", ("trips",)),
+)
+MUD_LOSS_OTHER_LINES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("mud_cleaner", "Mud Cleaner", ("mud_cleaner",)),
+    ("formation_seepage", "Formation/Seepage", ("formation_seepage",)),
+    ("pit_cleaning_dump", "Pit Cleaning/Dump", ("pit_cleaning_dump",)),
+    ("left_in_hole", "Left-In-Hole", ("left_in_hole",)),
+    ("other_losses", "Others", (
+        "consumption_losses_others", "shakers", "offline_centrifuge_loss",
+        "backloads", "obm_left_in_hole", "other_losses_others",
+    )),
+)
+MUD_LOSS_REPORT_LINES = (*MUD_LOSS_SURFACE_LINES, *MUD_LOSS_OTHER_LINES)
 MUD_COST_LINE_CODES: tuple[str, ...] = tuple(item.code for item in MUD_COST_LINE_SPECS)
 MUD_COST_CATEGORIES_BY_KEY: Mapping[str, str] = dict(MUD_COST_CATEGORIES)
 MUD_COST_DB_CATEGORY_KEYS: tuple[str, ...] = (*MUD_COST_CATEGORIES_BY_KEY, "closing_stock")
@@ -94,6 +117,22 @@ def group_total(amounts: Mapping[str, Decimal], category: str) -> Decimal:
          and item.code != "opening_stock"),
         ZERO,
     )
+
+
+def loss_breakdown(amounts: Mapping[str, Decimal]) -> dict[str, Decimal]:
+    """Typed loss matrix where the two group totals equal every stock deduction."""
+    result = {
+        code: sum((amounts.get(source, ZERO) for source in sources), ZERO)
+        for code, _label, sources in MUD_LOSS_REPORT_LINES
+    }
+    result["surface_loss_total"] = sum(
+        (result[code] for code, _label, _sources in MUD_LOSS_SURFACE_LINES), ZERO,
+    )
+    result["other_loss_total"] = sum(
+        (result[code] for code, _label, _sources in MUD_LOSS_OTHER_LINES), ZERO,
+    )
+    result["total_losses"] = result["surface_loss_total"] + result["other_loss_total"]
+    return result
 
 
 def closing_stock(

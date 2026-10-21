@@ -4,7 +4,7 @@ import {
   dailyMoney, displayDate, type DailyCostComparisonLine, type DailyCostDay, type DailyCostLineOutput, type DailyCostSectionOption,
   type DailyCostWellSummary,
 } from '../../lib/dailyCost'
-import type { MudCostMaterialBalance, MudCostReconciliation } from '../../lib/mudCost'
+import { MUD_COST_LOSS_METRICS, type MudCostMaterialBalance, type MudCostReconciliation } from '../../lib/mudCost'
 import { depthToMeters } from '../../lib/units'
 
 export type CostPrintReport = {
@@ -251,6 +251,10 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     { label: 'Cost / BBL', value: row => row.cost_per_bbl == null ? '—' : dailyMoney(row.cost_per_bbl, currency) },
     { label: 'Reconciled Cost', value: row => row.reconciled_cost == null ? '—' : dailyMoney(row.reconciled_cost, currency) },
   ]
+  const lossMetricRows = MUD_COST_LOSS_METRICS.map(metric => ({
+    ...metric,
+    value: (row: MudSection) => decimalText(optionalText(row, metric.key)),
+  }))
 
   /**
    * Service-wise cost. The services table also prints the cumulative actual by
@@ -321,7 +325,14 @@ function ReportCover({ report }: { report: CostPrintReport }) {
             const sectionFactor = summary?.factors.find(item => item.dimension === 'section')?.rows.find(item => item.code === ('section_code' in row ? row.section_code : ''))
             return <tr key={row.section_id}><td>{nameOnly(row.section_label)} · {row.mud_type ?? 'Not configured'}</td><td className="num">{dailyMoney(sectionFactor?.planned ?? 0, currency)}</td><td className="num">{dailyMoney(row.actual_cost, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : dailyMoney(row.reconciled_cost, currency)}</td></tr>
           })}{!mudSections.length && <tr><td colSpan={4} className="dcr-none">No mud reconciliation data.</td></tr>}</tbody></table></section>
-          <section className="dcr-panel dcr-loss"><h2>Consumption / losses · cumulative</h2><table><thead><tr><th>Section</th><th>Mud</th><th>Consumption / losses</th><th>Cost / BBL</th></tr></thead><tbody>{mudSections.slice(0, 5).map(row => <tr key={row.section_id}><td>{nameOnly(row.section_label)}</td><td>{row.mud_type ?? '—'}</td><td className="num">{decimalText(row.consumption_losses)}</td><td className="num">{row.cost_per_bbl == null ? '—' : dailyMoney(row.cost_per_bbl, currency)}</td></tr>)}{!mudSections.length && <tr><td colSpan={4} className="dcr-none">No consumption or loss data.</td></tr>}</tbody></table></section>
+          <section className="dcr-panel dcr-loss dcr-loss-matrix"><h2>Consumption / losses · cumulative matrix</h2><table><thead><tr><th>Loss measure</th>{mudSections.map(row => <th key={row.section_id}>{nameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
+            <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Surface losses</th></tr>
+            {lossMetricRows.filter(metric => metric.group === 'surface' || metric.group === 'surface-total').map(metric => <tr className={metric.group === 'surface-total' ? 'dcr-matrix-total' : ''} key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
+            <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Other losses</th></tr>
+            {lossMetricRows.filter(metric => metric.group === 'other' || metric.group === 'other-total').map(metric => <tr className={metric.group === 'other-total' ? 'dcr-matrix-total' : ''} key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
+            {lossMetricRows.filter(metric => metric.group === 'grand-total').map(metric => <tr className="dcr-matrix-grand" key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
+            {!mudSections.length && <tr><td colSpan={2} className="dcr-none">No consumption or loss data.</td></tr>}
+          </tbody></table></section>
         </div>
       </div>
       <aside className="dcr-side">

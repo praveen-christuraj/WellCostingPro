@@ -15,6 +15,8 @@ from app.schemas.mud_cost import (
     MudCostImportRequest,
     MudCostImportResponse,
     MudCostMaterialBalanceOut,
+    MudCostLossReportOut,
+    MudCostLossView,
     MudCostReconciliationOut,
     MudCostReference,
     MudCostSectionSettingIn,
@@ -80,6 +82,27 @@ def material_balance(
     return service.material_balance(
         db, user.organization_id, rig_id=rig_id, well_id=well_id, section_id=section_id,
         view=view, date_from=date_from, date_to=date_to,
+    )
+
+
+@router.get(
+    "/consumption-losses",
+    response_model=MudCostLossReportOut,
+    dependencies=[Depends(require("daily-cost:read"))],
+)
+def consumption_losses(
+    db: Db,
+    user: Current,
+    rig_id: str = Query(min_length=1, max_length=36),
+    well_id: str = Query(min_length=1, max_length=36),
+    section_id: str = Query(default="", max_length=36),
+    view: MudCostLossView = Query(default="daily"),
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+) -> MudCostLossReportOut:
+    return service.consumption_loss_report(
+        db, user.organization_id, rig_id=rig_id, well_id=well_id,
+        section_id=section_id, view=view, date_from=date_from, date_to=date_to,
     )
 
 

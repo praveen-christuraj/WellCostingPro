@@ -49,8 +49,9 @@ const modules: NavModule[] = [
     { label: 'Well cost analysis', path: '/daily-cost/analysis', icon: InsightsOutlined, permission: 'daily-cost:read' },
   ] },
   { label: 'Reports', icon: AssessmentOutlined, items: [
-    { label: 'Overview', path: '/reports', icon: AssessmentOutlined, requires: ['rig-well:read'], anyOf: ['afe:read', 'daily-cost:read'] },
+    { label: 'Overview', path: '/reports', icon: AssessmentOutlined, anyOf: ['rig-well:read', 'afe:read', 'daily-cost:read'] },
     { label: 'Well-wise cost comparisons', path: '/reports/well-cost-comparison', icon: InsightsOutlined, requires: ['rig-well:read'], anyOf: ['afe:read', 'daily-cost:read'] },
+    { label: 'Consumption and losses', path: '/reports/consumption-losses', icon: WaterDropOutlined, permission: 'daily-cost:read' },
   ] },
   { label: 'Other Managements', icon: SettingsOutlined, items: [
     { label: 'Overview', path: '/other-management', icon: DashboardOutlined, anyOf: ['audit:read', 'database-browser:read'] },

@@ -150,6 +150,7 @@ digraph WellCostingPro {
   "frontend/src/pages/BusinessDashboard.tsx";
   "frontend/src/pages/CatalogueLists.tsx";
   "frontend/src/pages/Consumables.tsx";
+  "frontend/src/pages/ConsumptionLossesReport.tsx";
   "frontend/src/pages/CostingSets.tsx";
   "frontend/src/pages/DailyCostAnalysis.tsx";
   "frontend/src/pages/DailyCostManagement.tsx";
@@ -391,6 +392,7 @@ digraph WellCostingPro {
   "frontend/src/App.tsx" -> "frontend/src/pages/BusinessDashboard.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/CatalogueLists.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Consumables.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/pages/ConsumptionLossesReport.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/CostingSets.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/DailyCostAnalysis.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/DailyCostManagement.tsx";
@@ -634,6 +636,11 @@ digraph WellCostingPro {
   "frontend/src/pages/Consumables.tsx" -> "frontend/src/components/catalogue/CatalogueItemRegister.tsx";
   "frontend/src/pages/Consumables.tsx" -> "frontend/src/components/catalogue/FuelRegister.tsx";
   "frontend/src/pages/Consumables.tsx" -> "frontend/src/lib/catalogue.ts";
+  "frontend/src/pages/ConsumptionLossesReport.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/pages/ConsumptionLossesReport.tsx" -> "frontend/src/components/DataTable.tsx";
+  "frontend/src/pages/ConsumptionLossesReport.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/ConsumptionLossesReport.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/ConsumptionLossesReport.tsx" -> "frontend/src/lib/mudCost.ts";
   "frontend/src/pages/CostingSets.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/CostingSets.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/CostingSets.tsx" -> "frontend/src/components/ImportDialog.tsx";

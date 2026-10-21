@@ -16,6 +16,7 @@ MudCostCategory = Literal[
     "opening_stock", "receipt", "additions", "consumption_losses", "others", "closing_stock",
 ]
 MudCostBalanceView = Literal["daily", "monthly", "section", "inception"]
+MudCostLossView = Literal["daily", "monthly", "section", "inception"]
 MudCostMudType = Literal["WBM", "OBM", "SOBM", "OTHERS"]
 MAX_QUANTITY = Decimal("999999999999999.9999999999")
 
@@ -221,7 +222,7 @@ class MudCostImportResponse(BaseModel):
 
 
 class MudCostExportAudit(_Strict):
-    module: Literal["entries", "deleted", "material_balance", "reconciliation"]
+    module: Literal["entries", "deleted", "material_balance", "reconciliation", "consumption_losses"]
     format: Literal["csv", "xlsx", "pdf", "print"]
     record_count: int = Field(ge=0, le=1_000_000)
     rig_id: str = Field(default="", max_length=36)
@@ -230,6 +231,54 @@ class MudCostExportAudit(_Strict):
     view: MudCostBalanceView | None = None
     date_from: date | None = None
     date_to: date | None = None
+
+
+class MudCostLossRowOut(BaseModel):
+    id: str
+    period_label: str
+    cost_date: date
+    first_entry_date: date
+    last_entry_date: date
+    entry_count: int
+    rig_id: str
+    rig_code: str
+    rig_name: str
+    well_id: str
+    well_code: str
+    well_name: str
+    section_id: str
+    hole_section_id: str
+    section_scope: Literal["drilling", "completion"]
+    section_code: str
+    section_name: str
+    section_label: str
+    mud_type: MudCostMudType | None
+    mud_type_label: str
+    verti_g_mud_on_cuttings: Decimal
+    centrifuge: Decimal
+    by_pass: Decimal
+    evaporation: Decimal
+    trips: Decimal
+    surface_loss_total: Decimal
+    mud_cleaner: Decimal
+    formation_seepage: Decimal
+    pit_cleaning_dump: Decimal
+    left_in_hole: Decimal
+    other_losses: Decimal
+    other_loss_total: Decimal
+    total_losses: Decimal
+
+
+class MudCostLossReportOut(BaseModel):
+    view: MudCostLossView
+    from_date: date | None
+    to_date: date | None
+    selected_section_count: int
+    entry_count: int
+    surface_loss_total: Decimal
+    other_loss_total: Decimal
+    total_losses: Decimal
+    rows: list[MudCostLossRowOut]
 
 
 class MudCostBulkActionOut(BaseModel):
@@ -364,6 +413,19 @@ class MudCostReconciliationSectionOut(BaseModel):
     cost_per_bbl: Decimal | None
     reconciled_cost: Decimal | None
     adjustment: Decimal | None
+    verti_g_mud_on_cuttings: Decimal = Decimal("0")
+    centrifuge: Decimal = Decimal("0")
+    by_pass: Decimal = Decimal("0")
+    evaporation: Decimal = Decimal("0")
+    trips: Decimal = Decimal("0")
+    surface_loss_total: Decimal = Decimal("0")
+    mud_cleaner: Decimal = Decimal("0")
+    formation_seepage: Decimal = Decimal("0")
+    pit_cleaning_dump: Decimal = Decimal("0")
+    left_in_hole: Decimal = Decimal("0")
+    other_losses: Decimal = Decimal("0")
+    other_loss_total: Decimal = Decimal("0")
+    total_losses: Decimal = Decimal("0")
 
 
 class MudCostReconciliationOut(BaseModel):

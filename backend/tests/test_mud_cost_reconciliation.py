@@ -360,6 +360,112 @@ def test_reconciliation_uses_actual_daily_cost_and_latest_cost_per_bbl():
             assert exported is not None
 
 
+def test_consumption_loss_report_groups_totals_drills_and_exports():
+    with TestClient(app) as client:
+        headers = login(client)
+        scope = setup_well(client, headers)
+        configure_section(client, headers, scope, 0, "OBM", "2", "Oil based system")
+        configure_section(client, headers, scope, 1, "WBM", None)
+
+        create_mud_entry(client, headers, scope, "2026-10-11", 0, [
+            line("verti_g_mud_on_cuttings", "1"),
+            line("centrifuge", "2"),
+            line("by_pass", "3"),
+            line("evaporation", "4"),
+            line("trips", "5"),
+            line("mud_cleaner", "6"),
+            line("formation_seepage", "7"),
+            line("pit_cleaning_dump", "8"),
+            line("left_in_hole", "9"),
+            line("consumption_losses_others", "10"),
+            # Historical loss fields remain represented in the requested
+            # matrix by rolling into the final Other-loss row.
+            line("shakers", "11"),
+            line("offline_centrifuge_loss", "12"),
+        ])
+        create_mud_entry(client, headers, scope, "2026-10-13", 1, [
+            line("trips", "3"),
+            line("left_in_hole", "4"),
+        ])
+        create_mud_entry(client, headers, scope, "2026-11-02", 0, [
+            line("centrifuge", "1"),
+            line("mud_cleaner", "2"),
+        ])
+
+        query = f"rig_id={scope['rig']['id']}&well_id={scope['well']['id']}"
+        daily = _json(client, "get", f"/api/v1/mud-cost/consumption-losses?{query}&view=daily", headers)
+        assert daily["view"] == "daily"
+        assert daily["selected_section_count"] == 2
+        assert daily["entry_count"] == 3
+        assert Decimal(daily["surface_loss_total"]) == 19
+        assert Decimal(daily["other_loss_total"]) == 69
+        assert Decimal(daily["total_losses"]) == 88
+
+        first = next(row for row in daily["rows"] if row["cost_date"] == "2026-10-11")
+        assert first["mud_type"] == "OBM"
+        assert Decimal(first["surface_loss_total"]) == 15
+        assert Decimal(first["other_losses"]) == 33
+        assert Decimal(first["other_loss_total"]) == 63
+        assert Decimal(first["total_losses"]) == 78
+        assert Decimal(first["surface_loss_total"]) + Decimal(first["other_loss_total"]) == Decimal(first["total_losses"])
+
+        monthly = _json(client, "get", f"/api/v1/mud-cost/consumption-losses?{query}&view=monthly", headers)
+        assert monthly["entry_count"] == 3
+        assert len(monthly["rows"]) == 3  # October has one row per section; November one.
+        october_obm = next(row for row in monthly["rows"] if row["period_label"] == "October 2026" and row["mud_type"] == "OBM")
+        assert october_obm["entry_count"] == 1
+        assert Decimal(october_obm["total_losses"]) == 78
+
+        section_id = scope["sections"][0]["id"]
+        ranged = _json(
+            client, "get",
+            f"/api/v1/mud-cost/consumption-losses?{query}&section_id={section_id}&view=section&from=2026-10-01&to=2026-10-31",
+            headers,
+        )
+        assert ranged["selected_section_count"] == 1
+        assert ranged["entry_count"] == 1
+        assert len(ranged["rows"]) == 1
+        assert ranged["rows"][0]["period_label"].startswith("Selected range")
+        assert Decimal(ranged["total_losses"]) == 78
+
+        inception = _json(
+            client, "get",
+            f"/api/v1/mud-cost/consumption-losses?{query}&section_id={section_id}&view=inception&from=2026-11-01",
+            headers,
+        )
+        assert inception["from_date"] is None
+        assert inception["entry_count"] == 2  # Inception intentionally ignores From.
+        assert Decimal(inception["total_losses"]) == 81
+
+        reconciliation = _json(client, "get", f"/api/v1/mud-cost/reconciliation?{query}&to=2026-11-30", headers)
+        obm = next(row for row in reconciliation["sections"] if row["mud_type"] == "OBM")
+        assert Decimal(obm["surface_loss_total"]) == 16
+        assert Decimal(obm["other_loss_total"]) == 65
+        assert Decimal(obm["total_losses"]) == 81
+
+        invalid = client.get(
+            f"/api/v1/mud-cost/consumption-losses?{query}&section_id=missing", headers=headers,
+        )
+        assert invalid.status_code == 404
+        south = client.get(
+            f"/api/v1/mud-cost/consumption-losses?{query}", headers=login(client, "south"),
+        )
+        assert south.status_code == 404
+
+        export = client.post("/api/v1/mud-cost/export-audit", headers=headers, json={
+            "module": "consumption_losses", "format": "xlsx", "record_count": len(daily["rows"]),
+            "rig_id": scope["rig"]["id"], "well_id": scope["well"]["id"],
+            "section_id": "", "view": "daily", "date_from": None, "date_to": None,
+        })
+        assert export.status_code == 204, export.text
+        with SessionLocal() as db:
+            exported = db.scalar(select(AuditLog).where(
+                AuditLog.entity_type == "mud_cost_export",
+                AuditLog.summary.like("%consumption and losses%"),
+            ))
+            assert exported is not None
+
+
 @pytest.mark.parametrize("mud_type", ["OBM", "SOBM", "OTHERS"])
 def test_opening_stock_is_valued_once_and_zero_total_mud_has_no_rate(mud_type):
     from app.domain.mud_cost import reconcile_mud

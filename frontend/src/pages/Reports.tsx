@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { AssessmentOutlined, ArrowForwardRounded, HistoryOutlined, QueryStatsOutlined } from '@mui/icons-material'
+import { AssessmentOutlined, ArrowForwardRounded, HistoryOutlined, QueryStatsOutlined, WaterDropOutlined } from '@mui/icons-material'
 import { Box, Button, CircularProgress, Paper, Typography } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
 import { ErrorMessage, PageHeading } from '../components/Common'
@@ -25,6 +25,7 @@ function StatCard({ label, value, note, icon }: { label: string; value: string |
 
 export default function Reports() {
   const { can } = useAuth()
+  const canReadRig = can('rig-well:read')
   const canReadAfe = can('afe:read')
   const canReadDaily = can('daily-cost:read')
   const [dashboard, setDashboard] = useState<Dashboard>({ wells: null, afes: null, daily: null, activity: [] })
@@ -34,7 +35,7 @@ export default function Reports() {
   useEffect(() => {
     let active = true
     const requests = Promise.allSettled([
-      api<RigWellOverview>('/rig-well/overview'),
+      canReadRig ? api<RigWellOverview>('/rig-well/overview') : Promise.resolve(null),
       canReadAfe ? api<AfeOverview>('/afe/overview') : Promise.resolve(null),
       canReadDaily ? api<DailyCostOverview>('/daily-cost/overview') : Promise.resolve(null),
     ])
@@ -56,7 +57,9 @@ export default function Reports() {
       setError(errors.join(' · '))
     }).finally(() => { if (active) setBusy(false) })
     return () => { active = false }
-  }, [canReadAfe, canReadDaily])
+  }, [canReadRig, canReadAfe, canReadDaily])
+
+  const reportCount = Number(canReadRig && (canReadAfe || canReadDaily)) + Number(canReadDaily)
 
   return <>
     <PageHeading
@@ -67,14 +70,19 @@ export default function Reports() {
     <ErrorMessage message={error}/>
     {busy ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={28}/></Box> : <>
       <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }} gap={1.5} mb={2}>
-        <StatCard label="Available reports" value="1" note="Consolidated workspace report" icon={<AssessmentOutlined/>}/>
-        <StatCard label="Active wells" value={dashboard.wells?.active_wells ?? '—'} note="Wells in the workspace register" icon={<QueryStatsOutlined/>}/>
+        <StatCard label="Available reports" value={reportCount} note="Consolidated workspace reports" icon={<AssessmentOutlined/>}/>
+        {canReadRig && <StatCard
+          label="Active wells"
+          value={dashboard.wells?.active_wells ?? '—'}
+          note="Wells in the workspace register"
+          icon={<QueryStatsOutlined/>}
+        />}
         {canReadAfe && <StatCard label="Active AFEs" value={dashboard.afes?.active_afes ?? '—'} note="Current AFE records" icon={<AssessmentOutlined/>}/>}
         {canReadDaily && <StatCard label="Wells with actuals" value={dashboard.daily?.wells_tracked ?? '—'} note="Wells with daily cost entries" icon={<HistoryOutlined/>}/>}
       </Box>
       {!canReadAfe && <Typography color="text.secondary" fontSize={12} sx={{ mb: 1.5 }}>AFE figures are shown only to users with AFE read access.</Typography>}
       {!canReadDaily && <Typography color="text.secondary" fontSize={12} sx={{ mb: 1.5 }}>Actual cost figures are shown only to users with daily cost read access.</Typography>}
-      <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, borderRadius: 2 }}>
+      {canReadRig && (canReadAfe || canReadDaily) && <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, borderRadius: 2 }}>
         <Box display="flex" alignItems="flex-start" gap={2}>
           <Box className="table-icon" sx={{ width: 42, height: 42, flex: '0 0 auto' }}><AssessmentOutlined/></Box>
           <Box minWidth={0} flex={1}>
@@ -92,7 +100,20 @@ export default function Reports() {
             >Open report</Button>
           </Box>
         </Box>
-      </Paper>
+      </Paper>}
+      {canReadDaily && <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, borderRadius: 2, mt: 2 }}>
+        <Box display="flex" alignItems="flex-start" gap={2}>
+          <Box className="table-icon" sx={{ width: 42, height: 42, flex: '0 0 auto' }}><WaterDropOutlined/></Box>
+          <Box minWidth={0} flex={1}>
+            <Typography variant="overline" color="text.secondary">AVAILABLE REPORT</Typography>
+            <Typography variant="h5" sx={{ mt: .25 }}>Consumption and losses</Typography>
+            <Typography color="text.secondary" fontSize={13} sx={{ mt: .75, maxWidth: 760 }}>
+              Review cumulative surface and other mud losses as a section-by-mud-type matrix, then drill through by date, month or a required date range and export the filtered detail.
+            </Typography>
+            <Button component={RouterLink} to="/reports/consumption-losses" variant="contained" endIcon={<ArrowForwardRounded/>} sx={{ mt: 2 }}>Open report</Button>
+          </Box>
+        </Box>
+      </Paper>}
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2, mt: 2 }}>
         <Box display="flex" alignItems="center" gap={1} mb={1.2}>
           <HistoryOutlined sx={{ color: 'text.secondary', fontSize: 18 }}/>
