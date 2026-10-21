@@ -456,3 +456,22 @@ def test_all_remarks_optional_and_legacy_closing_never_drives_balance():
             line("actual_closing_stock", "100"),
         ], status=422)
         assert "Unknown Mud Cost Analysis row" in str(rejected)
+
+
+def test_loss_report_counts_consumption_other_but_excludes_separate_others_section():
+    from app.domain.mud_cost import loss_breakdown
+
+    values = {
+        "centrifuge": Decimal("3"),
+        "consumption_losses_others": Decimal("4"),
+        "offline_centrifuge_loss": Decimal("5"),
+        "backloads": Decimal("6"),
+        "obm_left_in_hole": Decimal("7"),
+        "other_losses_others": Decimal("8"),
+    }
+    losses = loss_breakdown(values)
+    assert losses["centrifuge"] == Decimal("3")
+    assert losses["other_losses"] == Decimal("4")
+    assert losses["surface_loss_total"] == Decimal("3")
+    assert losses["other_loss_total"] == Decimal("4")
+    assert losses["total_losses"] == Decimal("7")
