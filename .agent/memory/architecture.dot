@@ -471,7 +471,6 @@ digraph WellCostingPro {
   "frontend/src/components/afe/AfeFormDialog.tsx" -> "frontend/src/lib/afe.ts";
   "frontend/src/components/afe/AfeFormDialog.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/components/afe/AfePrintSheet.tsx" -> "frontend/src/lib/afe.ts";
-  "frontend/src/components/afe/AfePrintSheet.tsx" -> "frontend/src/lib/rigWell.ts";
   "frontend/src/components/afe/AfePrintSheet.tsx" -> "frontend/src/lib/units.ts";
   "frontend/src/components/afe/AfeRegisterTab.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/afe/AfeRegisterTab.tsx" -> "frontend/src/components/DataTable.tsx";

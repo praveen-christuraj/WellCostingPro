@@ -5,7 +5,7 @@ import {
   type DailyCostWellSummary,
 } from '../../lib/dailyCost'
 import type { MudCostReconciliation } from '../../lib/mudCost'
-import { formatDepthMeters } from '../../lib/units'
+import { depthToMeters } from '../../lib/units'
 
 export type CostPrintReport = {
   title: string
@@ -43,11 +43,11 @@ export function DailyCostPrintSheet({ report }: { report: CostPrintReport | null
         const sum = (field: 'total_cost' | 'services_total' | 'consumables_total' | 'tangibles_total' | 'other_expenses_total') =>
           dailyMoney(days.reduce((total, day) => total + Number(day.entry[field]), 0), entry.standard_currency)
         return <Fragment key={key}>
-          <h3>{entry.well_code} · {entry.afe_code} · {entry.afe_name} ({entry.standard_currency})</h3>
+          <h3>{entry.well_name} · {entry.afe_name} ({entry.standard_currency})</h3>
           <table><thead><tr><th>Date / daily sheet</th><th>Status</th><th>Actual depth (m)</th><th>Services</th><th>Consumables</th><th>Tangibles</th><th>Other expenses</th><th>Total</th><th>USD Total</th></tr></thead>
             <tbody>{days.map(day => <tr key={day.entry.id}>
-              <td>{displayDate(day.entry.cost_date)} · {day.entry.daily_cost_code}</td><td>{day.entry.status}</td>
-              <td className="num">{formatDepthMeters(day.entry.actual_depth, 'm')}</td>
+              <td>{displayDate(day.entry.cost_date)}</td><td>{day.entry.status}</td>
+              <td className="num">{depthText(day.entry.actual_depth, 'm')}</td>
               <td className="num">{dailyMoney(day.entry.services_total, entry.standard_currency)}</td>
               <td className="num">{dailyMoney(day.entry.consumables_total, entry.standard_currency)}</td>
               <td className="num">{dailyMoney(day.entry.tangibles_total, entry.standard_currency)}</td>
@@ -71,8 +71,27 @@ function asNumber(value: string | number | null | undefined) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+function decimalText(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === '') return '—'
+  const parsed = Number(value)
+  return Number.isFinite(parsed)
+    ? parsed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '—'
+}
+
+function depthText(value: string | number | null | undefined, unit: string) {
+  const meters = depthToMeters(value, unit)
+  return meters === null ? '—' : `${decimalText(meters)} m`
+}
+
+/** Labels supplied as "CODE · Name" retain the descriptive name only in print. */
+function nameOnly(label: string) {
+  const parts = label.split(' · ').map(part => part.trim()).filter(Boolean)
+  return parts.length > 1 ? parts.slice(1).join(' · ') : (label || '—')
+}
+
 function percent(actual: number, planned: number) {
-  return planned > 0 ? `${(actual / planned * 100).toFixed(1)}%` : '—'
+  return planned > 0 ? `${decimalText(actual / planned * 100)}%` : '—'
 }
 
 function durationInDays(line: DailyCostLineOutput) {
@@ -89,7 +108,7 @@ function incidentRows(days: DailyCostDay[], classification: 'NPT' | 'UPA'): Cove
       const remarks = line.remarks || line.override_reason || '—'
       const key = `${line.activity_code}|${line.activity_name}|${party}|${remarks}`
       const current = grouped.get(key) ?? {
-        label: `${line.activity_code} · ${line.activity_name}`,
+        label: line.activity_name,
         days: 0, amount: 0, party, remarks,
       }
       current.days += durationInDays(line)
@@ -158,7 +177,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   }) => <section className="dcr-panel dcr-cost-panel">
     <h2>{title}</h2>
     <table><thead><tr><th>Cost item</th><th>AFE</th><th>Cumulative actual</th><th>Balance</th><th>Used</th></tr></thead>
-      <tbody>{rows.map(row => <tr key={row.budget_key}><td>{row.item_code ? `${row.item_code} · ` : ''}{row.item_name}</td><td className="num">{dailyMoney(row.planned, currency)}</td><td className="num">{dailyMoney(row.actual_to_date, currency)}</td><td className="num">{dailyMoney(row.balance, currency)}</td><td className="num">{percent(asNumber(row.actual_to_date), asNumber(row.planned))}</td></tr>)}</tbody>
+      <tbody>{rows.map(row => <tr key={row.budget_key}><td>{row.item_name}</td><td className="num">{dailyMoney(row.planned, currency)}</td><td className="num">{dailyMoney(row.actual_to_date, currency)}</td><td className="num">{dailyMoney(row.balance, currency)}</td><td className="num">{percent(asNumber(row.actual_to_date), asNumber(row.planned))}</td></tr>)}</tbody>
       <tfoot><tr><th>{rows.length ? 'Group total' : 'No cost lines recorded'}</th><th className="num">{dailyMoney(position.planned, currency)}</th><th className="num">{dailyMoney(position.actual, currency)}</th><th className="num">{dailyMoney(position.planned - position.actual, currency)}</th><th className="num">{percent(position.actual, position.planned)}</th></tr></tfoot>
     </table>
   </section>
@@ -166,23 +185,23 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   const IncidentTable = ({ title, rows, total }: { title: string; rows: CoverIncident[]; total: number }) => <section className="dcr-panel dcr-incident">
     <h2>{title}</h2>
     <table><thead><tr><th>Activity</th><th>Days</th><th>Cost</th><th>Responsible party</th><th>Remarks</th></tr></thead>
-      <tbody>{rows.slice(0, 4).map((row, index) => <tr key={`${row.label}-${index}`}><td>{row.label}</td><td className="num">{row.days ? row.days.toFixed(3) : '—'}</td><td className="num">{dailyMoney(row.amount, currency)}</td><td>{row.party}</td><td>{row.remarks}</td></tr>)}
+      <tbody>{rows.slice(0, 4).map((row, index) => <tr key={`${row.label}-${index}`}><td>{row.label}</td><td className="num">{row.days ? decimalText(row.days) : '—'}</td><td className="num">{dailyMoney(row.amount, currency)}</td><td>{row.party}</td><td>{row.remarks}</td></tr>)}
       {!rows.length && <tr><td colSpan={5} className="dcr-none">No {title.split(' ')[0]} cost recorded.</td></tr>}</tbody>
-      <tfoot><tr><th>Total</th><th className="num">{rows.reduce((sum, row) => sum + row.days, 0).toFixed(3)}</th><th className="num">{dailyMoney(total, currency)}</th><th colSpan={2}>{rows.length > 4 ? `${rows.length - 4} additional incident(s) continue in the detailed pages.` : ''}</th></tr></tfoot>
+      <tfoot><tr><th>Total</th><th className="num">{decimalText(rows.reduce((sum, row) => sum + row.days, 0))}</th><th className="num">{dailyMoney(total, currency)}</th><th colSpan={2}>{rows.length > 4 ? `${rows.length - 4} additional incident(s) continue in the detailed pages.` : ''}</th></tr></tfoot>
     </table>
   </section>
 
   return <section className="daily-report-cover ps-page">
     <header className="dcr-titlebar">
       <div><div className="dcr-eyebrow">Daily Cost Management · {report.reportKind === 'daily' ? 'Daily cost report' : 'Well cost report'}</div><h1>{report.title}</h1></div>
-      <div className="dcr-report-meta"><strong>{latest.entry.well_code} · {latest.entry.well_name}</strong><span>{latest.entry.rig_code} · {latest.entry.rig_name}</span><span>{report.period}</span></div>
+      <div className="dcr-report-meta"><strong>{latest.entry.well_name}</strong><span>{latest.entry.rig_name}</span><span>{report.period}</span></div>
     </header>
     <div className="dcr-layout">
       <div className="dcr-main">
         <div className="dcr-topline">
           <section className="dcr-panel dcr-milestone"><h2>Reporting milestone</h2><dl><dt>Spud date &amp; time</dt><dd>{spud ? `${spud.replace('T', ' ').slice(0, 16)} hrs` : 'Not recorded'}</dd><dt>Current report date</dt><dd>{displayDate(reportDate)} · 24:00 hrs</dd></dl></section>
-          <section className="dcr-panel dcr-depth"><h2>Section-wise planned depth &amp; current depth</h2><table><thead><tr><th>Section</th><th>Planned depth (m)</th><th>Current depth (m)</th></tr></thead><tbody>{sections.map(section => <tr key={section.hole_section_id}><td>{section.section_code} · {section.section_name}</td><td className="num">{formatDepthMeters(section.to_depth, 'm')}</td><td className="num">{formatDepthMeters(sectionDepths.get(section.hole_section_id), 'm')}</td></tr>)}</tbody></table></section>
-          <section className="dcr-panel dcr-time"><h2>Time position</h2><dl><dt>Planned</dt><dd>{plannedDays.toFixed(3)} days</dd><dt>Actual from spud</dt><dd>{actualDays.toFixed(3)} days</dd><dt>Variance</dt><dd>{actualDays || plannedDays ? `${actualDays - plannedDays >= 0 ? '+' : ''}${(actualDays - plannedDays).toFixed(3)} days` : '—'}</dd><dt>Sheets / status</dt><dd>{summary?.totals.sheets ?? detailDays.length} · {summary ? `${summary.totals.draft_sheets} draft` : latest.entry.status}</dd></dl></section>
+          <section className="dcr-panel dcr-depth"><h2>Section-wise planned depth &amp; current depth</h2><table><thead><tr><th>Section</th><th>Planned depth (m)</th><th>Current depth (m)</th></tr></thead><tbody>{sections.map(section => <tr key={section.hole_section_id}><td>{section.section_name}</td><td className="num">{depthText(section.to_depth, 'm')}</td><td className="num">{depthText(sectionDepths.get(section.hole_section_id), 'm')}</td></tr>)}</tbody></table></section>
+          <section className="dcr-panel dcr-time"><h2>Time position</h2><dl><dt>Planned</dt><dd>{decimalText(plannedDays)} days</dd><dt>Actual from spud</dt><dd>{decimalText(actualDays)} days</dd><dt>NPT</dt><dd>{decimalText(npt.reduce((sum, row) => sum + row.days, 0))} days</dd><dt>UPA</dt><dd>{decimalText(upa.reduce((sum, row) => sum + row.days, 0))} days</dd></dl></section>
         </div>
         <CostTable title="Services cost · AFE vs cumulative actual" rows={services} position={servicePosition}/>
         <CostTable title="Consumables cost · AFE vs cumulative actual" rows={consumables} position={consumablePosition}/>
@@ -191,9 +210,9 @@ function ReportCover({ report }: { report: CostPrintReport }) {
           <section className="dcr-panel dcr-overall"><h2>AFE vs actual summary</h2><table><tbody><tr><th>Services</th><td>{dailyMoney(servicePosition.planned, currency)}</td><td>{dailyMoney(servicePosition.actual, currency)}</td></tr><tr><th>Consumables</th><td>{dailyMoney(consumablePosition.planned, currency)}</td><td>{dailyMoney(consumablePosition.actual, currency)}</td></tr><tr><th>Tangibles</th><td>{dailyMoney(tangiblePosition.planned, currency)}</td><td>{dailyMoney(tangiblePosition.actual, currency)}</td></tr><tr><th>Other expenses</th><td>—</td><td>{dailyMoney(otherExpenses, currency)}</td></tr><tr className="dcr-total"><th>Total</th><td>{dailyMoney(totalPlanned, currency)}</td><td>{dailyMoney(totalActual, currency)}</td></tr></tbody></table><p>Balance {dailyMoney(balance, currency)} · {percent(totalActual, totalPlanned)} used</p></section>
           <section className="dcr-panel dcr-mud-cost"><h2>Mud chemical cost · section-wise</h2><table><thead><tr><th>Section / mud</th><th>Planned</th><th>Actual</th><th>Reconciled</th></tr></thead><tbody>{mudSections.slice(0, 5).map(row => {
             const sectionFactor = summary?.factors.find(item => item.dimension === 'section')?.rows.find(item => item.code === ('section_code' in row ? row.section_code : ''))
-            return <tr key={row.section_id}><td>{row.section_label} · {row.mud_type ?? 'Not configured'}</td><td className="num">{dailyMoney(sectionFactor?.planned ?? 0, currency)}</td><td className="num">{dailyMoney(row.actual_cost, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : dailyMoney(row.reconciled_cost, currency)}</td></tr>
+            return <tr key={row.section_id}><td>{nameOnly(row.section_label)} · {row.mud_type ?? 'Not configured'}</td><td className="num">{dailyMoney(sectionFactor?.planned ?? 0, currency)}</td><td className="num">{dailyMoney(row.actual_cost, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : dailyMoney(row.reconciled_cost, currency)}</td></tr>
           })}{!mudSections.length && <tr><td colSpan={4} className="dcr-none">No mud reconciliation data.</td></tr>}</tbody></table></section>
-          <section className="dcr-panel dcr-loss"><h2>Consumption / losses · cumulative</h2><table><thead><tr><th>Section</th><th>Mud</th><th>Consumption / losses</th><th>Cost / BBL</th></tr></thead><tbody>{mudSections.slice(0, 5).map(row => <tr key={row.section_id}><td>{row.section_label}</td><td>{row.mud_type ?? '—'}</td><td className="num">{asNumber(row.consumption_losses).toLocaleString(undefined, { maximumFractionDigits: 3 })}</td><td className="num">{row.cost_per_bbl == null ? '—' : dailyMoney(row.cost_per_bbl, currency)}</td></tr>)}{!mudSections.length && <tr><td colSpan={4} className="dcr-none">No consumption or loss data.</td></tr>}</tbody></table></section>
+          <section className="dcr-panel dcr-loss"><h2>Consumption / losses · cumulative</h2><table><thead><tr><th>Section</th><th>Mud</th><th>Consumption / losses</th><th>Cost / BBL</th></tr></thead><tbody>{mudSections.slice(0, 5).map(row => <tr key={row.section_id}><td>{nameOnly(row.section_label)}</td><td>{row.mud_type ?? '—'}</td><td className="num">{decimalText(row.consumption_losses)}</td><td className="num">{row.cost_per_bbl == null ? '—' : dailyMoney(row.cost_per_bbl, currency)}</td></tr>)}{!mudSections.length && <tr><td colSpan={4} className="dcr-none">No consumption or loss data.</td></tr>}</tbody></table></section>
         </div>
       </div>
       <aside className="dcr-side">
@@ -202,7 +221,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
           const additions = 'additions' in row ? asNumber(String(row.additions ?? 0)) : 0
           const totalMud = 'total_mud' in row ? asNumber(String(row.total_mud ?? 0)) : receipt + additions
           const losses = asNumber(row.consumption_losses)
-          return <tr key={row.section_id}><td>{row.section_label}</td><td>{row.mud_type ?? '—'}</td><td className="num">{receipt.toLocaleString()}</td><td className="num">{additions.toLocaleString()}</td><td className="num">{totalMud.toLocaleString()}</td><td className="num">{losses.toLocaleString()}</td><td className="num">{(totalMud - losses).toLocaleString()}</td><td className="num">{row.cost_per_bbl == null ? '—' : dailyMoney(row.cost_per_bbl, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : dailyMoney(row.reconciled_cost, currency)}</td></tr>
+          return <tr key={row.section_id}><td>{nameOnly(row.section_label)}</td><td>{row.mud_type ?? '—'}</td><td className="num">{decimalText(receipt)}</td><td className="num">{decimalText(additions)}</td><td className="num">{decimalText(totalMud)}</td><td className="num">{decimalText(losses)}</td><td className="num">{decimalText(totalMud - losses)}</td><td className="num">{row.cost_per_bbl == null ? '—' : dailyMoney(row.cost_per_bbl, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : dailyMoney(row.reconciled_cost, currency)}</td></tr>
         })}{!mudSections.length && <tr><td colSpan={9} className="dcr-none">No mud material-balance data for this reporting period.</td></tr>}</tbody></table></section>
         <IncidentTable title="NPT summary" rows={npt} total={asNumber(summary?.totals.npt ?? latestComparison.npt_to_date)}/>
         <IncidentTable title="UPA summary" rows={upa} total={asNumber(summary?.totals.upa ?? latestComparison.upa_to_date)}/>
@@ -218,23 +237,23 @@ function DailySections({ day }: { day: DailyCostDay }) {
   const milestone = (value: string | null) => (value ? `${value.replace('T', ' ').slice(0, 16)} hrs` : '—')
   const progress = day.progress
   return <section>
-    <h2>{entry.daily_cost_code} · {displayDate(entry.cost_date)}</h2>
+    <h2>Daily cost · {displayDate(entry.cost_date)}</h2>
     <h3>1. Well, AFE and daily sheet details</h3>
     <table><tbody>
-      <tr><th>Well</th><td>{entry.well_code} · {entry.well_name}</td><th>Rig</th><td>{entry.rig_code} · {entry.rig_name}</td></tr>
-      <tr><th>AFE</th><td>{entry.afe_code} · {entry.afe_name} ({entry.afe_status})</td><th>Sheet status</th><td>{entry.status} · {entry.standard_currency}{entry.is_deleted ? ` · Deleted ${entry.deleted_at}` : ''}</td></tr>
+      <tr><th>Well</th><td>{entry.well_name}</td><th>Rig</th><td>{entry.rig_name}</td></tr>
+      <tr><th>AFE</th><td>{entry.afe_name} ({entry.afe_status})</td><th>Sheet status</th><td>{entry.status} · {entry.standard_currency}{entry.is_deleted ? ` · Deleted ${entry.deleted_at}` : ''}</td></tr>
       {progress && <>
         <tr>
           <th>Well spud date &amp; time ({progress.scope_label.toLowerCase()})</th><td>{milestone(progress.spud_at)}</td>
           <th>{progress.progress_label}</th><td>{milestone(progress.progress_completed_at)}{progress.is_completed ? ' — day count stopped' : ''}</td>
         </tr>
         <tr>
-          <th>Actual days (from spud, to sheet date)</th><td>{progress.actual_days ?? '—'}</td>
+          <th>Actual days (from spud, to sheet date)</th><td>{decimalText(progress.actual_days)}</td>
           <th>Planned days · difference (actual − planned)</th>
-          <td>{Number(progress.planned_days).toFixed(3)} · {progress.days_variance === null ? '—' : `${Number(progress.days_variance) > 0 ? '+' : ''}${Number(progress.days_variance).toFixed(3)}`}</td>
+          <td>{decimalText(progress.planned_days)} · {progress.days_variance === null ? '—' : `${Number(progress.days_variance) > 0 ? '+' : ''}${decimalText(progress.days_variance)}`}</td>
         </tr>
       </>}
-      <tr><th>Actual depth (standardized)</th><td>{formatDepthMeters(entry.actual_depth, 'm')}</td><th>USD total (FX {entry.usd_exchange_rate ?? '1'})</th><td>{dailyMoney(entry.total_cost_usd ?? entry.total_cost, 'USD')}</td></tr>
+      <tr><th>Actual depth (standardized)</th><td>{depthText(entry.actual_depth, 'm')}</td><th>USD total (FX {decimalText(entry.usd_exchange_rate ?? '1')})</th><td>{dailyMoney(entry.total_cost_usd ?? entry.total_cost, 'USD')}</td></tr>
       <tr><th>Budget locked</th><td>{entry.budget_baseline_locked_at}</td><th>Rates locked</th><td>{entry.rate_baseline_locked_at}</td></tr>
       <tr><th>Created</th><td>{entry.created_at} · {entry.created_by}</td><th>Updated</th><td>{entry.updated_at} · {entry.updated_by}</td></tr>
       <tr><th>Submitted</th><td>{entry.submitted_at || '—'} · {entry.submitted_by || '—'}</td><th>Status remarks</th><td>{entry.status_remarks || '—'}</td></tr>
@@ -250,15 +269,15 @@ function DailySections({ day }: { day: DailyCostDay }) {
     </tbody></table>
     <p>Other expenses (Lost In Hole, hole problems, claims) carry no AFE allowance. They are recorded separately and deducted from the locked AFE total, which is why the remaining figure above is the AFE budget less every actual including those charges.</p>
     <p>AFE reconciliation includes {comparison.includes_draft_entries ? 'draft and submitted' : 'submitted'} sheets through the sheet date, including records outside a selected report period.</p>
-    <PrintLines title="3. Services" lines={day.services} names={day.services.map(line => `${line.service_code} · ${line.service_name} · ${line.charging_basis} · ${line.charge_category}`)} standard={entry.standard_currency}/>
-    <PrintLines title="4. Consumables" lines={day.consumables} names={day.consumables.map(line => `${line.category} · ${line.item_code} · ${line.item_name} · UOM ${line.uom}`)} standard={entry.standard_currency}/>
-    <PrintLines title="5. Tangibles" lines={day.tangibles} names={day.tangibles.map(line => `${line.tangible_code} · ${line.tangible_name} · UOM ${line.uom}`)} standard={entry.standard_currency}/>
+    <PrintLines title="3. Services" lines={day.services} names={day.services.map(line => `${line.service_name} · ${line.charging_basis} · ${line.charge_category}`)} standard={entry.standard_currency}/>
+    <PrintLines title="4. Consumables" lines={day.consumables} names={day.consumables.map(line => `${line.category} · ${line.item_name} · UOM ${line.uom}`)} standard={entry.standard_currency}/>
+    <PrintLines title="5. Tangibles" lines={day.tangibles} names={day.tangibles.map(line => `${line.tangible_name} · UOM ${line.uom}`)} standard={entry.standard_currency}/>
     <PrintLines title="6. Other expenses (LIH, hole problems and similar charges)" lines={day.other_expenses}
       names={day.other_expenses.map(line => `${line.expense_type_label}${line.expense_description ? ` · ${line.expense_description}` : ''}`)}
       standard={entry.standard_currency} remarkRequired/>
     <h3>7. AFE budget reconciliation</h3>
     <table><thead><tr><th>Budget line</th><th>Cost group</th><th>Planned</th><th>Actual to sheet date</th><th>Balance</th></tr></thead><tbody>
-      {comparison.budget_lines.map(line => <tr key={line.budget_key}><td>{line.item_code} · {line.item_name}{line.is_planned ? '' : ' · unbudgeted'}</td><td>{line.cost_group}</td><td className="num">{money(line.planned)}</td><td className="num">{money(line.actual_to_date)}</td><td className="num">{money(line.balance)}</td></tr>)}
+      {comparison.budget_lines.map(line => <tr key={line.budget_key}><td>{line.item_name}{line.is_planned ? '' : ' · unbudgeted'}</td><td>{line.cost_group}</td><td className="num">{money(line.planned)}</td><td className="num">{money(line.actual_to_date)}</td><td className="num">{money(line.balance)}</td></tr>)}
     </tbody></table>
     {day.warnings.length > 0 && <div className="ps-warnings"><strong>Sheet warnings</strong><ul>{day.warnings.map(warning => <li key={warning.code}>{warning.message}</li>)}</ul></div>}
   </section>
@@ -276,16 +295,16 @@ function PrintLines({ title, lines, names, standard, remarkRequired }: {
       <thead><tr><th>Item / service and classification</th><th>Section / phase</th><th>Actual depth (m)</th><th>Activity / sub activity</th><th>Quantity</th><th>Rate</th><th>Native amount</th><th>Standard amount</th></tr></thead>
       <tbody>{lines.map((line, index) => <Fragment key={line.id}>
         <tr><td>{names[index]}<div className="ps-sub">{line.classification}</div></td>
-          <td>{line.section_code} · {line.section_name}<div className="ps-sub">{line.phase_code} · {line.phase_name}</div></td>
-          <td className="num">{formatDepthMeters(line.actual_depth, 'm')}</td>
-          <td>{line.activity_code} · {line.activity_name}<div className="ps-sub">{line.sub_activity_code} · {line.sub_activity_name}</div></td>
-          <td>{line.quantity} {line.quantity_unit}</td><td className="num">{dailyMoney(line.effective_rate, line.currency)}</td>
+          <td>{line.section_name}<div className="ps-sub">{line.phase_name}</div></td>
+          <td className="num">{depthText(line.actual_depth, 'm')}</td>
+          <td>{line.activity_name}<div className="ps-sub">{line.sub_activity_name}</div></td>
+          <td>{decimalText(line.quantity)} {line.quantity_unit}</td><td className="num">{dailyMoney(line.effective_rate, line.currency)}</td>
           <td className="num">{dailyMoney(line.amount, line.currency)}</td><td className="num">{dailyMoney(line.standard_amount, standard)}</td></tr>
         <tr className="ps-component"><td colSpan={8}>
-          <strong>Responsible party:</strong> {line.party_name || line.vendor_name || '—'} · Vendor {line.vendor_code} {line.vendor_name} · Sub activity party {line.sub_activity_party || '—'}<br/>
-          <strong>Rate trace:</strong> {line.rate_source} · captured {dailyMoney(line.captured_rate, line.currency)} · FX {line.exchange_rate} to {standard} · USD {dailyMoney(line.usd_amount ?? line.standard_amount, 'USD')} · revision {line.rate_revision_number ?? '—'} · effective {displayDate(line.rate_effective_date)}<br/>
+          <strong>Responsible party:</strong> {line.party_name || line.vendor_name || '—'} · Vendor {line.vendor_name || '—'} · Sub activity party {line.sub_activity_party || '—'}<br/>
+          <strong>Rate trace:</strong> {line.rate_source} · captured {dailyMoney(line.captured_rate, line.currency)} · FX {decimalText(line.exchange_rate)} to {standard} · USD {dailyMoney(line.usd_amount ?? line.standard_amount, 'USD')} · revision {line.rate_revision_number ?? '—'} · effective {displayDate(line.rate_effective_date)}<br/>
           <strong>Override:</strong> {line.override_rate === null ? 'None' : dailyMoney(line.override_rate, line.currency)} · {line.override_reason || '—'}<br/>
-          <strong>Budget:</strong> {line.budget_name || 'Unbudgeted'} · {line.budget_key}<br/>
+          <strong>Budget:</strong> {line.budget_name || 'Unbudgeted'}<br/>
           <strong>Remarks{remarkRequired ? ' (mandatory)' : ''}:</strong> <span className="ps-notes">{line.remarks || '—'}</span>
         </td></tr>
       </Fragment>)}</tbody>

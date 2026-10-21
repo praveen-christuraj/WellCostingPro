@@ -50,7 +50,7 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
         module: 'well-cost-sheet', format: 'pdf', record_count: days.length, well_id: wellId,
         date_from: mode === 'range' ? dateFrom : null, date_to: to, include_draft: includeDraft,
       }) })
-      print({ title: `Well costing sheet · ${well?.well_code ?? days[0].entry.well_code} · ${well?.well_name ?? days[0].entry.well_name}`,
+      print({ title: `Well cost report · ${well?.well_name ?? days[0].entry.well_name}`,
         period: `${mode === 'range' ? displayDate(dateFrom) : 'Inception (first recorded cost)'} to ${displayDate(to)} · ${includeDraft ? 'Draft and submitted sheets' : 'Submitted sheets only'}`,
         days, overviewDays: days, summary, mudReconciliation, sections: well?.sections, reportKind: 'well' })
     } catch (caught) {

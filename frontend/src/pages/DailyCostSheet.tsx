@@ -889,7 +889,7 @@ export default function DailyCostSheet() {
       }) })
       const well = reference?.wells.find(item => item.id === entry.well_id)
       print({
-        title: `Daily cost report · ${entry.daily_cost_code}`, period: displayDate(entry.cost_date), days: [saved],
+        title: `Daily cost report · ${entry.well_name}`, period: displayDate(entry.cost_date), days: [saved],
         overviewDays, summary, mudReconciliation, sections: well?.sections ?? baseline?.sections, reportKind: 'daily',
       })
     } catch (caught) {

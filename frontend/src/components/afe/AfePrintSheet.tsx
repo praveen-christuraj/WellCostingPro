@@ -1,7 +1,6 @@
 import { createPortal } from 'react-dom'
-import { formatDepth } from '../../lib/rigWell'
-import { formatDepthMeters } from '../../lib/units'
-import { amountText, daysText, STATUS_LABEL, type AfeEstimate, type AfeStatusEvent, type ServiceLineOut } from '../../lib/afe'
+import { depthToMeters } from '../../lib/units'
+import { amountText, STATUS_LABEL, type AfeEstimate, type AfeStatusEvent, type ServiceLineOut } from '../../lib/afe'
 
 // Print layout for a saved AFE, in the fixed two-page AFE format:
 //   page 1 - title, well and AFE metadata, the service schedule with remarks,
@@ -11,7 +10,27 @@ import { amountText, daysText, STATUS_LABEL, type AfeEstimate, type AfeStatusEve
 // @media print rules in styles.css, which Daily Cost printing reuses through .ps-* classes.
 
 const quantityText = (value: string): string =>
-  Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 })
+  Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+const daysText = (value: string | number | null | undefined): string => {
+  const parsed = Number(value)
+  return value === null || value === undefined || value === '' || !Number.isFinite(parsed)
+    ? '—'
+    : `${parsed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} d`
+}
+
+const depthText = (value: string | number | null | undefined, unit: string): string => {
+  const meters = depthToMeters(value, unit)
+  return meters === null
+    ? '—'
+    : `${meters.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} m`
+}
+
+/** Labels arrive as "CODE · Name"; printed reports intentionally keep only the name. */
+const nameOnly = (label: string): string => {
+  const parts = label.split(' · ').map(part => part.trim()).filter(Boolean)
+  return parts.length > 1 ? parts.slice(1).join(' · ') : (label || '—')
+}
 
 /** Keep the entered rates (and their currency) beside the charging basis on page one. */
 function basisDetail(line: ServiceLineOut) {
@@ -19,13 +38,13 @@ function basisDetail(line: ServiceLineOut) {
     return line.section_rates.length
       ? line.section_rates.map((rate, index) => (
           <div className="ps-sub" key={`${rate.hole_section_id}-${rate.phase_id ?? ''}-${index}`}>
-            {rate.section_label || 'Section'}{rate.phase_label ? ` · ${rate.phase_label}` : ''}: {amountText(rate.amount, line.currency)}
+            {rate.section_label ? nameOnly(rate.section_label) : 'Section'}{rate.phase_label ? ` · ${nameOnly(rate.phase_label)}` : ''}: {amountText(rate.amount, line.currency)}
           </div>
         ))
       : <div className="ps-sub">No section rates</div>
   }
 
-  const scope = [line.section_label, line.phase_label].filter(Boolean).join(' · ')
+  const scope = [line.section_label ? nameOnly(line.section_label) : '', line.phase_label ? nameOnly(line.phase_label) : ''].filter(Boolean).join(' · ')
   return <>
     {line.charging_basis === 'Day Rate'
       ? (line.rates.length ? line.rates.map(rate => {
@@ -79,8 +98,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
           <h1>AFE Cost Estimate</h1>
         </div>
         <div className="ps-titlemeta">
-          <span className="ps-titlecode">{afe.afe_code}</span>
-          <span>{afe.afe_name}</span>
+          <span className="ps-titlecode">{afe.afe_name}</span>
           <span className="ps-printed">Printed {printedAt}</span>
         </div>
       </header>
@@ -88,12 +106,12 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
       <table className="ps-meta">
         <tbody>
           <tr>
-            <th>Rig</th><td>{afe.rig_code} · {afe.rig_name}</td>
-            <th>Well</th><td>{afe.well_code} · {afe.well_name}</td>
+            <th>Rig</th><td>{afe.rig_name}</td>
+            <th>Well</th><td>{afe.well_name}</td>
           </tr>
           <tr>
-            <th>AFE no.</th><td>{afe.afe_code}</td>
-            <th>AFE name</th><td>{afe.afe_name}</td>
+            <th>AFE</th><td>{afe.afe_name}</td>
+            <th>Configuration</th><td>{afe.configuration_scope === 'completion' ? 'Completion plan' : 'Drilling plan'}</td>
           </tr>
           <tr>
             <th>Objective of the well</th><td colSpan={3} className="ps-notes">{well.objective || '—'}</td>
@@ -103,7 +121,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
             <th>Well plan</th><td>{[well.config_status, well.status].filter(Boolean).join(' · ') || '—'}</td>
           </tr>
           <tr>
-            <th>Total depth (m)</th><td>{well.total_depth ? formatDepth(well.total_depth, well.depth_unit) : '—'}</td>
+            <th>Total depth (m)</th><td>{depthText(well.total_depth, well.depth_unit)}</td>
             <th>Planned days</th><td>{daysText(well.total_days)}</td>
           </tr>
           <tr>
@@ -175,7 +193,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
       {multiCurrency && <p className="ps-note">Line amounts stay in each line's currency. Every subtotal and total above is converted to {standard} at the rates saved with this estimate.</p>}
 
       <footer className="ps-pagefoot">
-        <span>WellCosting Pro · AFE cost estimate · {afe.afe_code}</span>
+        <span>WellCosting Pro · AFE cost estimate · {afe.afe_name}</span>
       </footer>
     </div>
 
@@ -187,8 +205,8 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
           <h1>AFE supporting detail</h1>
         </div>
         <div className="ps-titlemeta">
-          <span className="ps-titlecode">{afe.afe_code}</span>
-          <span>{afe.well_code} · {afe.well_name}</span>
+          <span className="ps-titlecode">{afe.afe_name}</span>
+          <span>{afe.well_name}</span>
           <span className="ps-printed">{afe.afe_type} AFE · {STATUS_LABEL[afe.status]}</span>
         </div>
       </header>
@@ -210,12 +228,12 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
             <tbody>
               {well.sections.map(section => (
                 <tr key={section.hole_section_id}>
-                  <td>{section.section_code} · {section.section_name}</td>
-                  <td className="num">{formatDepthMeters(section.from_depth, well.depth_unit)}</td>
-                  <td className="num">{formatDepthMeters(section.to_depth, well.depth_unit)}</td>
+                  <td>{section.section_name}</td>
+                  <td className="num">{depthText(section.from_depth, well.depth_unit)}</td>
+                  <td className="num">{depthText(section.to_depth, well.depth_unit)}</td>
                   <td className="num">{daysText(section.total_days)}</td>
                   <td>{section.phases.length
-                    ? section.phases.map(phase => `${phase.phase_code} · ${phase.phase_name} (${daysText(phase.days)})`).join(', ')
+                    ? section.phases.map(phase => `${phase.phase_name} (${daysText(phase.days)})`).join(', ')
                     : 'No phases'}</td>
                 </tr>
               ))}
@@ -223,7 +241,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
             <tfoot>
               <tr className="ps-subtotal">
                 <td>Well plan · {well.sections.length} section(s)</td>
-                <td className="num" colSpan={2}>{well.total_depth ? formatDepth(well.total_depth, well.depth_unit) : '—'}</td>
+                <td className="num" colSpan={2}>{depthText(well.total_depth, well.depth_unit)}</td>
                 <td className="num">{daysText(well.total_days)}</td>
                 <td>{well.sections.reduce((total, section) => total + section.phases.length, 0)} phase(s)</td>
               </tr>
@@ -249,11 +267,11 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
                 <td>
                   <strong>{line.category}</strong>
                   {line.category === 'Drill Bits'
-                    ? <div className="ps-sub">{[line.bit_code, line.bit_name, line.manufacturer || 'No make', line.bit_type, line.size].filter(Boolean).join(' · ')}{line.bit_description ? ` · ${line.bit_description}` : ''}</div>
+                    ? <div className="ps-sub">{[line.bit_name, line.manufacturer || 'No make', line.bit_type, line.size].filter(Boolean).join(' · ')}{line.bit_description ? ` · ${line.bit_description}` : ''}</div>
                     : <div className="ps-sub">Lump sum estimate</div>}
                 </td>
-                <td>{line.section_label}</td>
-                <td>{line.phase_label || '—'}</td>
+                <td>{nameOnly(line.section_label)}</td>
+                <td>{line.phase_label ? nameOnly(line.phase_label) : '—'}</td>
                 <td className="num">{line.category === 'Drill Bits' ? quantityText(line.quantity) : '—'}</td>
                 <td className="num">{line.effective_rate ? amountText(line.effective_rate) : '—'}</td>
                 <td>{line.currency}</td>
@@ -285,7 +303,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
             {tangibles.map(line => (
               <tr className="ps-line" key={line.client_key ?? line.id ?? line.tangible_id}>
                 <td>
-                  <strong>{line.tangible_code}</strong> · {line.tangible_name}
+                  <strong>{line.tangible_name}</strong>
                   {line.tangible_description ? <div className="ps-sub">{line.tangible_description}</div> : null}
                 </td>
                 <td>{line.manufacturer_name || '—'}</td>
@@ -354,7 +372,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
       </div>
 
       <footer className="ps-pagefoot">
-        <span>WellCosting Pro · AFE cost estimate · {afe.afe_code}</span>
+        <span>WellCosting Pro · AFE cost estimate · {afe.afe_name}</span>
       </footer>
     </div>
   </div>, document.body)
