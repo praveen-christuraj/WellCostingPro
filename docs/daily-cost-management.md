@@ -50,6 +50,11 @@
    - The on-screen matrix keeps sections and mud types as columns and the ten loss measures plus Surface, Other and grand totals as rows. The detail grid retains quick/advanced/date filtering, 20/50/100 pagination and CSV/XLSX/PDF exports.
    - Read access uses `daily-cost:read`; exports use `daily-cost:export` and are audited as `module="consumption_losses"`. Tenant and rig/well/section boundaries are validated by the API.
 
+6. **Advanced consumable and tangible entry**
+   - The new **Advanced selector** beside **Collect item & add another** is available when creating Consumable and Tangible lines. Consumables list every Mud Chemical; Tangibles list every tangible item. Search, row checkboxes and select-all support larger catalogues.
+   - The selector displays the item, UOM and unit price from the daily sheet's locked catalogue snapshot. The user enters a positive usage quantity beside every checked item; submitting with a checked item whose usage is missing, zero or invalid keeps the selector open and identifies the item that needs correction.
+   - One action creates a separate draft daily-cost line for every selected item. Those lines inherit the Activity, well Sub Activity, section/phase, actual depth and responsible party already selected in the parent dialog, preserve any previously collected items, and use the same locked-rate and FX rules as individual entry. They are committed only when the daily sheet itself is saved.
+
 ## Awaiting the reference daily sheet
 
 No reference sheet was attached to the request implemented in this increment. Existing capture fields and pricing/approval/import/delete functionality have been retained; exact reference-template parity is **not claimed**.
@@ -68,7 +73,7 @@ When the reference is supplied:
 - `make test`: backend regression suite, including report completeness, date boundaries, empty sheets, submitted-only filtering, soft deletion, tenant/well isolation, read/export permissions, scoped audit and mixed-currency safety.
 - `make build`: frontend TypeScript and production bundle.
 - `make ui-check`: shared light/dark theme, accessible dialog and error conventions.
-- `make daily-cost-check`: real print DOM checks for bulk depth/quantity/unit controls, the editable milestone label, Lead/Lag decimal validation and title suffix/fallback, Actual against Planned Activities, the transposed mud and Consumption/Losses matrices, the service-wise Planned/UPA/NPT actual columns (rows and group total, other tables unchanged), scope-aware report titles, hidden-code service ordering, four cumulative consumable categories, item-wise tangible cumulative prices, cumulative-only continuation pages, two-decimal measurements, landscape/margins, escaping, synchronous portal mounting and cleanup; static register-content checks.
+- `make daily-cost-check`: interactive checks for advanced Mud Chemical/Tangible bulk selection, locked prices and mandatory per-item usage; real print DOM checks for bulk depth/quantity/unit controls, the editable milestone label, Lead/Lag decimal validation and title suffix/fallback, Actual against Planned Activities, the transposed mud and Consumption/Losses matrices, the service-wise Planned/UPA/NPT actual columns (rows and group total, other tables unchanged), scope-aware report titles, hidden-code service ordering, four cumulative consumable categories, item-wise tangible cumulative prices, cumulative-only continuation pages, two-decimal measurements, landscape/margins, escaping, synchronous portal mounting and cleanup; static register-content checks.
 - `make test` additionally covers: separate totals and their effect on the AFE balance, mandatory remarks and other line validation, FX defaults, import aliases and row errors, well/overview/register/print propagation, tenant and permission gating, submit freeze, soft delete versus purge, and the database `CHECK` constraints on the new table.
 - `make graph`: regenerate the import graph.
 

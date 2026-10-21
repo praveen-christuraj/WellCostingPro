@@ -5,9 +5,11 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
-const dom = new JSDOM('<html><body><div id="root"></div></body></html>', { url: 'http://localhost/' })
-for (const key of ['window', 'document', 'navigator', 'HTMLElement', 'Event']) {
-  Object.defineProperty(globalThis, key, { value: dom.window[key], configurable: true })
+const dom = new JSDOM('<html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: 'http://localhost/' })
+const w = dom.window
+w.matchMedia = query => ({ matches: false, media: query, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} })
+for (const key of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'Node', 'Event', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame', 'CSS', 'SVGSVGElement', 'DocumentFragment', 'ShadowRoot', 'MouseEvent', 'KeyboardEvent', 'CustomEvent', 'DOMRect', 'HTMLIFrameElement', 'HTMLInputElement']) {
+  Object.defineProperty(globalThis, key, { value: w[key], configurable: true, writable: true })
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const { act } = await import('react')
@@ -173,6 +175,69 @@ assert.ok(printCalled)
 await act(async () => window.dispatchEvent(new Event('afterprint')))
 assert.equal(document.querySelector('.afe-print-sheet'), null, 'afterprint removes stale output')
 await act(async () => root.unmount())
+
+// Consumable/tangible advanced selectors collect many priced catalogue items at once and
+// refuse a checked item until it has a positive usage quantity.
+const { ThemeProvider } = await import('@mui/material')
+const { buildTheme } = await import('../../frontend/src/theme')
+const { AdvancedSelectorDialog } = await import('../../frontend/src/components/daily-cost/DailyCostLineDialog')
+const catalogueItems = [
+  { id: 'chem-1', item_kind: 'mud_chemical', category: 'Mud Chemicals', item_code: 'BAR', item_name: 'Barite', description: '', display_name: 'BAR · Barite', uom: 'MT', captured_rate: '125', currency: 'USD', revision_number: 1, effective_date: null },
+  { id: 'chem-2', item_kind: 'mud_chemical', category: 'Mud Chemicals', item_code: 'BEN', item_name: 'Bentonite', description: '', display_name: 'BEN · Bentonite', uom: 'Sack', captured_rate: '40', currency: 'USD', revision_number: 1, effective_date: null },
+  { id: 'tangible-1', item_kind: 'tangible', category: 'Tangibles', item_code: 'CSG', item_name: 'Casing', description: '', display_name: 'CSG · Casing', uom: 'Joint', captured_rate: '900', currency: 'USD', revision_number: 1, effective_date: null },
+]
+const selectorBaseline = { standard_currency: 'USD', catalogue_rates: catalogueItems }
+let selectedRows = null
+let selectorKind = 'consumable'
+let selectorRender = 0
+const selectorRoot = createRoot(document.getElementById('root'))
+async function showSelector(kind, items) {
+  selectorKind = kind
+  selectedRows = null
+  selectorRender += 1
+  await act(async () => selectorRoot.render(<ThemeProvider theme={buildTheme('light')}>
+    <AdvancedSelectorDialog key={selectorRender} open kind={kind} items={items} baseline={selectorBaseline} onClose={() => {}} onAdd={rows => { selectedRows = rows; return null }}/>
+  </ThemeProvider>))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+}
+async function click(element, message) {
+  assert.ok(element, message)
+  await act(async () => element.dispatchEvent(new w.MouseEvent('click', { bubbles: true })))
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+}
+async function enterUsage(itemName, value) {
+  const input = document.querySelector(`input[aria-label="Usage for ${itemName}"]`) || [...document.querySelectorAll('label')]
+    .find(label => label.textContent?.startsWith(`Usage for ${itemName}`))?.control
+  assert.ok(input, `usage input exists for ${itemName}`)
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, 'value').set.call(input, value)
+    input.dispatchEvent(new w.Event('input', { bubbles: true }))
+    input.dispatchEvent(new w.Event('change', { bubbles: true }))
+  })
+}
+function selectorSubmit() { return [...document.querySelectorAll('button')].find(button => button.textContent?.startsWith('Add selected items')) }
+
+await showSelector('consumable', catalogueItems.slice(0, 2))
+assert.ok(document.body.textContent.includes('USD 125.00') && document.body.textContent.includes('USD 40.00'), 'mud chemical selector displays locked unit prices')
+await click(document.querySelector('input[aria-label="Select BAR · Barite"]'), 'Barite checkbox exists')
+await click(selectorSubmit(), 'bulk add button exists')
+assert.ok(document.body.textContent.includes('Enter the usage quantity for BAR · Barite.'), 'checked mud chemical prompts for missing usage')
+await enterUsage('Barite', '2.5')
+await click(document.querySelector('input[aria-label="Select BEN · Bentonite"]'), 'Bentonite checkbox exists')
+await enterUsage('Bentonite', '4')
+await click(selectorSubmit(), 'bulk add button remains available')
+assert.deepEqual(selectedRows?.map(row => [row.item.id, row.quantity]), [['chem-1', '2.5'], ['chem-2', '4']], 'selected mud chemicals are returned as separate bulk rows')
+
+await showSelector('tangible', catalogueItems.slice(2))
+assert.ok(document.body.textContent.includes('Advanced selector — Tangibles') && document.body.textContent.includes('USD 900.00'), 'tangible selector lists item and locked unit price')
+await click(document.querySelector('input[aria-label="Select CSG · Casing"]'), 'Casing checkbox exists')
+await click(selectorSubmit(), 'tangible bulk add button exists')
+assert.ok(document.body.textContent.includes('Enter the usage quantity for CSG · Casing.'), 'checked tangible prompts for missing usage')
+await enterUsage('Casing', '3')
+await click(selectorSubmit(), 'tangible add button remains available')
+assert.deepEqual(selectedRows?.map(row => [row.item.id, row.quantity]), [['tangible-1', '3']], 'selected tangible is returned as a bulk row')
+assert.equal(selectorKind, 'tangible')
+await act(async () => selectorRoot.unmount())
 const register = readFileSync('../frontend/src/pages/DailyCostManagement.tsx', 'utf8')
 for (const forbidden of ['daily-cost/overview', 'StatCard', 'ReactECharts', 'cumulativeById', 'ACTUAL TO DATE']) {
   assert.ok(!register.includes(forbidden), `register does not contain ${forbidden}`)
@@ -202,7 +267,7 @@ assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog
 assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
 assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
-console.log('Daily cost checks passed: bulk depth/quantity/unit controls, editable milestone and lead/lag title suffix, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud and loss matrices, code-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
+console.log('Daily cost checks passed: advanced consumable/tangible bulk selection with required usage and locked prices, bulk depth/quantity/unit controls, editable milestone and lead/lag title suffix, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud and loss matrices, code-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
 
 dom.window.close()
 process.exit(0)

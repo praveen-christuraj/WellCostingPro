@@ -4,10 +4,16 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Collapse,
   Divider,
   MenuItem,
   Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
   TextField,
   Typography,
 } from '@mui/material'
@@ -92,6 +98,8 @@ type ServiceEntryRow = {
   custom_quantity_unit: DailyQuantityUnit
 }
 
+type AdvancedSelection = { item: DailyCostCatalogueOption; quantity: string }
+
 function defaultUsdRateForCurrency(currency: string, baseline: DailyCostBaseline): string {
   const code = (currency || '').trim().toUpperCase()
   if (!code || code === 'USD') return '1'
@@ -139,6 +147,120 @@ function itemSnapshot(
   return baseline.catalogue_rates.find(rate => rate.item_kind === item.item_kind && rate.id === item.id) ?? item
 }
 
+function validUsageQuantity(value: string) {
+  return /^\d+(?:\.\d{1,10})?$/.test(value.trim()) && Number(value) > 0
+}
+
+export function AdvancedSelectorDialog({
+  open,
+  kind,
+  items,
+  baseline,
+  onClose,
+  onAdd,
+}: {
+  open: boolean
+  kind: 'consumable' | 'tangible'
+  items: DailyCostCatalogueOption[]
+  baseline: DailyCostBaseline
+  onClose: () => void
+  onAdd: (rows: AdvancedSelection[]) => string | null
+}) {
+  const [selected, setSelected] = useState<Record<string, boolean>>({})
+  const [quantities, setQuantities] = useState<Record<string, string>>({})
+  const [search, setSearch] = useState('')
+  const [submitted, setSubmitted] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    setSelected({})
+    setQuantities({})
+    setSearch('')
+    setSubmitted(false)
+    setError('')
+  }, [open, kind])
+
+  const filtered = items.filter(item => `${item.item_code} ${item.item_name} ${item.description}`.toLowerCase().includes(search.trim().toLowerCase()))
+  const selectedCount = items.filter(item => selected[item.id]).length
+  const allFilteredSelected = filtered.length > 0 && filtered.every(item => selected[item.id])
+  const someFilteredSelected = filtered.some(item => selected[item.id]) && !allFilteredSelected
+
+  const submit = () => {
+    setSubmitted(true)
+    const rows = items.filter(item => selected[item.id]).map(item => ({ item, quantity: quantities[item.id] ?? '' }))
+    if (!rows.length) {
+      setError(`Select at least one ${kind === 'consumable' ? 'mud chemical' : 'tangible'}.`)
+      return
+    }
+    const missing = rows.find(row => !validUsageQuantity(row.quantity))
+    if (missing) {
+      setError(`Enter the usage quantity for ${missing.item.display_name}.`)
+      return
+    }
+    const addError = onAdd(rows)
+    if (addError) {
+      setError(addError)
+      return
+    }
+    setError('')
+    onClose()
+  }
+
+  return <FormDialog
+    open={open}
+    title={`Advanced selector — ${kind === 'consumable' ? 'Mud chemicals' : 'Tangibles'}`}
+    subtitle="Select several items and enter each usage quantity. Every selected item becomes a separate draft line using the common operational criteria from the entry dialog."
+    onClose={onClose}
+    onSubmit={submit}
+    submitLabel={`Add selected items (${selectedCount})`}
+    maxWidth="lg"
+  >
+    <Box display="grid" gap={1.5}>
+      <TextField size="small" label="Search items" value={search} onChange={event => setSearch(event.target.value)} helperText={`${items.length} available · ${selectedCount} selected`}/>
+      <Box sx={{ overflowX: 'auto', border: '1px solid', borderColor: 'divider' }}>
+        <Table size="small" aria-label={`${kind === 'consumable' ? 'Mud chemical' : 'Tangible'} advanced selector`} sx={{ minWidth: 680 }}>
+          <TableHead><TableRow>
+            <TableCell padding="checkbox"><Checkbox checked={allFilteredSelected} indeterminate={someFilteredSelected} inputProps={{ 'aria-label': 'Select all matching items' }} onChange={event => {
+              const checked = event.target.checked
+              setSelected(current => ({ ...current, ...Object.fromEntries(filtered.map(item => [item.id, checked])) }))
+            }}/></TableCell>
+            <TableCell>Item</TableCell><TableCell>UOM</TableCell><TableCell align="right">Unit price</TableCell><TableCell>Usage quantity</TableCell>
+          </TableRow></TableHead>
+          <TableBody>
+            {filtered.map(item => {
+              const snapshot = itemSnapshot(item, baseline) ?? item
+              const checked = Boolean(selected[item.id])
+              const invalid = submitted && checked && !validUsageQuantity(quantities[item.id] ?? '')
+              return <TableRow key={item.id} selected={checked}>
+                <TableCell padding="checkbox"><Checkbox checked={checked} inputProps={{ 'aria-label': `Select ${item.display_name}` }} onChange={event => {
+                  const next = event.target.checked
+                  setSelected(current => ({ ...current, [item.id]: next }))
+                  if (!next) setQuantities(current => ({ ...current, [item.id]: '' }))
+                  setError('')
+                }}/></TableCell>
+                <TableCell><Typography fontSize={12.5} fontWeight={700}>{item.item_name}</Typography><Typography fontSize={11} color="text.secondary">{item.item_code}</Typography></TableCell>
+                <TableCell>{item.uom || 'unit'}</TableCell>
+                <TableCell align="right" className="tnum">{dailyMoney(snapshot.captured_rate, snapshot.currency || baseline.standard_currency)}</TableCell>
+                <TableCell><TextField
+                  size="small" type="number" label={`Usage for ${item.item_name}`} value={quantities[item.id] ?? ''}
+                  disabled={!checked} required={checked} error={invalid}
+                  onChange={event => { setQuantities(current => ({ ...current, [item.id]: event.target.value })); setError('') }}
+                  inputProps={{ min: 0.0000000001, step: '0.0000000001' }}
+                  helperText={invalid ? 'Usage is required.' : ' '}
+                /></TableCell>
+              </TableRow>
+            })}
+            {!filtered.length && <TableRow><TableCell colSpan={5}><Typography color="text.secondary" textAlign="center" py={2}>No matching items.</Typography></TableCell></TableRow>}
+          </TableBody>
+        </Table>
+      </Box>
+      {error && <Alert severity="error">{error}</Alert>}
+      <Typography color="text.secondary" fontSize={11.5}>Unit prices come from the locked daily-cost catalogue snapshot. Save the daily sheet to commit the added lines.</Typography>
+    </Box>
+  </FormDialog>
+}
+
 export function DailyCostLineDialog({
   open,
   kind,
@@ -169,6 +291,7 @@ export function DailyCostLineDialog({
   // Non-service line state (consumables, tangibles, other expenses)
   const [queuedLines, setQueuedLines] = useState<EditableDailyCostLine[]>([])
   const [nonServiceForm, setNonServiceForm] = useState<EditableDailyCostLine | null>(null)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const [baselineState, setBaselineState] = useState<string>('')
   const [error, setError] = useState('')
@@ -207,6 +330,7 @@ export function DailyCostLineDialog({
     setCommonDepthUnit(normalizeDepthUnit(initialLine?.actual_depth_unit || 'm'))
     setBaselineState('')
     setQueuedLines([])
+    setAdvancedOpen(false)
 
     if (initialClassification === 'Planned') {
       setCommonPartyName('Not Applicable')
@@ -410,6 +534,11 @@ export function DailyCostLineDialog({
     [reference.sub_activities, wellId, commonActivityId],
   )
   const derivedClassification = deriveClassification(reference.activities.find(item => item.id === commonActivityId))
+  const advancedItems = kind === 'consumable'
+    ? optionsForKind('mud_chemical', reference, baseline, null)
+    : kind === 'tangible'
+      ? optionsForKind('tangible', reference, baseline, null)
+      : []
 
   if (!open || !kind) return null
 
@@ -628,6 +757,63 @@ export function DailyCostLineDialog({
     return problems
   }
 
+  const openAdvancedSelector = () => {
+    const problems: string[] = []
+    if (!commonActivityId) problems.push('Select a Master Data Activity before opening the advanced selector.')
+    if (!commonSubActivityId) problems.push('Select a well sub activity before opening the advanced selector.')
+    if (kind === 'consumable' && !commonHoleSectionId) problems.push('Select a hole section before adding mud chemicals.')
+    if (commonActualDepth.trim() && (!Number.isFinite(Number(commonActualDepth)) || Number(commonActualDepth) < 0)) {
+      problems.push('Enter a valid non-negative actual depth before opening the advanced selector.')
+    }
+    if (derivedClassification !== 'Planned' && !commonVendorId && !commonPartyName.trim()) {
+      problems.push('UPA and NPT lines require a responsible vendor or party.')
+    }
+    if (!advancedItems.length) problems.push(`No ${kind === 'consumable' ? 'mud chemicals' : 'tangibles'} are available in the locked catalogue.`)
+    if (problems.length) {
+      setSubmitted(true)
+      setError(problems[0])
+      return
+    }
+    setSubmitted(false)
+    setError('')
+    setAdvancedOpen(true)
+  }
+
+  const addAdvancedItems = (rows: AdvancedSelection[]): string | null => {
+    const parsedDepth = commonActualDepth.trim() === '' ? null : commonActualDepth.trim()
+    const prepared: EditableDailyCostLine[] = []
+    for (const { item, quantity } of rows) {
+      const snapshot = itemSnapshot(item, baseline) ?? item
+      const currency = (snapshot.currency || item.currency || baseline.standard_currency || 'USD').toUpperCase()
+      const exchangeRate = defaultUsdRateForCurrency(currency, baseline)
+      if (currency !== 'USD' && !exchangeRate) {
+        return `No USD conversion rate is available for ${item.display_name}. Add it individually to enter the conversion rate.`
+      }
+      const common = {
+        id: null,
+        activity_id: commonActivityId,
+        sub_activity_id: commonSubActivityId,
+        hole_section_id: commonHoleSectionId,
+        phase_id: commonHoleSectionId ? commonPhaseId : null,
+        actual_depth: parsedDepth,
+        actual_depth_unit: commonDepthUnit,
+        vendor_id: derivedClassification === 'Planned' ? null : commonVendorId,
+        party_name: derivedClassification === 'Planned' ? 'Not Applicable' : commonPartyName.trim(),
+        quantity,
+        currency,
+        exchange_rate: currency === 'USD' ? null : exchangeRate,
+        override_rate: null,
+        override_reason: '',
+        remarks: '',
+      }
+      prepared.push(kind === 'consumable'
+        ? { ...common, category: 'Mud Chemicals', item_kind: 'mud_chemical', item_id: item.id }
+        : { ...common, tangible_id: item.id })
+    }
+    onSave([...queuedLines, ...prepared])
+    return null
+  }
+
   const handleSave = (queueOnly = false) => {
     if (!queueOnly && queuedLines.length && nonServiceForm && (('item_id' in nonServiceForm && !nonServiceForm.item_id) || ('tangible_id' in nonServiceForm && !nonServiceForm.tangible_id))) {
       onSave(queuedLines)
@@ -726,7 +912,7 @@ export function DailyCostLineDialog({
       : `Standardized depth: ${formatDepthMeters(commonActualDepth, 'm')}. Last entered value governs this date & section.`
     : 'Actual depth reached on this date/section (last entered value in register wins; feet auto-convert via ÷ 3.281).'
 
-  return (
+  return <>
     <FormDialog
       open={open}
       title={dialogTitle}
@@ -1516,7 +1702,10 @@ export function DailyCostLineDialog({
             <Typography>{reference.catalogue_items.find(item => item.id === ('item_id' in line ? line.item_id : 'tangible_id' in line ? line.tangible_id : ''))?.display_name || 'Item'} · Usage: {line.quantity}</Typography>
             <Button color="error" onClick={() => setQueuedLines(prev => prev.filter((_, i) => i !== index))}>Remove</Button>
           </Box>)}
-          <Button variant="outlined" onClick={() => handleSave(true)}>Collect item & add another</Button>
+          <Box display="flex" gap={1} flexWrap="wrap">
+            <Button variant="outlined" onClick={() => handleSave(true)}>Collect item &amp; add another</Button>
+            <Button variant="outlined" startIcon={<TuneRounded/>} onClick={openAdvancedSelector}>Advanced selector</Button>
+          </Box>
           {!!queuedLines.length && <Button onClick={() => { if (nonServiceForm && (('item_id' in nonServiceForm && nonServiceForm.item_id) || ('tangible_id' in nonServiceForm && nonServiceForm.tangible_id))) handleSave(); else onSave(queuedLines) }}>Add collected items to sheet</Button>}
           <Typography color="text.secondary" fontSize={12}>Each collected item is added as a separate line. Save the daily sheet to commit them.</Typography>
         </Box>}
@@ -1528,5 +1717,13 @@ export function DailyCostLineDialog({
         </Typography>
       </Box>
     </FormDialog>
-  )
+    <AdvancedSelectorDialog
+      open={advancedOpen && !initialLine && (kind === 'consumable' || kind === 'tangible')}
+      kind={kind === 'tangible' ? 'tangible' : 'consumable'}
+      items={advancedItems}
+      baseline={baseline}
+      onClose={() => setAdvancedOpen(false)}
+      onAdd={addAdvancedItems}
+    />
+  </>
 }
