@@ -22,7 +22,8 @@ import { api, body } from '../lib/api'
 import { listEntryAmendments, type DailyCostAmendment } from '../lib/sowAdjustment'
 import { downloadTemplate, parseImportFile, type ImportRow } from '../lib/export'
 import {
-  DAILY_COST_STATUSES, DAILY_ONE_TIME_CATEGORIES, dailyMoney, deriveClassification, displayDate, entryQuery, otherExpenseLabel, saveFromDay,
+  DAILY_COST_STATUSES, DAILY_ONE_TIME_CATEGORIES, costReportTitle, dailyMoney, deriveClassification, displayDate,
+  entryQuery, otherExpenseLabel, saveFromDay,
   type DailyCostBaseline, type DailyCostComparisonLine, type DailyCostDay, type DailyCostGroup,
   type AnyDailyCostLine, type DailyCostImportResult, type DailyCostPreview, type DailyCostReference,
   type DailyCostSavePayload, type DailyCostServiceInput, type DailyQuantityUnit, type WellProgressScope,
@@ -895,7 +896,9 @@ export default function DailyCostSheet() {
       }) })
       const well = reference?.wells.find(item => item.id === entry.well_id)
       print({
-        title: `Daily cost report · ${entry.well_name}`, period: displayDate(entry.cost_date), days: [saved],
+        // The report title names the well scope the sheet costs.
+        title: costReportTitle('daily', [saved.progress?.scope ?? progress?.scope], entry.well_name),
+        period: displayDate(entry.cost_date), days: [saved],
         overviewDays, summary, mudReconciliation, mudBalance, sections: well?.sections ?? baseline?.sections,
         reportKind: 'daily', milestoneLabel: milestoneLabel.trim() || 'Spud date & time',
       })

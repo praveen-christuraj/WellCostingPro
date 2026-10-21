@@ -26,9 +26,11 @@ export type DailyCostWellOption = {
   id: string; rig_id: string; well_code: string; well_name: string; display_name: string
   status: string; config_status: string; sections: DailyCostSectionOption[]
 }
+export type WellScopeKey = 'drilling' | 'completion'
 export type DailyCostAfeOption = {
   id: string; well_id: string; afe_code: string; afe_name: string; afe_type: string
-  status: string; standard_currency: string; total_cost: string; estimate_saved_at: string; display_name: string
+  status: string; configuration_scope?: WellScopeKey
+  standard_currency: string; total_cost: string; estimate_saved_at: string; display_name: string
 }
 export type DailyCostActivityOption = { id: string; activity_code: string; activity_name: string; display_name: string }
 export type DailyCostSubActivityOption = {
@@ -178,10 +180,14 @@ export type AnyDailyCostLine =
 
 export type DailyCostComparisonGroup = {
   cost_group: DailyCostGroup; planned: string; actual_to_date: string; balance: string
+  /** `actual_to_date` split by the lines' activity classification; the three add up to it. */
+  actual_planned?: string; actual_upa?: string; actual_npt?: string
 }
 export type DailyCostComparisonLine = {
   budget_key: string; cost_group: DailyCostGroup; budget_kind: string
   item_code: string; item_name: string; planned: string; actual_to_date: string; balance: string; is_planned: boolean
+  /** Cumulative actual under Planned / UPA / NPT; `actual_planned` is the default case. */
+  actual_planned?: string; actual_upa?: string; actual_npt?: string
 }
 /**
  * `actual_to_date` covers all four groups, so `balance` is the AFE total less the
@@ -298,6 +304,29 @@ export function displayDate(value: string | null | undefined): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
+/** Title wording for a scope: "Drilling", "Completions", or both scopes together. */
+export function scopeTitleLabel(scopes: Iterable<string | null | undefined>): string {
+  const found = new Set([...scopes].filter(scope => scope === 'drilling' || scope === 'completion'))
+  const labels = (['drilling', 'completion'] as const)
+    .filter(scope => found.has(scope))
+    .map(scope => scope === 'completion' ? 'Completions' : 'Drilling')
+  return labels.join(' & ')
+}
+
+/**
+ * The printed cost report is titled with the well scope it costs, e.g.
+ * "Well Cost Report - Drilling · WELL-01". The scope comes from the AFE(s)
+ * behind the sheets; the well name stays the descriptive part of the title.
+ */
+export function costReportTitle(
+  kind: 'daily' | 'well', scopes: Iterable<string | null | undefined>, wellName = '',
+): string {
+  const base = kind === 'daily' ? 'Daily Cost Report' : 'Well Cost Report'
+  const scope = scopeTitleLabel(scopes)
+  const title = scope ? `${base} - ${scope}` : base
+  return wellName.trim() ? `${title} · ${wellName.trim()}` : title
+}
+
 export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
   const lineFxAndDepth = (line: DailyCostLineOutput) => ({
     exchange_rate: line.currency && line.currency.toUpperCase() !== 'USD' && line.usd_exchange_rate
@@ -376,6 +405,8 @@ export type DailyCostFactorGroup = {
 export type DailyCostWellTotals = {
   currency: string; planned: string; actual: string; balance: string; used_percent: string
   services: string; consumables: string; tangibles: string; other_expenses: string; upa: string; npt: string
+  /** Services actual split by activity classification (the three add up to `services`). */
+  services_actual_planned?: string; services_actual_upa?: string; services_actual_npt?: string
   planned_days: string; recorded_days: number; elapsed_days: number; average_per_day: string
   days_to_budget: string | null; first_day: string | null; last_day: string | null
   sheets: number; draft_sheets: number; submitted_sheets: number; lines: number

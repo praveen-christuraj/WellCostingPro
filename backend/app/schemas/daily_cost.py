@@ -348,6 +348,9 @@ class DailyCostAfeOption(BaseModel):
     afe_name: str
     afe_type: str
     status: str
+    # The well scope this AFE was estimated against (drilling or completion).
+    # Reports use it to title themselves, e.g. "Well Cost Report - Drilling".
+    configuration_scope: Literal["drilling", "completion"] = "drilling"
     standard_currency: str
     total_cost: Decimal
     estimate_saved_at: datetime
@@ -578,6 +581,12 @@ class DailyCostComparisonGroup(BaseModel):
     planned: Decimal
     actual_to_date: Decimal
     balance: Decimal
+    # The same actuals split by the activity classification each daily line was
+    # recorded under, so a report can show planned, UPA and NPT side by side.
+    # The three add up to ``actual_to_date``.
+    actual_planned: Decimal = Decimal("0")
+    actual_upa: Decimal = Decimal("0")
+    actual_npt: Decimal = Decimal("0")
 
 
 class DailyCostBudgetComparison(BaseModel):
@@ -590,6 +599,12 @@ class DailyCostBudgetComparison(BaseModel):
     actual_to_date: Decimal
     balance: Decimal
     is_planned: bool
+    # ``actual_to_date`` split by the activity classification of the lines, so a
+    # service-wise report can print actual under Planned / UPA / NPT. The three
+    # always add up to ``actual_to_date``.
+    actual_planned: Decimal = Decimal("0")
+    actual_upa: Decimal = Decimal("0")
+    actual_npt: Decimal = Decimal("0")
 
 
 class DailyCostComparison(BaseModel):
@@ -971,6 +986,10 @@ class DailyCostWellTotals(BaseModel):
     consumables: Decimal
     tangibles: Decimal
     other_expenses: Decimal
+    # Services actual split by the activity classification of the daily lines.
+    services_actual_planned: Decimal = Decimal("0")
+    services_actual_upa: Decimal = Decimal("0")
+    services_actual_npt: Decimal = Decimal("0")
     upa: Decimal
     npt: Decimal
     planned_days: Decimal

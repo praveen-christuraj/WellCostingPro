@@ -27,7 +27,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
-from sqlalchemy import Select, func, literal, select, union_all
+from sqlalchemy import Select, case, func, literal, select, union_all
 from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -778,7 +778,8 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
             continue
         afe_options.append(DailyCostAfeOption(
             id=afe.id, well_id=afe.well_id, afe_code=afe.afe_code, afe_name=afe.afe_name,
-            afe_type=afe.afe_type, status=afe.status, standard_currency=estimate.summary.currency.standard_currency,
+            afe_type=afe.afe_type, status=afe.status, configuration_scope=afe.configuration_scope,
+            standard_currency=estimate.summary.currency.standard_currency,
             total_cost=Decimal(estimate.summary.total), estimate_saved_at=afe.estimate_saved_at,
             display_name=f"{afe.afe_code} — {afe.afe_name} · {estimate.summary.currency.standard_currency} {Decimal(estimate.summary.total):,.2f}",
         ))
@@ -2315,6 +2316,10 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
     )
     actual_by_group: dict[str, Decimal] = {key: Decimal("0") for key in group_names}
     actual_by_key: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    # The same actuals cut by the activity classification of each line, so the
+    # service-wise report can print planned / UPA / NPT actuals per budget line.
+    actual_by_class: dict[tuple[str, str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    actual_by_group_class: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     unplanned_meta: dict[tuple[str, str], tuple[str, str]] = {}
     actual_all: list[tuple[str, Any]] = []
     if entries:
@@ -2333,6 +2338,8 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
                 amount = Decimal(row.standard_amount)
                 actual_by_group[group] += amount
                 actual_by_key[(group, row.budget_key)] += amount
+                actual_by_class[(group, row.budget_key, row.classification)] += amount
+                actual_by_group_class[(group, row.classification)] += amount
                 actual_all.append((group, row))
                 if (group, row.budget_key) not in planned_keys:
                     if isinstance(row, DailyCostServiceLine):
@@ -2373,6 +2380,9 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
                 actual_to_date=actual,
                 balance=_money(planned - actual),
                 is_planned=(group, key) in planned_keys,
+                actual_planned=_money(actual_by_class[(group, key, "Planned")]),
+                actual_upa=_money(actual_by_class[(group, key, "UPA")]),
+                actual_npt=_money(actual_by_class[(group, key, "NPT")]),
             )
         )
 
@@ -2382,6 +2392,9 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
             planned=_money(planned_by_group[group]),
             actual_to_date=_money(actual_by_group[group]),
             balance=_money(planned_by_group[group] - actual_by_group[group]),
+            actual_planned=_money(actual_by_group_class[(group, "Planned")]),
+            actual_upa=_money(actual_by_group_class[(group, "UPA")]),
+            actual_npt=_money(actual_by_group_class[(group, "NPT")]),
         )
         for group in group_names
     ]
@@ -3607,7 +3620,7 @@ def well_cost_summary(
         )
         afe_options.append(DailyCostAfeOption(
             id=afe.id, well_id=afe.well_id, afe_code=afe.afe_code, afe_name=afe.afe_name,
-            afe_type=afe.afe_type, status=afe.status,
+            afe_type=afe.afe_type, status=afe.status, configuration_scope=afe.configuration_scope,
             standard_currency=entry_rows[0].standard_currency if entry_rows else currency,
             total_cost=planned_total, estimate_saved_at=afe.estimate_saved_at,
             display_name=f"{afe.afe_code} — {afe.afe_name} · {entry_rows[0].standard_currency if entry_rows else currency} {planned_total:,.2f}",
@@ -3636,6 +3649,17 @@ def well_cost_summary(
     consumables = totals_by_group.get("Consumables", Decimal("0"))
     tangibles = totals_by_group.get("Tangibles", Decimal("0"))
     other_expenses = totals_by_group.get("Other Expenses", Decimal("0"))
+    # Services split by the activity classification of each daily line. The cost
+    # report prints actual under Planned, UPA and NPT beside the whole group.
+    classification_by_group: dict[tuple[str, str], Decimal] = {}
+    for row in db.execute(
+        select(lines.c.cost_group, lines.c.classification, func.sum(lines.c.standard_amount))
+        .select_from(lines).group_by(lines.c.cost_group, lines.c.classification)
+    ).all():
+        classification_by_group[(str(row[0] or ""), str(row[1] or ""))] = Decimal(row[2] or 0)
+    services_actual_planned = classification_by_group.get(("Services", "Planned"), Decimal("0"))
+    services_actual_upa = classification_by_group.get(("Services", "UPA"), Decimal("0"))
+    services_actual_npt = classification_by_group.get(("Services", "NPT"), Decimal("0"))
     # Other expenses have no planned counterpart, so they only ever widen the gap
     # between the AFE total and what has actually been spent.
     actual_total = _money(services + consumables + tangibles + other_expenses)
@@ -3970,10 +3994,21 @@ def well_cost_summary(
 
     # ---- budget reconciliation ----------------------------------------------
     budget_rows = db.execute(
-        select(lines.c.budget_key, lines.c.cost_group, func.sum(lines.c.standard_amount))
+        select(
+            lines.c.budget_key, lines.c.cost_group, func.sum(lines.c.standard_amount),
+            func.sum(case((lines.c.classification == "Planned", lines.c.standard_amount), else_=Decimal("0"))),
+            func.sum(case((lines.c.classification == "UPA", lines.c.standard_amount), else_=Decimal("0"))),
+            func.sum(case((lines.c.classification == "NPT", lines.c.standard_amount), else_=Decimal("0"))),
+        )
         .select_from(lines).group_by(lines.c.budget_key, lines.c.cost_group)
     ).all()
     actual_by_key = {str(row[0] or ""): Decimal(row[2] or 0) for row in budget_rows}
+    class_by_key = {
+        str(row[0] or ""): (
+            Decimal(row[3] or 0), Decimal(row[4] or 0), Decimal(row[5] or 0),
+        )
+        for row in budget_rows
+    }
     group_by_key = {str(row[0] or ""): str(row[1] or "Services") for row in budget_rows}
     planned_by_key: dict[str, Decimal] = {}
     meta: dict[str, DailyCostBaselineBudgetLine] = {}
@@ -4010,12 +4045,16 @@ def well_cost_summary(
             name = unplanned_names.get((str(group), key), f"Unbudgeted {str(group).lower()}")
         planned_value = planned_by_key.get(key)
         actual_value = _money(actual_by_key.get(key, Decimal("0")))
+        split_planned, split_upa, split_npt = class_by_key.get(key, (Decimal("0"),) * 3)
         budget_lines.append(DailyCostBudgetComparison(
             budget_key=key, cost_group=group, budget_kind=kind, item_code=code, item_name=name,
             planned=_money(planned_value) if planned_value is not None else Decimal("0.00"),
             actual_to_date=actual_value,
             balance=_money((planned_value or Decimal("0")) - actual_value),
             is_planned=key in planned_by_key,
+            actual_planned=_money(split_planned),
+            actual_upa=_money(split_upa),
+            actual_npt=_money(split_npt),
         ))
 
     # ---- warnings and totals -------------------------------------------------
@@ -4087,6 +4126,9 @@ def well_cost_summary(
         used_percent=(actual_total / planned_total * Decimal("100")).quantize(Decimal("0.01")) if planned_total > 0 else Decimal("0.00"),
         services=_money(services), consumables=_money(consumables), tangibles=_money(tangibles),
         other_expenses=_money(other_expenses),
+        services_actual_planned=_money(services_actual_planned),
+        services_actual_upa=_money(services_actual_upa),
+        services_actual_npt=_money(services_actual_npt),
         upa=upa, npt=npt, planned_days=_rate(planned_days), recorded_days=recorded_days,
         elapsed_days=elapsed_days, average_per_day=average, days_to_budget=days_to_budget,
         first_day=min(days) if days else None, last_day=max(days) if days else None,

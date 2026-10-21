@@ -3,7 +3,7 @@ import { Alert, Box, FormControlLabel, MenuItem, Switch, TextField } from '@mui/
 import { ErrorMessage, FormDialog } from '../Common'
 import { api, body } from '../../lib/api'
 import {
-  displayDate, localToday, type DailyCostDay, type DailyCostWellOption, type DailyCostWellSummary,
+  costReportTitle, displayDate, localToday, type DailyCostDay, type DailyCostWellOption, type DailyCostWellSummary,
 } from '../../lib/dailyCost'
 import type { MudCostMaterialBalance, MudCostReconciliation } from '../../lib/mudCost'
 import { useCostPrint } from './DailyCostPrintSheet'
@@ -56,7 +56,15 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
         module: 'well-cost-sheet', format: 'pdf', record_count: days.length, well_id: wellId,
         date_from: mode === 'range' ? dateFrom : null, date_to: to, include_draft: includeDraft,
       }) })
-      print({ title: `Well cost report · ${well?.well_name ?? days[0].entry.well_name}`,
+      // The title names the well scope(s) this report actually costs: each
+      // printed sheet carries its AFE's scope, so the period — not the whole
+      // well — decides between Drilling, Completions or both. The well summary's
+      // AFE scopes are the fallback when a day has no progress payload.
+      const dayScopes = days.map(day => day.progress?.scope).filter(Boolean)
+      const scopes = dayScopes.length
+        ? dayScopes
+        : (summary?.well.afes.map(afe => afe.configuration_scope) ?? [])
+      print({ title: costReportTitle('well', scopes, well?.well_name ?? days[0].entry.well_name),
         period: `${mode === 'range' ? displayDate(dateFrom) : 'Inception (first recorded cost)'} to ${displayDate(to)} · ${includeDraft ? 'Draft and submitted sheets' : 'Submitted sheets only'}`,
         days, overviewDays: days, summary, mudReconciliation, mudBalance, sections: well?.sections,
         reportKind: 'well', milestoneLabel: milestoneLabel.trim() || 'Spud date & time' })

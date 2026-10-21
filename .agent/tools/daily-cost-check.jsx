@@ -13,6 +13,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { DailyCostPrintSheet, useCostPrint } = await import('../../frontend/src/components/daily-cost/DailyCostPrintSheet')
+const { costReportTitle } = await import('../../frontend/src/lib/dailyCost')
 const line = {
   quantity: '12.126', quantity_unit: 'hours', currency: 'USD', effective_rate: '100', captured_rate: '100',
   amount: '50', standard_amount: '50', exchange_rate: '1', rate_source: 'Locked AFE rate',
@@ -30,8 +31,12 @@ const day = {
     tangibles_total: '0', other_expenses_total: '3000', total_cost: '9000', upa_total: '0', npt_total: '3000', actual_depth: '1234.567' },
   comparison: { effective_on: '2026-10-10', includes_draft_entries: true, planned_total: '7000', actual_to_date: '9000', balance: '-2000',
     tracked_actual_to_date: '6000', other_expenses_to_date: '3000',
-    upa_to_date: '0', npt_to_date: '3000', budget_lines: [
-      { budget_key: 'service:1', item_code: 'SVC', item_name: 'Logging', cost_group: 'Services', planned: '7000', actual_to_date: '6000', balance: '1000', is_planned: true },
+    upa_to_date: '300', npt_to_date: '3000', groups: [
+      { cost_group: 'Services', planned: '7000', actual_to_date: '6000', balance: '1000', actual_planned: '5500', actual_upa: '300', actual_npt: '200' },
+      { cost_group: 'Other Expenses', planned: '0', actual_to_date: '3000', balance: '-3000', actual_planned: '0', actual_upa: '0', actual_npt: '3000' }],
+    budget_lines: [
+      { budget_key: 'service:1', item_code: 'SVC', item_name: 'Logging', cost_group: 'Services', planned: '7000', actual_to_date: '6000', balance: '1000', is_planned: true,
+        actual_planned: '5500', actual_upa: '300', actual_npt: '200' },
       { budget_key: 'other:LIH', item_code: 'LIH', item_name: 'Lost In Hole (LIH)', cost_group: 'Other Expenses', planned: '0', actual_to_date: '3000', balance: '-3000', is_planned: false }] },
   services: Array.from({ length: 120 }, (_, index) => ({ ...line, id: `line-${index}`, remarks: `Row ${index} notes` })),
   consumables: [], tangibles: [], warnings: [{ code: 'draft', message: 'Includes draft actuals' }],
@@ -44,9 +49,14 @@ const day = {
 }
 const second = { ...day, entry: { ...day.entry, id: 'd2', afe_id: 'afe2', afe_code: 'AFE-2', daily_cost_code: 'DC-2', standard_currency: 'EUR', services_total: '0', total_cost: '100', consumables_total: '100', other_expenses_total: '0', npt_total: '0' },
   comparison: { ...day.comparison, tracked_actual_to_date: '100', other_expenses_to_date: '0', actual_to_date: '100', balance: '6900', npt_to_date: '0',
+    groups: [
+      { cost_group: 'Services', planned: '3000', actual_to_date: '700', balance: '2300', actual_planned: '650', actual_upa: '50', actual_npt: '0' },
+      { cost_group: 'Consumables', planned: '5000', actual_to_date: '100', balance: '4900', actual_planned: '100', actual_upa: '0', actual_npt: '0' }],
     budget_lines: [
-      { budget_key: 'service:20', budget_kind: 'service', item_code: 'SVC-20', item_name: 'Directional drilling', cost_group: 'Services', planned: '2000', actual_to_date: '400', balance: '1600', is_planned: true },
-      { budget_key: 'service:03', budget_kind: 'service', item_code: 'SVC-03', item_name: 'Mud logging', cost_group: 'Services', planned: '1000', actual_to_date: '300', balance: '700', is_planned: true },
+      { budget_key: 'service:20', budget_kind: 'service', item_code: 'SVC-20', item_name: 'Directional drilling', cost_group: 'Services', planned: '2000', actual_to_date: '400', balance: '1600', is_planned: true,
+        actual_planned: '400', actual_upa: '0', actual_npt: '0' },
+      { budget_key: 'service:03', budget_kind: 'service', item_code: 'SVC-03', item_name: 'Mud logging', cost_group: 'Services', planned: '1000', actual_to_date: '300', balance: '700', is_planned: true,
+        actual_planned: '250', actual_upa: '50', actual_npt: '0' },
       { budget_key: 'consumable:Fuel', budget_kind: 'consumable_category', item_code: 'Fuel', item_name: 'Fuel allowance', cost_group: 'Consumables', planned: '7000', actual_to_date: '100', balance: '6900', is_planned: true },
       { budget_key: 'consumable:Mud Chemicals', budget_kind: 'consumable_category', item_code: 'Mud Chemicals', item_name: 'Mud Chemicals allowance', cost_group: 'Consumables', planned: '2000', actual_to_date: '250', balance: '1750', is_planned: true },
       { budget_key: 'consumable:Cement Additives', budget_kind: 'consumable_category', item_code: 'Cement Additives', item_name: 'Cement Additives allowance', cost_group: 'Consumables', planned: '1500', actual_to_date: '125', balance: '1375', is_planned: true },
@@ -77,13 +87,43 @@ const consumableRows = [...coverPanels[1].querySelectorAll('tbody tr')]
 const consumableNames = consumableRows.map(row => row.cells[0].textContent)
 assert.deepEqual(consumableNames, ['Mud Chemicals', 'Cement Additives', 'Fuel', 'Drill Bits'], 'consumables print the four fixed category totals only')
 assert.equal(consumableNames.filter(name => name === 'Drill Bits').length, 1, 'drill bits print as one cumulative row')
+
+// The services table alone splits the cumulative actual by activity
+// classification between the AFE and the total actual.
+const servicePanel = coverPanels[0]
+assert.ok(servicePanel.classList.contains('dcr-cost-panel--split'), 'only the services table opts into the compacted split layout')
+const serviceHeaderRows = servicePanel.querySelectorAll('thead tr')
+assert.equal(serviceHeaderRows.length, 2, 'the services table groups its three classification columns')
+assert.deepEqual([...serviceHeaderRows[0].cells].map(cell => cell.textContent),
+  ['Cost item', 'AFE', 'Actual cost by activity', 'Total actual', 'Balance', 'Used'], 'services print AFE, the activity split and the total actual')
+assert.deepEqual([...serviceHeaderRows[1].cells].map(cell => cell.textContent), ['Planned', 'UPA', 'NPT'])
+const serviceBodyRows = [...servicePanel.querySelectorAll('tbody tr')]
+assert.equal(serviceBodyRows[0].cells.length, 8, 'a service row prints eight compacted cells')
+const mudLoggingSplit = serviceBodyRows.find(row => row.cells[0].textContent === 'Mud logging')
+assert.deepEqual([...mudLoggingSplit.cells].map(cell => cell.textContent),
+  ['Mud logging', 'EUR 1,000.00', 'EUR 250.00', 'EUR 50.00', 'EUR 0.00', 'EUR 300.00', 'EUR 700.00', '30.00%'],
+  'a service row prints planned, UPA and NPT actuals before the total actual')
+const serviceFooter = [...servicePanel.querySelectorAll('tfoot tr:last-child th')].map(cell => cell.textContent)
+assert.deepEqual(serviceFooter,
+  ['Group total', 'EUR 3,000.00', 'EUR 650.00', 'EUR 50.00', 'EUR 0.00', 'EUR 700.00', 'EUR 2,300.00', '23.33%'],
+  'the services footer totals each classification and the total actual')
+for (const otherPanel of [...coverPanels].slice(1)) {
+  assert.ok(!otherPanel.classList.contains('dcr-cost-panel--split'), 'other cost tables keep their five columns')
+}
+assert.equal(coverPanels[1].querySelectorAll('thead th').length, 5, 'consumables keep five columns')
+
+// The report title names the well scope it costs.
+assert.equal(costReportTitle('well', ['drilling'], 'WELL-1'), 'Well Cost Report - Drilling · WELL-1')
+assert.equal(costReportTitle('daily', ['completion'], 'WELL-1'), 'Daily Cost Report - Completions · WELL-1')
+assert.equal(costReportTitle('well', ['completion', 'drilling'], 'WELL-1'), 'Well Cost Report - Drilling & Completions · WELL-1')
+assert.equal(costReportTitle('daily', [], 'WELL-1'), 'Daily Cost Report · WELL-1', 'no scope keeps the plain title')
 const drillBitsRow = consumableRows.find(row => row.cells[0].textContent === 'Drill Bits')
 assert.ok(drillBitsRow.textContent.includes('EUR 5,500.00') && drillBitsRow.textContent.includes('EUR 1,500.00'), 'drill bit AFE and actual values are cumulative')
 for (const hidden of ['SVC-03', 'SVC-20', 'Bit Alpha', 'Bit Beta', 'Mud Chemicals allowance', 'Cement Additives allowance']) {
   assert.ok(!sheet.querySelector('.daily-report-cover').textContent.includes(hidden), `${hidden} is hidden from the summary`)
 }
 for (const heading of [
-  'Reporting milestone', 'Section-wise planned depth & current depth', 'Services cost · AFE vs cumulative actual',
+  'Reporting milestone', 'Section-wise planned depth & current depth', 'Services cost · AFE vs cumulative actual by activity',
   'Consumables cost · AFE vs cumulative actual', 'Tangibles cost · AFE vs actual', 'AFE vs actual summary',
   'Mud chemical cost · section-wise', 'Consumption / losses · cumulative', 'Mud cost analysis · section / mud type',
   'NPT summary', 'UPA summary',
@@ -147,7 +187,7 @@ assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog
 assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
 assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
-console.log('Daily cost checks passed: bulk depth/quantity/unit controls, editable milestone label, planned-activity days, transposed mud matrix, code-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
+console.log('Daily cost checks passed: bulk depth/quantity/unit controls, editable milestone label, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud matrix, code-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
 
 dom.window.close()
 process.exit(0)
