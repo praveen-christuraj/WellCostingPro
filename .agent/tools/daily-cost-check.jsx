@@ -12,7 +12,7 @@ for (const key of ['window', 'document', 'navigator', 'HTMLElement', 'Event']) {
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
-const { DailyCostPrintSheet, useCostPrint } = await import('../../frontend/src/components/daily-cost/DailyCostPrintSheet')
+const { DailyCostPrintSheet, useCostPrint, validLeadLagDays } = await import('../../frontend/src/components/daily-cost/DailyCostPrintSheet')
 const { costReportTitle } = await import('../../frontend/src/lib/dailyCost')
 const line = {
   quantity: '12.126', quantity_unit: 'hours', currency: 'USD', effective_rate: '100', captured_rate: '100',
@@ -75,7 +75,7 @@ const mudReconciliation = { currency: 'EUR', sections: [{ section_id: 'section-1
   mud_cleaner: '6', formation_seepage: '7', pit_cleaning_dump: '8', left_in_hole: '9', other_losses: '10', other_loss_total: '40', total_losses: '55' }] }
 const mudBalance = { view: 'section', rows: [{ section_id: 'section-1', opening_stock: '20', receipt: '30', additions: '60', consumption_losses: '15', closing_stock: '95' }] }
 const root = createRoot(document.getElementById('root'))
-await act(async () => root.render(<DailyCostPrintSheet report={{ title: 'Well costing sheet', period: 'Inception to date', days: [day, second], mudReconciliation, mudBalance, milestoneLabel: 'Side track on date / time' }}/>))
+await act(async () => root.render(<DailyCostPrintSheet report={{ title: 'Well costing sheet', period: 'Inception to date', days: [day, second], mudReconciliation, mudBalance, milestoneLabel: 'Side track on date / time', leadLagKind: 'LEAD', leadLagDays: '2.75' }}/>))
 let sheet = document.querySelector('.afe-print-sheet')
 assert.ok(sheet, 'print sheet is a body portal')
 assert.equal(sheet.parentElement, document.body)
@@ -131,6 +131,8 @@ for (const heading of [
   'NPT summary', 'UPA summary',
 ]) assert.ok(sheet.textContent.includes(heading), `cover prints ${heading}`)
 assert.ok(sheet.textContent.includes('Side track on date / time'), 'the report prints the user-edited milestone label')
+assert.ok(sheet.querySelector('.dcr-titlebar h1').textContent.endsWith('(LEAD: 2.75 days)'), 'selected decimal lead days print at the end of the title')
+assert.ok(validLeadLagDays('LAG', '0.125') && !validLeadLagDays('LAG', '') && !validLeadLagDays('LEAD', '-1'), 'lead/lag validation accepts non-negative decimals only')
 assert.ok(!sheet.textContent.includes('Row 119 notes'), 'daily service-line breakdowns are omitted from cumulative reports')
 for (const heading of ['Service-wise cumulative cost', 'Consumables cumulative cost · four categories', 'Tangibles cumulative cost · item-wise']) {
   assert.ok(sheet.textContent.includes(heading), `cumulative pages print ${heading}`)
@@ -159,6 +161,7 @@ window.print = () => {
   printCalled = true
   const printed = document.querySelector('.afe-print-sheet')
   assert.ok(printed.textContent.includes('Well one'), 'portal is mounted before window.print with the well name')
+  assert.ok(printed.querySelector('.dcr-titlebar h1').textContent.endsWith('(LEAD/LAG: 0 days)'), 'no selection prints the zero lead/lag fallback')
   const timePosition = printed.querySelector('.dcr-time').textContent
   for (const text of ['Planned', '10.13 days', 'Actual from spud', '8.13 days', 'Actual against planned activities', '6.13 days', 'NPT', '2.00 days', 'UPA', '0.00 days']) {
     assert.ok(timePosition.includes(text), `time position prints ${text}`)
@@ -178,8 +181,12 @@ for (const retained of ['New daily sheet', 'Well cost analysis', 'Filter by well
   assert.ok(register.includes(retained), `register retains ${retained}`)
 }
 const sheetPage = readFileSync('../frontend/src/pages/DailyCostSheet.tsx', 'utf8')
-for (const retained of ["'other_expenses'", 'Less other expenses', 'Other Expenses', 'Assign scope / depth / quantity', 'Milestone label in report', 'MudCostMaterialBalance']) {
+for (const retained of ["'other_expenses'", 'Less other expenses', 'Other Expenses', 'Assign scope / depth / quantity', 'Milestone label in report', 'Lead / Lag days', 'validLeadLagDays', 'MudCostMaterialBalance']) {
   assert.ok(sheetPage.includes(retained), `day sheet retains ${retained}`)
+}
+const wellPrintDialog = readFileSync('../frontend/src/components/daily-cost/WellCostPrintDialog.tsx', 'utf8')
+for (const retained of ['Lead / Lag', 'Lead / Lag days', 'LEAD/LAG: 0 days', 'validLeadLagDays']) {
+  assert.ok(wellPrintDialog.includes(retained), `well print dialog retains ${retained}`)
 }
 const bulkDialog = readFileSync('../frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx', 'utf8')
 for (const retained of ['Set one depth for all', 'Actual depth', 'Depth unit', 'Set one quantity and unit for all', 'Charged quantity', 'Quantity unit']) {
@@ -195,7 +202,7 @@ assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog
 assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
 assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
-console.log('Daily cost checks passed: bulk depth/quantity/unit controls, editable milestone label, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud and loss matrices, code-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
+console.log('Daily cost checks passed: bulk depth/quantity/unit controls, editable milestone and lead/lag title suffix, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud and loss matrices, code-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
 
 dom.window.close()
 process.exit(0)

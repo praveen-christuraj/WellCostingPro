@@ -161,8 +161,10 @@ class MudCostReconciliation:
     Cost/BBL base rate; ``beta`` adds the actual mud-chemical spend from the
     Daily Cost register, and ``cost_per_bbl`` is beta divided by the total mud.
     ``reconciled_cost`` values the mud that was consumed or lost at that cost
-    per barrel. ``None`` means the mud type needs no rate (WBM) or the section
-    has no configuration yet.
+    per barrel for non-WBM systems. WBM derives Cost/BBL directly from its
+    actual mud-chemical cost divided by additions and keeps actual cost as its
+    reconciled amount. ``None`` means a required denominator is zero or the
+    section has no configuration yet.
     """
 
     total_mud: Decimal
@@ -188,10 +190,10 @@ def reconcile_mud(
 ) -> MudCostReconciliation:
     """Apply the section-scoped reconciliation formula.
 
-    WBM has no derived rate: the actual cost recorded in the Daily Cost register
-    is the reconciled cost. A section without a mud type returns no reconciled
-    figure so the caller can surface the configuration gap instead of silently
-    treating it as WBM.
+    WBM Cost/BBL is actual mud-chemical cost divided by additions; its actual
+    cost remains the reconciled cost. A section without a mud type returns no
+    reconciled figure so the caller can surface the configuration gap instead
+    of silently treating it as WBM.
 
     Total mud is the section opening stock plus the extra OBM received and the
     additions entered for that section/mud type; ALPHA values the opening stock
@@ -210,7 +212,7 @@ def reconcile_mud(
             total_mud=total_mud,
             alpha=None,
             beta=None,
-            cost_per_bbl=None,
+            cost_per_bbl=_q(actual_cost / additions) if additions > 0 else None,
             reconciled_cost=_q(actual_cost),
         )
     rate = base_rate if base_rate is not None else Decimal("0")

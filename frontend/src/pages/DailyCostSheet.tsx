@@ -5,7 +5,7 @@ import {
   DownloadOutlined, EditOutlined, LockOutlined, PlaylistAddRounded, RefreshRounded, SaveOutlined, SendRounded, UndoRounded,
 } from '@mui/icons-material'
 import {
-  Alert, Box, Button, CircularProgress, LinearProgress, Paper, Table, TableBody, TableCell,
+  Alert, Box, Button, CircularProgress, LinearProgress, MenuItem, Paper, Table, TableBody, TableCell,
   TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material'
 import type { ColDef, ICellRendererParams } from 'ag-grid-community'
@@ -15,7 +15,7 @@ import { DailyCostLineDialog, type DailyCostLineKind, type EditableDailyCostLine
 import { DailyCostBulkScopeDialog } from '../components/daily-cost/DailyCostBulkScopeDialog'
 import { WellProgressPanel } from '../components/daily-cost/WellProgressPanel'
 import { CostingSetPickerDialog } from '../components/CostingSetPickerDialog'
-import { useCostPrint } from '../components/daily-cost/DailyCostPrintSheet'
+import { useCostPrint, validLeadLagDays, type LeadLagKind } from '../components/daily-cost/DailyCostPrintSheet'
 import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
@@ -67,6 +67,8 @@ export default function DailyCostSheet() {
   const { print, printSheet } = useCostPrint()
   const [dailyPrintOpen, setDailyPrintOpen] = useState(false)
   const [milestoneLabel, setMilestoneLabel] = useState('Spud date & time')
+  const [leadLagKind, setLeadLagKind] = useState<LeadLagKind>('')
+  const [leadLagDays, setLeadLagDays] = useState('')
   const [printOpen, setPrintOpen] = useState(false)
   const [printBusy, setPrintBusy] = useState(false)
   const [printError, setPrintError] = useState('')
@@ -871,7 +873,7 @@ export default function DailyCostSheet() {
   }
 
   const printDay = async () => {
-    if (dirty || !day) return
+    if (dirty || !day || !validLeadLagDays(leadLagKind, leadLagDays)) return
     setPrintBusy(true)
     setPrintError('')
     try {
@@ -901,6 +903,7 @@ export default function DailyCostSheet() {
         period: displayDate(entry.cost_date), days: [saved],
         overviewDays, summary, mudReconciliation, mudBalance, sections: well?.sections ?? baseline?.sections,
         reportKind: 'daily', milestoneLabel: milestoneLabel.trim() || 'Spud date & time',
+        leadLagKind, leadLagDays,
       })
       setDailyPrintOpen(false)
     } catch (caught) {
@@ -920,7 +923,7 @@ export default function DailyCostSheet() {
       subtitle={`${entry.well_code} · ${entry.well_name} · ${entry.rig_code} · ${entry.afe_code} ${entry.afe_name} · ${displayDate(entry.cost_date)}`}
       action={<Box display="flex" gap={1} flexWrap="wrap">
         {canExport && <>
-          <Tooltip title={dirty ? 'Save or discard changes before printing the saved daily sheet.' : 'Prepare the saved daily report and edit its milestone label.'}><span><Button variant="outlined" startIcon={<PrintOutlined/>} disabled={dirty || saving || printBusy} onClick={() => { setMilestoneLabel('Spud date & time'); setDailyPrintOpen(true) }}>{printBusy ? 'Preparing print…' : 'Print daily sheet'}</Button></span></Tooltip>
+          <Tooltip title={dirty ? 'Save or discard changes before printing the saved daily sheet.' : 'Prepare the saved daily report and enter any lead or lag days.'}><span><Button variant="outlined" startIcon={<PrintOutlined/>} disabled={dirty || saving || printBusy} onClick={() => { setMilestoneLabel('Spud date & time'); setLeadLagKind(''); setLeadLagDays(''); setDailyPrintOpen(true) }}>{printBusy ? 'Preparing print…' : 'Print daily sheet'}</Button></span></Tooltip>
           <Button variant="outlined" startIcon={<PrintOutlined/>} onClick={() => setPrintOpen(true)}>Print well costing sheet</Button>
         </>}
         <Button component={RouterLink} to="/daily-cost" variant="outlined" startIcon={<ArrowBackRounded/>}>Register</Button>
@@ -1134,14 +1137,25 @@ export default function DailyCostSheet() {
     <FormDialog
       open={dailyPrintOpen}
       title="Print daily cost report"
-      subtitle="The report uses saved data and cumulative schedules. Edit only the milestone label when this report represents a side track or another operational milestone."
+      subtitle="The report uses saved data and cumulative schedules. Set Lead or Lag days when applicable; leaving the dropdown blank prints LEAD/LAG: 0 days."
       onClose={() => setDailyPrintOpen(false)}
       onSubmit={() => void printDay()}
       submitLabel="Print daily report"
       busy={printBusy}
+      submitDisabled={!validLeadLagDays(leadLagKind, leadLagDays)}
     >
-      <TextField fullWidth label="Milestone label in report" value={milestoneLabel} onChange={event => setMilestoneLabel(event.target.value)} inputProps={{ maxLength: 80 }} helperText="For example: Side track on date / time. The recorded date and time are not changed."/>
-      <ErrorMessage message={printError}/>
+      <Box display="grid" gap={2}>
+        <TextField fullWidth label="Milestone label in report" value={milestoneLabel} onChange={event => setMilestoneLabel(event.target.value)} inputProps={{ maxLength: 80 }} helperText="For example: Side track on date / time. The recorded date and time are not changed."/>
+        <TextField select label="Lead / Lag" value={leadLagKind} onChange={event => {
+          const next = event.target.value as LeadLagKind
+          setLeadLagKind(next)
+          if (!next) setLeadLagDays('')
+        }} helperText="Choose neither when the report has no lead or lag.">
+          <MenuItem value="">Neither</MenuItem><MenuItem value="LEAD">Lead</MenuItem><MenuItem value="LAG">Lag</MenuItem>
+        </TextField>
+        <TextField type="number" label="Lead / Lag days" required={Boolean(leadLagKind)} disabled={!leadLagKind} value={leadLagDays} onChange={event => setLeadLagDays(event.target.value)} inputProps={{ min: 0, step: '0.0000000001' }} error={!validLeadLagDays(leadLagKind, leadLagDays)} helperText={!validLeadLagDays(leadLagKind, leadLagDays) ? 'Enter a non-negative value with up to 10 decimal places.' : 'Decimals are allowed.'}/>
+        <ErrorMessage message={printError}/>
+      </Box>
     </FormDialog>
     <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={entry.well_id}/>
 

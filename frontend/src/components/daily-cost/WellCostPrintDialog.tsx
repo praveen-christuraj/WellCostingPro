@@ -6,7 +6,7 @@ import {
   costReportTitle, displayDate, localToday, type DailyCostDay, type DailyCostWellOption, type DailyCostWellSummary,
 } from '../../lib/dailyCost'
 import type { MudCostMaterialBalance, MudCostReconciliation } from '../../lib/mudCost'
-import { useCostPrint } from './DailyCostPrintSheet'
+import { useCostPrint, validLeadLagDays, type LeadLagKind } from './DailyCostPrintSheet'
 
 export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }: {
   open: boolean; onClose: () => void; wells: DailyCostWellOption[]; initialWellId?: string
@@ -17,15 +17,25 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
   const [dateTo, setDateTo] = useState(localToday())
   const [includeDraft, setIncludeDraft] = useState(true)
   const [milestoneLabel, setMilestoneLabel] = useState('Spud date & time')
+  const [leadLagKind, setLeadLagKind] = useState<LeadLagKind>('')
+  const [leadLagDays, setLeadLagDays] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const { print, printSheet } = useCostPrint()
   useEffect(() => {
-    if (open) { setWellId(initialWellId); setError(''); setDateTo(localToday()); setMilestoneLabel('Spud date & time') }
+    if (open) {
+      setWellId(initialWellId)
+      setError('')
+      setDateTo(localToday())
+      setMilestoneLabel('Spud date & time')
+      setLeadLagKind('')
+      setLeadLagDays('')
+    }
   }, [open, initialWellId])
   const invalidRange = mode === 'range' && (!dateFrom || !dateTo || dateFrom > dateTo)
+  const invalidLeadLag = !validLeadLagDays(leadLagKind, leadLagDays)
   const submit = async () => {
-    if (!wellId || invalidRange) return
+    if (!wellId || invalidRange || invalidLeadLag) return
     setBusy(true)
     setError('')
     try {
@@ -67,13 +77,14 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
       print({ title: costReportTitle('well', scopes, well?.well_name ?? days[0].entry.well_name),
         period: `${mode === 'range' ? displayDate(dateFrom) : 'Inception (first recorded cost)'} to ${displayDate(to)} · ${includeDraft ? 'Draft and submitted sheets' : 'Submitted sheets only'}`,
         days, overviewDays: days, summary, mudReconciliation, mudBalance, sections: well?.sections,
-        reportKind: 'well', milestoneLabel: milestoneLabel.trim() || 'Spud date & time' })
+        reportKind: 'well', milestoneLabel: milestoneLabel.trim() || 'Spud date & time',
+        leadLagKind, leadLagDays })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The costing sheet could not be printed')
     } finally { setBusy(false) }
   }
   return <>
-    <FormDialog open={open} title="Print well costing sheet" subtitle="Print every saved section without grid pagination. Save as PDF using the browser print dialog. AFE and currency totals remain separate." onClose={onClose} onSubmit={() => void submit()} busy={busy} submitLabel="Print costing sheet" submitDisabled={!wellId || invalidRange}>
+    <FormDialog open={open} title="Print well costing sheet" subtitle="Print every saved section without grid pagination. Set Lead or Lag days when applicable; leaving the dropdown blank prints LEAD/LAG: 0 days." onClose={onClose} onSubmit={() => void submit()} busy={busy} submitLabel="Print costing sheet" submitDisabled={!wellId || invalidRange || invalidLeadLag}>
       <Box display="grid" gap={2}>
         <TextField select required label="Well" value={wellId} onChange={event => setWellId(event.target.value)}>
           <MenuItem value="">Select one well</MenuItem>
@@ -89,6 +100,14 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
         </Box>}
         <FormControlLabel control={<Switch checked={includeDraft} onChange={event => setIncludeDraft(event.target.checked)}/>} label="Include draft sheets"/>
         <TextField label="Milestone label in report" value={milestoneLabel} onChange={event => setMilestoneLabel(event.target.value)} inputProps={{ maxLength: 80 }} helperText="Edit the label when the milestone should read, for example, “Side track on date / time”. The recorded milestone date and time are unchanged."/>
+        <TextField select label="Lead / Lag" value={leadLagKind} onChange={event => {
+          const next = event.target.value as LeadLagKind
+          setLeadLagKind(next)
+          if (!next) setLeadLagDays('')
+        }} helperText="Choose neither when the report has no lead or lag.">
+          <MenuItem value="">Neither</MenuItem><MenuItem value="LEAD">Lead</MenuItem><MenuItem value="LAG">Lag</MenuItem>
+        </TextField>
+        <TextField type="number" label="Lead / Lag days" required={Boolean(leadLagKind)} disabled={!leadLagKind} value={leadLagDays} onChange={event => setLeadLagDays(event.target.value)} inputProps={{ min: 0, step: '0.0000000001' }} error={invalidLeadLag} helperText={invalidLeadLag ? 'Enter a non-negative value with up to 10 decimal places.' : 'Decimals are allowed.'}/>
         <ErrorMessage message={error}/>
       </Box>
     </FormDialog>

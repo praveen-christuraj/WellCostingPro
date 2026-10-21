@@ -295,8 +295,8 @@ export default function MudCostAnalysis() {
   const latestCostHint = latestCost
     ? `${reconciliation?.latest_cost_per_bbl_section ?? ''}${reconciliation?.latest_cost_per_bbl_date ? ` · ${dateLabel(reconciliation.latest_cost_per_bbl_date)}` : ''}`
     : reconciliation && reconciliation.configured_section_count > 0
-      ? 'WBM and unconfigured sections have no derived rate'
-      : 'Configure a section mud type and Cost/BBL base rate'
+      ? 'A configured section needs additions before Cost/BBL can be derived'
+      : 'Configure a section mud type to derive Cost/BBL'
 
   const saveConfig = async (payload: MudCostSectionSettingPayload) => {
     const saved = await api<MudCostSectionSetting>('/mud-cost/section-settings', { method: 'PUT', body: body(payload) })
@@ -666,7 +666,7 @@ export default function MudCostAnalysis() {
             <Box>
               <Typography fontWeight={800} fontSize={14}>Section mud type &amp; Cost/BBL</Typography>
               <Typography color="text.secondary" fontSize={11.5} maxWidth={760}>
-                Configured once per section. WBM uses the Daily Cost mud chemicals actual directly. OBM, SOBM and OTHERS
+                Configured once per section. WBM derives Cost/BBL as actual mud chemicals cost ÷ additions and keeps actual cost as reconciled cost. OBM, SOBM and OTHERS
                 apply the reconciliation formula; OTHERS additionally requires remarks. Changes recalculate every day of that section.
               </Typography>
             </Box>
@@ -845,8 +845,8 @@ export default function MudCostAnalysis() {
           </Box>
           {reconDateFrom && reconDateTo && reconDateFrom > reconDateTo && <Alert severity="error" sx={{ mb: 1.4 }}>The start date must not be after the end date.</Alert>}
           <Typography color="text.secondary" fontSize={11.5} mb={1.4}>
-            Total Mud we have = Opening Stock + Extra OBM received + Additions. ALPHA = (Opening Stock + Extra OBM received) × Cost/BBL base rate; BETA = ALPHA + actual mud chemicals cost (section & mud type scoped);
-            Cost/BBL = BETA ÷ Total Mud we have. Reconciled Cost = (Consumption/Losses) × Cost/BBL. Every section is calculated and shown separately;
+            WBM Cost/BBL = actual mud chemicals cost ÷ Additions, and its reconciled cost remains the actual cost. For OBM, SOBM and OTHERS: Total Mud we have = Opening Stock + Extra OBM received + Additions;
+            ALPHA = (Opening Stock + Extra OBM received) × Cost/BBL base rate; BETA = ALPHA + actual mud chemicals cost (section & mud type scoped); Cost/BBL = BETA ÷ Total Mud we have; Reconciled Cost = (Consumption/Losses) × Cost/BBL. Every section is calculated and shown separately;
             cumulative figures run from that section&apos;s first entry. Section summary totals cover the selected period while
             Cost/BBL stays the latest cumulative rate to the To date.
           </Typography>
@@ -856,9 +856,9 @@ export default function MudCostAnalysis() {
             : reconciliation
               ? <>
                   <Box className="stat-grid" sx={{ gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, mb: 1.6 }}>
-                    <Stat label="Latest Cost/BBL" value={reconciliation.latest_cost_per_bbl ? dailyMoney(reconciliation.latest_cost_per_bbl, reconciliation.currency) : '—'} hint={reconciliation.latest_cost_per_bbl ? `${reconciliation.latest_cost_per_bbl_section}${reconciliation.latest_cost_per_bbl_date ? ` · ${dateLabel(reconciliation.latest_cost_per_bbl_date)}` : ''}` : reconciliation.configured_section_count ? 'Not derived for WBM sections' : 'No section mud type configured'}/>
+                    <Stat label="Latest Cost/BBL" value={reconciliation.latest_cost_per_bbl ? dailyMoney(reconciliation.latest_cost_per_bbl, reconciliation.currency) : '—'} hint={reconciliation.latest_cost_per_bbl ? `${reconciliation.latest_cost_per_bbl_section}${reconciliation.latest_cost_per_bbl_date ? ` · ${dateLabel(reconciliation.latest_cost_per_bbl_date)}` : ''}` : reconciliation.configured_section_count ? 'Additions are required to derive Cost/BBL' : 'No section mud type configured'}/>
                     <Stat label="Actual mud chemicals" value={dailyMoney(reconciliation.total_actual_cost, reconciliation.currency)} hint="Daily Cost register, section-scoped, in the AFE standard currency"/>
-                    <Stat label="Reconciled mud cost" value={dailyMoney(reconciliation.total_reconciled_cost, reconciliation.currency)} hint="Latest Cost/BBL applied to Consumption/Losses"/>
+                    <Stat label="Reconciled mud cost" value={dailyMoney(reconciliation.total_reconciled_cost, reconciliation.currency)} hint="WBM uses actual cost; other mud types value Consumption/Losses at Cost/BBL"/>
                     <Stat label="Reconciliation difference" value={dailyMoney(reconciliation.total_adjustment, reconciliation.currency)} hint={`${reconciliation.configured_section_count} configured · ${reconciliation.unconfigured_section_count} unconfigured section(s)`}/>
                   </Box>
                   {reconciliation.unconfigured_section_count > 0 && <Alert severity="warning" sx={{ mb: 1.4 }}>

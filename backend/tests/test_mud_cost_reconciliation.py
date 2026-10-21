@@ -288,7 +288,7 @@ def test_reconciliation_uses_actual_daily_cost_and_latest_cost_per_bbl():
         assert Decimal(result["total_actual_cost"]) == Decimal("1700")
         assert Decimal(result["total_reconciled_cost"]) == Decimal("440")
         assert Decimal(result["total_adjustment"]) == Decimal("-1260")
-        assert Decimal(result["latest_cost_per_bbl"]) == Decimal("8")
+        assert Decimal(result["latest_cost_per_bbl"]) == Decimal("20")
 
         obm = next(row for row in result["sections"] if row["mud_type"] == "OBM")
         assert Decimal(obm["base_rate"]) == Decimal("2")
@@ -304,10 +304,14 @@ def test_reconciliation_uses_actual_daily_cost_and_latest_cost_per_bbl():
         assert Decimal(obm["adjustment"]) == Decimal("-1260")
 
         wbm = next(row for row in result["sections"] if row["mud_type"] == "WBM")
-        assert wbm["cost_per_bbl"] is None
+        assert Decimal(wbm["cost_per_bbl"]) == Decimal("20")
         assert wbm["alpha"] is None and wbm["beta"] is None
         assert Decimal(wbm["reconciled_cost"]) == Decimal("200")
         assert Decimal(wbm["actual_cost"]) == Decimal("200")
+        wbm_daily = next(row for row in result["rows"] if row["mud_type"] == "WBM")
+        assert Decimal(wbm_daily["cumulative_additions"]) == Decimal("10")
+        assert Decimal(wbm_daily["cumulative_actual_cost"]) == Decimal("200")
+        assert Decimal(wbm_daily["cost_per_bbl"]) == Decimal("20")
 
         # Day rows carry the cumulative position to that date. The latest rate is
         # applied to the cumulative consumption for the cumulative amount.
@@ -343,7 +347,7 @@ def test_reconciliation_uses_actual_daily_cost_and_latest_cost_per_bbl():
         assert Decimal(summary["totals"]["comparison_consumables"]) == Decimal("440")
         assert Decimal(summary["totals"]["comparison_balance"]) == Decimal("4560")
         assert summary["totals"]["has_mud_reconciliation"] is True
-        assert Decimal(summary["mud_cost"]["latest_cost_per_bbl"]) == Decimal("8")
+        assert Decimal(summary["mud_cost"]["latest_cost_per_bbl"]) == Decimal("20")
 
         export = client.post("/api/v1/mud-cost/export-audit", headers=headers, json={
             "module": "reconciliation", "format": "csv", "record_count": len(result["rows"]),
@@ -485,6 +489,24 @@ def test_opening_stock_is_valued_once_and_zero_total_mud_has_no_rate(mud_type):
     assert empty.beta == Decimal("1700")
     assert empty.cost_per_bbl == Decimal("17")
     assert empty.reconciled_cost == Decimal("510")
+
+
+def test_wbm_cost_per_bbl_is_actual_mud_cost_divided_by_additions():
+    from app.domain.mud_cost import reconcile_mud
+
+    values = dict(
+        mud_type="WBM", base_rate=None, opening_stock=Decimal("100"),
+        extra_obm_received=Decimal("0"), additions=Decimal("12.5"),
+        actual_cost=Decimal("250"), consumption_losses=Decimal("7"),
+    )
+    result = reconcile_mud(**values)
+    assert result.alpha is None and result.beta is None
+    assert result.cost_per_bbl == Decimal("20")
+    assert result.reconciled_cost == Decimal("250")
+
+    no_additions = reconcile_mud(**{**values, "additions": Decimal("0")})
+    assert no_additions.cost_per_bbl is None
+    assert no_additions.reconciled_cost == Decimal("250")
 
 
 def test_opening_stock_correction_permission_recalculates_balances_and_well_cost():

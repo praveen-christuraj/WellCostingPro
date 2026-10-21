@@ -130,8 +130,9 @@ class MudCostSectionSetting(Base):
 
     Configuration is section-scoped: it stores the mud type (WBM / OBM / SOBM /
     OTHERS), the optional remark, and the section's Cost/BBL base rate. Only
-    OTHERS requires a remark; WBM needs no base rate because it is reconciled at
-    the actual Daily Cost figures. The row is keyed by the stable hole-section
+    OTHERS requires a remark; WBM needs no base rate because its Cost/BBL is
+    actual mud-chemical cost divided by additions and it is reconciled at the
+    actual Daily Cost figure. The row is keyed by the stable hole-section
     identity so a later well-plan edit (which replaces ``well_sections`` rows)
     does not orphan the configuration; ``section_id`` keeps the latest snapshot.
     """

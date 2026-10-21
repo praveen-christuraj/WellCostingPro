@@ -19,6 +19,22 @@ export type CostPrintReport = {
   sections?: DailyCostSectionOption[]
   reportKind?: 'daily' | 'well'
   milestoneLabel?: string
+  leadLagKind?: '' | 'LEAD' | 'LAG'
+  leadLagDays?: string
+}
+
+export type LeadLagKind = '' | 'LEAD' | 'LAG'
+
+export function validLeadLagDays(kind: LeadLagKind, days: string) {
+  return !kind || /^\d+(?:\.\d{1,10})?$/.test(days.trim())
+}
+
+function reportTitle(report: CostPrintReport) {
+  const kind = report.leadLagKind
+  const suffix = kind && validLeadLagDays(kind, report.leadLagDays ?? '')
+    ? `${kind}: ${(report.leadLagDays ?? '').trim()} days`
+    : 'LEAD/LAG: 0 days'
+  return `${report.title} (${suffix})`
 }
 
 /** Prints the model-based summary followed by cumulative schedules, never one page per day. */
@@ -305,7 +321,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
 
   return <section className="daily-report-cover ps-page">
     <header className="dcr-titlebar">
-      <div><div className="dcr-eyebrow">Daily Cost Management · {report.reportKind === 'daily' ? 'Daily cost report' : 'Well cost report'}</div><h1>{report.title}</h1></div>
+      <div><div className="dcr-eyebrow">Daily Cost Management · {report.reportKind === 'daily' ? 'Daily cost report' : 'Well cost report'}</div><h1>{reportTitle(report)}</h1></div>
       <div className="dcr-report-meta"><strong>{latest.entry.well_name}</strong><span>{latest.entry.rig_name}</span><span>{report.period}</span></div>
     </header>
     <div className="dcr-layout">
@@ -373,7 +389,7 @@ function CumulativeReportDetails({ report }: { report: CostPrintReport }) {
   return <div className="daily-report-details">
     <header>
       <div className="ps-eyebrow">WellCosting Pro · cumulative saved costs</div>
-      <h1>{report.title}</h1>
+      <h1>{reportTitle(report)}</h1>
       <p>{report.period} · Printed {new Date().toLocaleString()}</p>
       <p>These schedules consolidate saved daily sheets. Daily line-by-line breakdowns are intentionally omitted; currencies and incompatible AFEs remain separate.</p>
     </header>
