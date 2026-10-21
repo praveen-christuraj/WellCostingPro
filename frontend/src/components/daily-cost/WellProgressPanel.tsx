@@ -31,13 +31,15 @@ function signature(scopes: WellProgressScope[]): string {
  * days they drive. The spud date can only be edited once entered, never
  * cleared, and entering the progress completion stops the day count.
  */
-export function WellProgressPanel({ wellId, scopes, canEdit, onSaved, asOfLabel, onDirtyChange, saveRef }: {
+export function WellProgressPanel({ wellId, scopes, canEdit, onSaved, asOfLabel, asOfDate, onDirtyChange, saveRef }: {
   wellId: string
   scopes: WellProgressScope[]
   canEdit: boolean
   onSaved: (report: WellProgressReport) => void
-  /** Where the actual-day count points, e.g. "the sheet date" or "today". */
+  /** Where the actual-day count points, e.g. "the sheet date" or "the last cost sheet date". */
   asOfLabel?: string
+  /** Explicit report endpoint used after saving from a dated sheet. */
+  asOfDate?: string
   /** Lets the host page fold these edits into its unsaved-changes guard. */
   onDirtyChange?: (dirty: boolean) => void
   saveRef?: MutableRefObject<(() => Promise<boolean>) | null>
@@ -87,7 +89,8 @@ export function WellProgressPanel({ wellId, scopes, canEdit, onSaved, asOfLabel,
         const payload: Record<string, unknown> = { scope: scope.scope }
         if (draft.spud !== toInput(scope.spud_at)) payload.spud_at = fromInput(draft.spud)
         if (draft.completed !== toInput(scope.progress_completed_at)) payload.progress_completed_at = fromInput(draft.completed)
-        report = await api<WellProgressReport>(`/daily-cost/wells/${wellId}/progress`, {
+        const query = asOfDate ? `?as_of=${encodeURIComponent(asOfDate)}` : ''
+        report = await api<WellProgressReport>(`/daily-cost/wells/${wellId}/progress${query}`, {
           method: 'PUT', body: body(payload),
         })
       }
@@ -108,7 +111,7 @@ export function WellProgressPanel({ wellId, scopes, canEdit, onSaved, asOfLabel,
         <Typography fontWeight={800} fontSize={14}>Well progress — spud to completion</Typography>
         <Typography color="text.secondary" fontSize={11.2} mt={.25}>
           Actual days count from the Well Spud Date &amp; Time — not from the first daily cost sheet —
-          to the end of {asOfLabel ?? 'the report date'}{asOfLabel ? '' : ' (0.583 days for a well spudded at 10:00 hrs)'}.
+          to the end of {asOfLabel ?? 'the last cost sheet date'}{asOfLabel ? '' : ' (0.583 days for a well spudded at 10:00 hrs on that date)'}.
           Entering the Progress Completed Date &amp; Time ends the whole progress and stops the count.
         </Typography>
       </Box>
@@ -150,7 +153,7 @@ export function WellProgressPanel({ wellId, scopes, canEdit, onSaved, asOfLabel,
               <Typography fontSize={17} fontWeight={800}>{formatDays(scope.actual_days)}</Typography>
               <Typography fontSize={10.2} color="text.secondary">
                 {scope.spud_at
-                  ? (scope.is_completed ? 'spud → completion' : `to end of ${scope.as_of_date ?? 'today'}`)
+                  ? (scope.is_completed ? 'spud → completion' : scope.as_of_date ? `to end of ${scope.as_of_date}` : 'no cost sheet yet')
                   : 'enter the spud date & time'}
               </Typography>
             </Paper>

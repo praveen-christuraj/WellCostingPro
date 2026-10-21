@@ -942,6 +942,7 @@ export default function DailyCostSheet() {
     {progress && <WellProgressPanel
       wellId={entry.well_id} scopes={[progress]} canEdit={can('daily-cost:update')}
       asOfLabel={`the sheet date (${displayDate(entry.cost_date)})`}
+      asOfDate={entry.cost_date}
       onSaved={report => setProgress(report.scopes.find(scope => scope.scope === progress.scope) ?? progress)}
       onDirtyChange={setProgressDirty} saveRef={progressSaveRef}
     />}

@@ -717,8 +717,8 @@ class DailyCostWellProgress(BaseModel):
     Actual days count from the Well Spud Date & Time — not from the first
     daily cost sheet — up to the Progress Completed Date & Time once it is
     entered (the count then stops for that progress), otherwise up to the end
-    of the report date, in fractional days rounded to three decimals (a well
-    spudded 10:00 counts 0.583 days for that same day's report).
+    of the last cost sheet date for that scope, in fractional days rounded to
+    three decimals (a well spudded 10:00 counts 0.583 days on that date).
     ``days_variance`` is actual days less planned days for the scope.
     """
 

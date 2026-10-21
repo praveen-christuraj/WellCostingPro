@@ -312,8 +312,8 @@ export default function DailyCostAnalysis() {
 
     {progress.length > 0 && selectedWell && <WellProgressPanel
       wellId={selectedWell} scopes={progress} canEdit={can('daily-cost:update')}
-      asOfLabel="today"
-      onSaved={report => setProgress(report.scopes)}
+      asOfLabel="each scope's last included cost sheet date"
+      onSaved={() => void load()}
       onDirtyChange={setProgressDirty} saveRef={progressSaveRef}
     />}
 

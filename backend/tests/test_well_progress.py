@@ -1,8 +1,7 @@
 """Well progress milestones: Well Spud Date & Time → Progress Completed Date & Time.
 
-The daily cost register counts actual days from the spud instant (not the
-first sheet date), stops counting once the progress completion instant is
-entered, and compares both against the scope's planned days.
+Actual days start at the spud instant and end on the last cost-sheet date for
+the scope, unless a progress completion instant freezes the count exactly.
 """
 
 import os
@@ -12,7 +11,6 @@ _db_path = tempfile.mktemp(suffix=".sqlite3")
 os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL") or f"sqlite:///{_db_path}"
 os.environ["SECRET_KEY"] = "test-only-secret-do-not-deploy-12345"
 
-from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -156,9 +154,16 @@ def test_spud_sets_fractional_actual_days_from_the_spud_instant():
         drilling = entered.json()["scopes"][0]
         assert drilling["spud_at"].startswith("2026-10-19T10:00")
         assert drilling["is_completed"] is False
-        # With no report date given, the count runs to today (19/10 10:00 → end of today).
-        expected_today = Decimal((date.today() - date(2026, 10, 19)).days) + Decimal("0.583")
-        assert Decimal(drilling["actual_days"]) == expected_today
+        assert drilling["actual_days"] is None and drilling["as_of_date"] is None
+
+        # Without an explicit report date, the latest saved cost sheet is the
+        # inclusive end point; printing later must not keep increasing the days.
+        _post(client, "/api/v1/daily-cost/entries", headers, {
+            "well_id": well["id"], "afe_id": afe["id"], "cost_date": "2026-10-20", "remarks": "",
+        })
+        latest_sheet = client.get(path, headers=headers).json()["scopes"][0]
+        assert latest_sheet["as_of_date"] == "2026-10-20"
+        assert Decimal(latest_sheet["actual_days"]) == Decimal("1.583")
 
         # The user's example: the report prepared for 19-10-2026 counts 0.583 days.
         same_day = client.get(path, headers=headers, params={"as_of": "2026-10-19"})
@@ -203,11 +208,14 @@ def test_spud_cannot_be_cleared_only_edited_and_days_recalculate():
 def test_progress_completed_stops_the_count_and_freezes_the_variance():
     with TestClient(app) as client:
         headers = login(client)
-        well, *_ = setup_well(client, headers)
+        well, afe, *_ = setup_well(client, headers)
         path = f"/api/v1/daily-cost/wells/{well['id']}/progress"
         assert client.put(path, headers=headers, json={
             "scope": "drilling", "spud_at": "2026-10-19T10:00:00",
         }).status_code == 200
+        _post(client, "/api/v1/daily-cost/entries", headers, {
+            "well_id": well["id"], "afe_id": afe["id"], "cost_date": "2026-10-20", "remarks": "",
+        })
 
         completed = client.put(path, headers=headers, json={
             "scope": "drilling", "progress_completed_at": "2026-10-21T08:00:00",
@@ -218,7 +226,7 @@ def test_progress_completed_stops_the_count_and_freezes_the_variance():
         assert drilling["is_completed"] is True
         assert Decimal(drilling["actual_days"]) == Decimal("1.917")
         assert Decimal(drilling["days_variance"]) == Decimal("1.917") - Decimal("10")
-        assert drilling["as_of_date"] == date.today().isoformat()
+        assert drilling["as_of_date"] == "2026-10-20"
 
         later = client.get(path, headers=headers, params={"as_of": "2026-10-30"})
         assert Decimal(later.json()["scopes"][0]["actual_days"]) == Decimal("1.917")
@@ -228,6 +236,7 @@ def test_progress_completed_stops_the_count_and_freezes_the_variance():
         })
         assert resumed.status_code == 200, resumed.text
         assert resumed.json()["scopes"][0]["is_completed"] is False
+        assert Decimal(resumed.json()["scopes"][0]["actual_days"]) == Decimal("1.583")
         rolling = client.get(path, headers=headers, params={"as_of": "2026-10-30"})
         assert Decimal(rolling.json()["scopes"][0]["actual_days"]) == Decimal("11.583")
 
@@ -279,7 +288,8 @@ def test_day_sheet_summary_and_plan_adjustment_report_progress():
 
         summary = client.get(f"/api/v1/daily-cost/wells/{well['id']}/cost-summary", headers=headers).json()
         assert [row["scope"] for row in summary["progress"]] == ["drilling", "completion"]
-        assert Decimal(summary["totals"]["spud_actual_days"]) > 0
+        assert summary["progress"][0]["as_of_date"] == "2026-10-19"
+        assert Decimal(summary["totals"]["spud_actual_days"]) == Decimal("0.583")
 
         # An approved plan adjustment replaces the configured planned days.
         adjustment = _post(client, f"/api/v1/rig-well/wells/{well['id']}/plan-adjustments", headers, {

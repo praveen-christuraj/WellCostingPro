@@ -89,9 +89,10 @@ def update_well_progress(
     db: Db,
     user: Current,
     request: Request,
+    as_of: date | None = Query(default=None),
 ) -> DailyCostWellProgressReport:
     """Enter or edit the spud / progress completion milestones; the spud date can never be cleared."""
-    return service.update_well_progress(db, user.organization_id, well_id, data, user, request)
+    return service.update_well_progress(db, user.organization_id, well_id, data, user, request, as_of=as_of)
 
 
 @router.get(

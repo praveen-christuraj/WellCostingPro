@@ -3406,17 +3406,22 @@ def _progress_planned_days(
 
 
 def _well_progress_row(
-    db: Session, organization_id: str, well: Well, scope: str, *, as_of: date, cache: dict | None = None,
+    db: Session, organization_id: str, well: Well, scope: str, *, as_of: date | None, cache: dict | None = None,
 ) -> DailyCostWellProgress:
-    """One scope's milestones with the actual-day count to ``as_of`` (or to completion)."""
+    """One scope's milestones counted to its last cost sheet (or exact completion)."""
     spud: datetime | None = getattr(well, f"{scope}_spud_at")
     completed: datetime | None = getattr(well, f"{scope}_progress_completed_at")
     planned_days = _progress_planned_days(db, organization_id, well, scope, cache)
     actual_days: Decimal | None = None
     days_variance: Decimal | None = None
-    if spud is not None:
-        # Completed freezes the count; otherwise it runs to the end of the report date.
-        end = completed if completed is not None else datetime.combine(as_of + timedelta(days=1), dt_time.min)
+    if spud is not None and (completed is not None or as_of is not None):
+        # Completion freezes the count at its exact time. While progress is open,
+        # the latest cost sheet date is inclusive, so count through its end.
+        if completed is not None:
+            end = completed
+        else:
+            assert as_of is not None
+            end = datetime.combine(as_of + timedelta(days=1), dt_time.min)
         actual_days = _fractional_days(end - spud) if end > spud else Decimal("0.000")
         days_variance = (actual_days - planned_days).quantize(PROGRESS_DAY_QUANT, rounding=ROUND_HALF_UP)
     return DailyCostWellProgress(
@@ -3442,14 +3447,37 @@ def _entry_progress_row(db: Session, entry: DailyCostEntry, cache: dict | None =
     return _well_progress_row(db, entry.organization_id, well, scope, as_of=entry.cost_date, cache=cache)
 
 
+def _latest_cost_dates_by_scope(
+    db: Session, organization_id: str, well_id: str,
+) -> dict[str, date]:
+    """Latest active daily-sheet date for each AFE configuration scope."""
+    return {
+        str(scope or "drilling"): last_date
+        for scope, last_date in db.execute(
+            select(Afe.configuration_scope, func.max(DailyCostEntry.cost_date))
+            .join(Afe, Afe.id == DailyCostEntry.afe_id)
+            .where(
+                DailyCostEntry.organization_id == organization_id,
+                DailyCostEntry.well_id == well_id,
+                DailyCostEntry.is_deleted.is_(False),
+                Afe.organization_id == organization_id,
+            )
+            .group_by(Afe.configuration_scope)
+        ).all()
+        if last_date is not None
+    }
+
+
 def _progress_report_for_well(
-    db: Session, organization_id: str, well: Well, *, as_of: date, cache: dict | None = None,
+    db: Session, organization_id: str, well: Well, *, as_of: date | None = None, cache: dict | None = None,
 ) -> DailyCostWellProgressReport:
     cache = cache if cache is not None else {}
+    as_of_by_scope = ({scope: as_of for scope in PROGRESS_SCOPES}
+                      if as_of is not None else _latest_cost_dates_by_scope(db, organization_id, well.id))
     return DailyCostWellProgressReport(
         well_id=well.id, well_code=well.well_code, well_name=well.well_name,
         scopes=[
-            _well_progress_row(db, organization_id, well, scope, as_of=as_of, cache=cache)
+            _well_progress_row(db, organization_id, well, scope, as_of=as_of_by_scope.get(scope), cache=cache)
             for scope in PROGRESS_SCOPES
         ],
     )
@@ -3464,12 +3492,12 @@ def well_progress_report(
     ))
     if well is None:
         raise HTTPException(status_code=404, detail="Well not found in this workspace")
-    return _progress_report_for_well(db, organization_id, well, as_of=as_of or date.today())
+    return _progress_report_for_well(db, organization_id, well, as_of=as_of)
 
 
 def update_well_progress(
     db: Session, organization_id: str, well_id: str, data: DailyCostWellProgressUpdate,
-    user: User, request: Request | None,
+    user: User, request: Request | None, *, as_of: date | None = None,
 ) -> DailyCostWellProgressReport:
     """Enter or edit the register's milestones; the spud date can only be edited, never cleared."""
     try:
@@ -3526,7 +3554,7 @@ def update_well_progress(
                 )
 
             if not spud_changed and not completed_changed:
-                return _progress_report_for_well(db, organization_id, well, as_of=date.today())
+                return _progress_report_for_well(db, organization_id, well, as_of=as_of)
 
             setattr(well, attr_spud, new_spud)
             setattr(well, attr_completed, new_completed)
@@ -3541,7 +3569,8 @@ def update_well_progress(
                            f"{_progress_datetime_text(current_spud)} to {_progress_datetime_text(new_spud)}; "
                            "actual days recalculated from the edited date & time")
             elif completed_changed and new_completed is not None:
-                row = _well_progress_row(db, organization_id, well, data.scope, as_of=date.today())
+                last_cost_date = _latest_cost_dates_by_scope(db, organization_id, well.id).get(data.scope)
+                row = _well_progress_row(db, organization_id, well, data.scope, as_of=last_cost_date)
                 summary = (f"Set the {PROGRESS_COMPLETED_LABELS[data.scope]} for {well.well_code} to "
                            f"{_progress_datetime_text(new_completed)}; the day count stopped at "
                            f"{row.actual_days} actual days against {row.planned_days} planned days "
@@ -3553,7 +3582,7 @@ def update_well_progress(
                 db, user=user, action="update", entity_type="well_progress", entity_id=well.id,
                 label=label, summary=summary, request=request,
             )
-            report = _progress_report_for_well(db, organization_id, well, as_of=date.today())
+            report = _progress_report_for_well(db, organization_id, well, as_of=as_of)
             _commit(db)
             return report
     except HTTPException:
@@ -4110,12 +4139,17 @@ def well_cost_summary(
         if adjusted_planned is not None and adjusted_planned > 0
         else None
     )
-    # Progress milestones counted to today: one row per configuration scope. The
-    # spud-based day totals sum the scopes that have a spud instant, so a well
-    # with both progresses reports drilling and completion days together.
+    # Progress milestones count through the last cost sheet included in this
+    # report for each scope. An entered completion timestamp overrides that date
+    # inside _well_progress_row and freezes the count at the exact completion time.
     progress_cache: dict = {}
+    progress_as_of: dict[str, date] = {}
+    for entry in windowed:
+        scope = afe_scope.get(entry.afe_id, "drilling")
+        if scope not in progress_as_of or entry.cost_date > progress_as_of[scope]:
+            progress_as_of[scope] = entry.cost_date
     progress_rows = [
-        _well_progress_row(db, organization_id, well, scope, as_of=date.today(), cache=progress_cache)
+        _well_progress_row(db, organization_id, well, scope, as_of=progress_as_of.get(scope), cache=progress_cache)
         for scope in PROGRESS_SCOPES
     ]
     spudded_rows = [row for row in progress_rows if row.actual_days is not None]
