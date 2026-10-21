@@ -34,6 +34,7 @@ digraph WellCostingPro {
   "backend/app/domain/__init__.py";
   "backend/app/domain/afe_costing.py";
   "backend/app/domain/mud_cost.py";
+  "backend/app/domain/service_groups.py";
   "backend/app/main.py";
   "backend/app/models/__init__.py";
   "backend/app/models/afe.py";
@@ -136,6 +137,7 @@ digraph WellCostingPro {
   "frontend/src/lib/masterData.ts";
   "frontend/src/lib/mudCost.ts";
   "frontend/src/lib/rigWell.ts";
+  "frontend/src/lib/serviceGroups.ts";
   "frontend/src/lib/serviceMaster.ts";
   "frontend/src/lib/sowAdjustment.ts";
   "frontend/src/lib/types.ts";
@@ -244,6 +246,7 @@ digraph WellCostingPro {
   "backend/app/api/rig_well.py" -> "backend/app/services/__init__.py";
   "backend/app/api/rig_well.py" -> "backend/app/services/daily_cost.py";
   "backend/app/api/service_master.py" -> "backend/app/api/deps.py";
+  "backend/app/api/service_master.py" -> "backend/app/domain/service_groups.py";
   "backend/app/api/service_master.py" -> "backend/app/models/__init__.py";
   "backend/app/api/service_master.py" -> "backend/app/models/service_master.py";
   "backend/app/api/service_master.py" -> "backend/app/schemas/master_data.py";
@@ -300,6 +303,7 @@ digraph WellCostingPro {
   "backend/app/models/costing_set.py" -> "backend/app/core/database.py";
   "backend/app/models/costing_set.py" -> "backend/app/models/entities.py";
   "backend/app/models/daily_cost.py" -> "backend/app/core/database.py";
+  "backend/app/models/daily_cost.py" -> "backend/app/domain/service_groups.py";
   "backend/app/models/daily_cost.py" -> "backend/app/models/rig_well.py";
   "backend/app/models/entities.py" -> "backend/app/core/database.py";
   "backend/app/models/master_data.py" -> "backend/app/core/database.py";
@@ -308,6 +312,7 @@ digraph WellCostingPro {
   "backend/app/models/mud_cost.py" -> "backend/app/models/rig_well.py";
   "backend/app/models/rig_well.py" -> "backend/app/core/database.py";
   "backend/app/models/rig_well.py" -> "backend/app/models/master_data.py";
+  "backend/app/models/service_master.py" -> "backend/app/domain/service_groups.py";
   "backend/app/models/service_master.py" -> "backend/app/models/master_data.py";
   "backend/app/models/sow_adjustment.py" -> "backend/app/core/database.py";
   "backend/app/models/sow_adjustment.py" -> "backend/app/models/rig_well.py";
@@ -322,6 +327,7 @@ digraph WellCostingPro {
   "backend/app/schemas/mud_cost.py" -> "backend/app/core/precision.py";
   "backend/app/schemas/mud_cost.py" -> "backend/app/domain/mud_cost.py";
   "backend/app/schemas/rig_well.py" -> "backend/app/core/precision.py";
+  "backend/app/schemas/service_master.py" -> "backend/app/domain/service_groups.py";
   "backend/app/schemas/sow_adjustment.py" -> "backend/app/core/precision.py";
   "backend/app/seed.py" -> "backend/app/bootstrap.py";
   "backend/app/seed.py" -> "backend/app/core/migrations.py";
@@ -329,6 +335,7 @@ digraph WellCostingPro {
   "backend/app/seed.py" -> "backend/app/services/provisioning.py";
   "backend/app/services/afe.py" -> "backend/app/core/units.py";
   "backend/app/services/afe.py" -> "backend/app/domain/__init__.py";
+  "backend/app/services/afe.py" -> "backend/app/domain/service_groups.py";
   "backend/app/services/afe.py" -> "backend/app/models/__init__.py";
   "backend/app/services/afe.py" -> "backend/app/models/afe.py";
   "backend/app/services/afe.py" -> "backend/app/models/catalogue.py";
@@ -356,6 +363,7 @@ digraph WellCostingPro {
   "backend/app/services/catalogue_specs.py" -> "backend/app/services/catalogue.py";
   "backend/app/services/daily_cost.py" -> "backend/app/core/precision.py";
   "backend/app/services/daily_cost.py" -> "backend/app/core/units.py";
+  "backend/app/services/daily_cost.py" -> "backend/app/domain/service_groups.py";
   "backend/app/services/daily_cost.py" -> "backend/app/models/__init__.py";
   "backend/app/services/daily_cost.py" -> "backend/app/models/catalogue.py";
   "backend/app/services/daily_cost.py" -> "backend/app/models/daily_cost.py";
@@ -446,6 +454,7 @@ digraph WellCostingPro {
   "frontend/src/components/PlanAdjustmentDialog.tsx" -> "frontend/src/lib/rigWell.ts";
   "frontend/src/components/PlanAdjustmentDialog.tsx" -> "frontend/src/lib/sowAdjustment.ts";
   "frontend/src/components/ServiceFormDialog.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/components/ServiceFormDialog.tsx" -> "frontend/src/lib/serviceGroups.ts";
   "frontend/src/components/ServiceFormDialog.tsx" -> "frontend/src/lib/serviceMaster.ts";
   "frontend/src/components/ServiceFormDialog.tsx" -> "frontend/src/lib/vendorMaster.ts";
   "frontend/src/components/VendorFormDialog.tsx" -> "frontend/src/components/Common.tsx";
@@ -474,6 +483,7 @@ digraph WellCostingPro {
   "frontend/src/components/afe/AfeFormDialog.tsx" -> "frontend/src/lib/afe.ts";
   "frontend/src/components/afe/AfeFormDialog.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/components/afe/AfePrintSheet.tsx" -> "frontend/src/lib/afe.ts";
+  "frontend/src/components/afe/AfePrintSheet.tsx" -> "frontend/src/lib/serviceGroups.ts";
   "frontend/src/components/afe/AfePrintSheet.tsx" -> "frontend/src/lib/units.ts";
   "frontend/src/components/afe/AfeRegisterTab.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/afe/AfeRegisterTab.tsx" -> "frontend/src/components/DataTable.tsx";
@@ -500,6 +510,7 @@ digraph WellCostingPro {
   "frontend/src/components/afe/ConsumableLineDialog.tsx" -> "frontend/src/lib/afe.ts";
   "frontend/src/components/afe/ConsumableLineDialog.tsx" -> "frontend/src/lib/masterData.ts";
   "frontend/src/components/afe/LinePickers.tsx" -> "frontend/src/lib/afe.ts";
+  "frontend/src/components/afe/LinePickers.tsx" -> "frontend/src/lib/serviceGroups.ts";
   "frontend/src/components/afe/ServiceLineDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/afe/ServiceLineDialog.tsx" -> "frontend/src/components/afe/LinePickers.tsx";
   "frontend/src/components/afe/ServiceLineDialog.tsx" -> "frontend/src/lib/afe.ts";
@@ -553,9 +564,11 @@ digraph WellCostingPro {
   "frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx" -> "frontend/src/lib/units.ts";
   "frontend/src/components/daily-cost/DailyCostLineDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/daily-cost/DailyCostLineDialog.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/components/daily-cost/DailyCostLineDialog.tsx" -> "frontend/src/lib/serviceGroups.ts";
   "frontend/src/components/daily-cost/DailyCostLineDialog.tsx" -> "frontend/src/lib/units.ts";
   "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx" -> "frontend/src/lib/mudCost.ts";
+  "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx" -> "frontend/src/lib/serviceGroups.ts";
   "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx" -> "frontend/src/lib/units.ts";
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx" -> "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx";
@@ -578,6 +591,7 @@ digraph WellCostingPro {
   "frontend/src/context/ThemeContext.tsx" -> "frontend/src/theme.ts";
   "frontend/src/lib/dailyCost.ts" -> "frontend/src/lib/units.ts";
   "frontend/src/lib/rigWell.ts" -> "frontend/src/lib/units.ts";
+  "frontend/src/lib/serviceMaster.ts" -> "frontend/src/lib/serviceGroups.ts";
   "frontend/src/lib/sowAdjustment.ts" -> "frontend/src/lib/api.ts";
   "frontend/src/main.tsx" -> "frontend/src/App.tsx";
   "frontend/src/main.tsx" -> "frontend/src/context/AuthContext.tsx";
@@ -600,6 +614,7 @@ digraph WellCostingPro {
   "frontend/src/pages/AfeEstimate.tsx" -> "frontend/src/lib/costingSets.ts";
   "frontend/src/pages/AfeEstimate.tsx" -> "frontend/src/lib/masterData.ts";
   "frontend/src/pages/AfeEstimate.tsx" -> "frontend/src/lib/rigWell.ts";
+  "frontend/src/pages/AfeEstimate.tsx" -> "frontend/src/lib/serviceGroups.ts";
   "frontend/src/pages/AfeEstimate.tsx" -> "frontend/src/lib/units.ts";
   "frontend/src/pages/AfeManagement.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/AfeManagement.tsx" -> "frontend/src/components/afe/AfeDeletedTab.tsx";
@@ -787,6 +802,7 @@ digraph WellCostingPro {
   "frontend/src/pages/Services.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/Services.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/Services.tsx" -> "frontend/src/lib/export.ts";
+  "frontend/src/pages/Services.tsx" -> "frontend/src/lib/serviceGroups.ts";
   "frontend/src/pages/Services.tsx" -> "frontend/src/lib/serviceMaster.ts";
   "frontend/src/pages/Services.tsx" -> "frontend/src/lib/vendorMaster.ts";
   "frontend/src/pages/Tangibles.tsx" -> "frontend/src/components/Common.tsx";

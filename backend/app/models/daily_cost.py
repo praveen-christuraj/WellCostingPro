@@ -35,6 +35,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.domain.service_groups import SERVICE_GROUPS
 from app.models.rig_well import now, uid
 
 COST_CLASSIFICATIONS = ("Planned", "UPA", "NPT")
@@ -51,6 +52,13 @@ DAILY_CHARGE_CATEGORIES = (
     "Others",
 )
 DAILY_CONSUMABLE_CATEGORIES = ("Mud Chemicals", "Cement Additives", "Fuel", "Drill Bits")
+# Only service costs carry a reporting group; the other groups stay empty.
+def _service_group_check(column: str) -> str:
+    return f"{column} = '' OR {column} IN (" + ", ".join(f"'{group}'" for group in SERVICE_GROUPS) + ")"
+
+
+_BUDGET_SERVICE_GROUP_CHECK = _service_group_check("service_group")
+_SERVICE_LINE_GROUP_CHECK = _service_group_check("service_group_snapshot")
 # Unexpected, unbudgeted charges (Lost In Hole, hole problems, claims …). They are
 # recorded with the same operational scope as every other daily line, accounted in
 # their own cost group, and deducted explicitly from the locked AFE total.
@@ -238,6 +246,7 @@ class DailyCostBaselineBudgetLine(Base):
     __table_args__ = (
         CheckConstraint(_in("cost_group", ("Services", "Consumables", "Tangibles")), name="ck_daily_cost_budget_group"),
         CheckConstraint(_in("budget_kind", BUDGET_KINDS), name="ck_daily_cost_budget_kind"),
+        CheckConstraint(_BUDGET_SERVICE_GROUP_CHECK, name="ck_daily_cost_budget_service_group"),
         CheckConstraint("native_amount >= 0 AND planned_amount >= 0", name="ck_daily_cost_budget_amounts"),
         Index("ix_daily_cost_budget_lookup", "baseline_id", "budget_kind", "item_key"),
     )
@@ -254,6 +263,9 @@ class DailyCostBaselineBudgetLine(Base):
     item_key: Mapped[str] = mapped_column(String(64), nullable=False)
     item_code_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
     item_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Snapshot of the service's reporting group when the AFE was locked, so a
+    # later Master Data reclassification never reorders a historical report.
+    service_group: Mapped[str] = mapped_column(String(60), default="", server_default="", nullable=False)
     source_afe_line_id: Mapped[str] = mapped_column(String(36), nullable=False)
     section_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     phase_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -504,6 +516,7 @@ class DailyCostServiceLine(DailyCostLine):
         CheckConstraint(_in("classification", COST_CLASSIFICATIONS), name="ck_daily_cost_service_classification"),
         CheckConstraint(_in("charging_basis", DAILY_CHARGING_BASES), name="ck_daily_cost_service_basis"),
         CheckConstraint(_in("charge_category", DAILY_CHARGE_CATEGORIES), name="ck_daily_cost_service_category"),
+        CheckConstraint(_SERVICE_LINE_GROUP_CHECK, name="ck_daily_cost_service_group"),
         CheckConstraint("quantity >= 0", name="ck_daily_cost_service_quantity"),
         Index("ix_daily_cost_service_line_entry_order", "entry_id", "sort_order"),
     )
@@ -511,6 +524,8 @@ class DailyCostServiceLine(DailyCostLine):
     service_id: Mapped[str] = mapped_column(ForeignKey("services.id", ondelete="RESTRICT"), nullable=False, index=True)
     service_code_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
     service_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Reporting group at entry time, so unplanned services also print in order.
+    service_group_snapshot: Mapped[str] = mapped_column(String(60), default="", server_default="", nullable=False)
     charging_basis: Mapped[str] = mapped_column(String(30), nullable=False)
     charge_category: Mapped[str] = mapped_column(String(40), nullable=False)
     baseline_service_rate_id: Mapped[str | None] = mapped_column(

@@ -1,6 +1,7 @@
 import { Box, Divider, MenuItem, TextField, Typography } from '@mui/material'
 import { ErrorMessage, FormDialog, useFormDirty } from './Common'
 import { SERVICE_CATEGORIES, SERVICE_PROVIDER_TYPES, serviceFormToPayload, type ServiceFormState, type ServicePayload } from '../lib/serviceMaster'
+import { SERVICE_GROUPS, type ServiceGroup } from '../lib/serviceGroups'
 import type { VendorOption } from '../lib/vendorMaster'
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -31,6 +32,7 @@ export function ServiceFormDialog({ open, title, subtitle, form, setForm, vendor
     onSubmit={() => onSubmit(serviceFormToPayload(form))}
     busy={busy}
     dirty={dirty}
+    submitDisabled={!form.service_group}
     submitLabel={title.startsWith('Edit') ? 'Save changes' : 'Create service'}
   >
     <Box display="grid" gap={2} pt={.5}>
@@ -52,6 +54,18 @@ export function ServiceFormDialog({ open, title, subtitle, form, setForm, vendor
         onChange={event => setForm({ service_name: event.target.value })}
         inputProps={{ maxLength: 200 }}
       />
+      <TextField
+        select
+        label="Service group"
+        required
+        fullWidth
+        value={form.service_group}
+        error={!form.service_group}
+        onChange={event => setForm({ service_group: event.target.value as ServiceGroup })}
+        helperText="Report group: AFE and Daily Cost reports list services in this order — Rig Operations, Formation Evaluation, Well Services, Land Facilities and Preparation, Miscellaneous Services, Supervisions."
+      >
+        {SERVICE_GROUPS.map(group => <MenuItem key={group} value={group}>{group}</MenuItem>)}
+      </TextField>
       <Box display="grid" gap={2} gridTemplateColumns={{ xs: '1fr', sm: '1fr 1fr' }}>
         <TextField
           select

@@ -1,6 +1,7 @@
 import { createPortal } from 'react-dom'
 import { depthToMeters } from '../../lib/units'
 import { amountText, STATUS_LABEL, type AfeEstimate, type AfeStatusEvent, type ServiceLineOut } from '../../lib/afe'
+import { compareServiceCodes, compareServiceGroups, serviceGroupLabel } from '../../lib/serviceGroups'
 
 // Print layout for a saved AFE, in the fixed two-page AFE format:
 //   page 1 - title, well and AFE metadata, the service schedule with remarks,
@@ -59,8 +60,10 @@ function basisDetail(line: ServiceLineOut) {
 
 export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
   const { afe, well, services, consumables, tangibles, summary } = estimate
+  // Report order is the fixed service-group sequence, then natural service code.
   const printServices = [...services].sort((left, right) =>
-    left.service_code.localeCompare(right.service_code, undefined, { numeric: true, sensitivity: 'base' }))
+    compareServiceGroups(left.service_group, right.service_group)
+    || compareServiceCodes(left.service_code, right.service_code))
   const standard = summary.currency.standard_currency
   const printedAt = new Date().toLocaleString()
   const multiCurrency = summary.currency.multi_currency
@@ -152,7 +155,11 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
             {printServices.map((line, index) => (
               <tr className="ps-line" key={line.client_key ?? line.id ?? line.service_id}>
                 <td>{index + 1}</td>
-                <td><strong>{line.service_name}</strong><div className="ps-sub">{[line.provider_type, line.vendor_name || 'No vendor'].join(' · ')}</div></td>
+                <td>
+                  {serviceGroupLabel(line.service_group) && line.service_group !== printServices[index - 1]?.service_group
+                    && <span className="ps-group">{line.service_group} · </span>}
+                  <strong>{line.service_name}</strong><div className="ps-sub">{[line.provider_type, line.vendor_name || 'No vendor'].join(' · ')}</div>
+                </td>
                 <td>{line.charging_basis}{basisDetail(line)}</td>
                 <td className="num">{amountText(line.amount, line.currency)}</td>
                 <td className="ps-notes">{line.remarks || '—'}</td>

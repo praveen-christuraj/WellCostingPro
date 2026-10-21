@@ -55,9 +55,9 @@ const second = { ...day, entry: { ...day.entry, id: 'd2', afe_id: 'afe2', afe_co
       { cost_group: 'Services', planned: '3000', actual_to_date: '700', balance: '2300', actual_planned: '650', actual_upa: '50', actual_npt: '0' },
       { cost_group: 'Consumables', planned: '5000', actual_to_date: '100', balance: '4900', actual_planned: '100', actual_upa: '0', actual_npt: '0' }],
     budget_lines: [
-      { budget_key: 'service:20', budget_kind: 'service', item_code: 'SVC-20', item_name: 'Directional drilling', cost_group: 'Services', planned: '2000', actual_to_date: '400', balance: '1600', is_planned: true,
+      { budget_key: 'service:20', budget_kind: 'service', item_code: 'SVC-20', item_name: 'Directional drilling', service_group: 'Rig Operations', cost_group: 'Services', planned: '2000', actual_to_date: '400', balance: '1600', is_planned: true,
         actual_planned: '400', actual_upa: '0', actual_npt: '0' },
-      { budget_key: 'service:03', budget_kind: 'service', item_code: 'SVC-03', item_name: 'Mud logging', cost_group: 'Services', planned: '1000', actual_to_date: '300', balance: '700', is_planned: true,
+      { budget_key: 'service:03', budget_kind: 'service', item_code: 'SVC-03', item_name: 'Mud logging', service_group: 'Supervisions', cost_group: 'Services', planned: '1000', actual_to_date: '300', balance: '700', is_planned: true,
         actual_planned: '250', actual_upa: '50', actual_npt: '0' },
       { budget_key: 'consumable:Fuel', budget_kind: 'consumable_category', item_code: 'Fuel', item_name: 'Fuel allowance', cost_group: 'Consumables', planned: '7000', actual_to_date: '100', balance: '6900', is_planned: true },
       { budget_key: 'consumable:Mud Chemicals', budget_kind: 'consumable_category', item_code: 'Mud Chemicals', item_name: 'Mud Chemicals allowance', cost_group: 'Consumables', planned: '2000', actual_to_date: '250', balance: '1750', is_planned: true },
@@ -86,7 +86,8 @@ assert.ok(sheet.querySelector('.daily-report-cover'), 'the model-report summary 
 assert.ok(sheet.querySelector('.daily-report-details'), 'cumulative schedules follow the cover')
 const coverPanels = sheet.querySelectorAll('.daily-report-cover .dcr-cost-panel')
 const serviceNames = [...coverPanels[0].querySelectorAll('tbody tr')].map(row => row.cells[0].textContent)
-assert.deepEqual(serviceNames, ['Mud logging', 'Directional drilling'], 'services follow hidden natural service-code order')
+assert.deepEqual(serviceNames, ['Rig Operations · Directional drilling', 'Supervisions · Mud logging'],
+  'services print in reporting-group order before the hidden service code')
 const consumableRows = [...coverPanels[1].querySelectorAll('tbody tr')]
 const consumableNames = consumableRows.map(row => row.cells[0].textContent)
 assert.deepEqual(consumableNames, ['Mud Chemicals', 'Cement Additives', 'Fuel', 'Drill Bits'], 'consumables print the four fixed category totals only')
@@ -103,9 +104,9 @@ assert.deepEqual([...serviceHeaderRows[0].cells].map(cell => cell.textContent),
 assert.deepEqual([...serviceHeaderRows[1].cells].map(cell => cell.textContent), ['Planned', 'UPA', 'NPT'])
 const serviceBodyRows = [...servicePanel.querySelectorAll('tbody tr')]
 assert.equal(serviceBodyRows[0].cells.length, 8, 'a service row prints eight compacted cells')
-const mudLoggingSplit = serviceBodyRows.find(row => row.cells[0].textContent === 'Mud logging')
+const mudLoggingSplit = serviceBodyRows.find(row => row.cells[0].textContent === 'Supervisions · Mud logging')
 assert.deepEqual([...mudLoggingSplit.cells].map(cell => cell.textContent),
-  ['Mud logging', 'EUR 1,000.00', 'EUR 250.00', 'EUR 50.00', 'EUR 0.00', 'EUR 300.00', 'EUR 700.00', '30.00%'],
+  ['Supervisions · Mud logging', 'EUR 1,000.00', 'EUR 250.00', 'EUR 50.00', 'EUR 0.00', 'EUR 300.00', 'EUR 700.00', '30.00%'],
   'a service row prints planned, UPA and NPT actuals before the total actual')
 const serviceFooter = [...servicePanel.querySelectorAll('tfoot tr:last-child th')].map(cell => cell.textContent)
 assert.deepEqual(serviceFooter,
@@ -267,7 +268,7 @@ assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog
 assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
 assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
-console.log('Daily cost checks passed: advanced consumable/tangible bulk selection with required usage and locked prices, bulk depth/quantity/unit controls, editable milestone and lead/lag title suffix, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud and loss matrices, code-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
+console.log('Daily cost checks passed: advanced consumable/tangible bulk selection with required usage and locked prices, bulk depth/quantity/unit controls, editable milestone and lead/lag title suffix, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud and loss matrices, group-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
 
 dom.window.close()
 process.exit(0)

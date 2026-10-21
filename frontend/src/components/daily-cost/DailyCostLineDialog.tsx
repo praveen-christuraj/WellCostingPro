@@ -7,6 +7,7 @@ import {
   Checkbox,
   Collapse,
   Divider,
+  ListSubheader,
   MenuItem,
   Paper,
   Table,
@@ -19,6 +20,7 @@ import {
 } from '@mui/material'
 import { AddRounded, DeleteOutlineRounded, TuneRounded } from '@mui/icons-material'
 import { FormDialog, Tag } from '../Common'
+import { groupServiceOptions } from '../../lib/serviceGroups'
 import {
   DAILY_CONSUMABLE_CATEGORIES,
   OTHER_EXPENSE_MIN_REMARKS,
@@ -273,6 +275,8 @@ export function DailyCostLineDialog({
   onClose,
   onSave,
 }: Props) {
+  // Services offered in report order, grouped for the picker.
+  const serviceGroups = useMemo(() => groupServiceOptions(reference?.services ?? []), [reference])
   // Common Criteria State
   const [commonActivityId, setCommonActivityId] = useState('')
   const [commonSubActivityId, setCommonSubActivityId] = useState<string | null>(null)
@@ -1163,11 +1167,14 @@ export function DailyCostLineDialog({
                         sx={{ gridColumn: { sm: '1 / -1' } }}
                       >
                         <MenuItem value="">Select a service</MenuItem>
-                        {reference.services.map(s => (
-                          <MenuItem key={s.id} value={s.id}>
-                            {s.service_code} · {s.service_name}
-                          </MenuItem>
-                        ))}
+                        {serviceGroups.map(group => [
+                          <ListSubheader key={`group:${group.group || 'unclassified'}`} sx={{ fontWeight: 800, fontSize: 11, lineHeight: 2.4, textTransform: 'uppercase', letterSpacing: .4 }}>
+                            {group.group || 'Unclassified'}
+                          </ListSubheader>,
+                          ...group.options.map(s => (
+                            <MenuItem key={s.id} value={s.id}>{s.service_code} · {s.service_name}</MenuItem>
+                          )),
+                        ])}
                       </TextField>
 
                       {row.service_id && (

@@ -1,5 +1,7 @@
+import { useMemo } from 'react'
 import { Autocomplete, Box, TextField, Typography, type AutocompleteRenderInputParams } from '@mui/material'
 import { amountText, type AfeReference } from '../../lib/afe'
+import { serviceGroupLabel, sortServicesByGroup } from '../../lib/serviceGroups'
 
 type Service = AfeReference['services'][number]
 type Tangible = AfeReference['tangibles'][number]
@@ -23,21 +25,24 @@ export function ServicePicker({ value, options, onChange, error, helperText }: {
   error?: boolean
   helperText?: string
 }) {
-  const selected = options.find(option => option.id === value) ?? null
+  // Grouped, report-ordered options so the picker itself shows the taxonomy.
+  const groupedOptions = useMemo(() => sortServicesByGroup(options), [options])
+  const selected = groupedOptions.find(option => option.id === value) ?? null
   return <Autocomplete<Service, false, false, false>
-    options={options}
+    options={groupedOptions}
     value={selected}
     onChange={(_event, next) => onChange(next?.id ?? '')}
     getOptionLabel={option => `${option.service_code} · ${option.service_name}`}
-    filterOptions={keywordFilter(option => [option.service_code, option.service_name, option.service_category, option.provider_type, option.vendor_name, option.description])}
+    groupBy={option => serviceGroupLabel(option.service_group) || 'Unclassified'}
+    filterOptions={keywordFilter(option => [option.service_code, option.service_name, option.service_group, option.service_category, option.provider_type, option.vendor_name, option.description])}
     isOptionEqualToValue={(option, current) => option.id === current.id}
     renderOption={(props, option) => <li {...props} key={option.id}>
       <Box>
         <Typography fontSize={13} fontWeight={700}>{option.service_code} · {option.service_name}</Typography>
-        <Typography fontSize={11.5} color="text.secondary">{option.service_category} · {option.provider_type} · {option.vendor_name || 'No vendor'}</Typography>
+        <Typography fontSize={11.5} color="text.secondary">{[option.service_group, option.service_category, option.provider_type, option.vendor_name || 'No vendor'].filter(Boolean).join(' · ')}</Typography>
       </Box>
     </li>}
-    renderInput={(params: AutocompleteRenderInputParams) => <TextField {...params} label="Service" required error={error} helperText={helperText ?? 'Search by code, name, category, provider or vendor.'}/>}
+    renderInput={(params: AutocompleteRenderInputParams) => <TextField {...params} label="Service" required error={error} helperText={helperText ?? 'Search by code, name, group, category, provider or vendor.'}/>}
     noOptionsText="No services match. Add services in Master Data → Services."
     fullWidth
   />

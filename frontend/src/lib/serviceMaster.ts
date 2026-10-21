@@ -1,5 +1,7 @@
 // Typed contracts for the Services register in Master Data Management.
 
+import type { ServiceGroup } from './serviceGroups'
+
 export type ServiceCategory = 'Drilling Services' | 'Completion Services'
 export type ServiceProviderType = 'In House Services' | 'Third Party Services'
 
@@ -8,6 +10,7 @@ export type Service = {
   service_code: string
   service_name: string
   service_category: ServiceCategory
+  service_group: ServiceGroup
   provider_type: ServiceProviderType
   vendor_id: string | null
   vendor_code: string | null
@@ -25,6 +28,7 @@ export type ServiceOverview = {
   active_count: number
   deleted_count: number
   category_counts: ServiceBreakdown[]
+  group_counts: ServiceBreakdown[]
   provider_type_counts: ServiceBreakdown[]
 }
 
@@ -36,12 +40,15 @@ export const SERVICE_PROVIDER_TYPES: ServiceProviderType[] = ['In House Services
 export const SERVICE_IMPORT_HEADERS = [
   'service_code', 'service_name', 'provider_type', 'vendor_code', 'description',
 ]
-export const SERVICE_OPTIONAL_IMPORT_HEADERS = ['service_category']
+export const SERVICE_OPTIONAL_IMPORT_HEADERS = ['service_category', 'service_group']
 
 export const emptyServiceForm = {
   service_code: '',
   service_name: '',
   service_category: 'Drilling Services' as ServiceCategory,
+  // Deliberately blank: new services are classified explicitly. Legacy API
+  // clients and imports fall back to Miscellaneous Services on the server.
+  service_group: '' as ServiceGroup | '',
   provider_type: 'In House Services' as ServiceProviderType,
   vendor_id: '',
   description: '',
@@ -53,6 +60,7 @@ export const serviceToForm = (service: Service): ServiceFormState => ({
   service_code: service.service_code,
   service_name: service.service_name,
   service_category: service.service_category,
+  service_group: service.service_group,
   provider_type: service.provider_type,
   vendor_id: service.vendor_id ?? '',
   description: service.description,
@@ -62,6 +70,7 @@ export const serviceFormToPayload = (form: ServiceFormState) => ({
   service_code: form.service_code.trim(),
   service_name: form.service_name.trim(),
   service_category: form.service_category,
+  service_group: form.service_group,
   provider_type: form.provider_type,
   vendor_id: form.vendor_id || null,
   description: form.description.trim(),

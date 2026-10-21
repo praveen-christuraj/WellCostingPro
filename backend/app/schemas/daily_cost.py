@@ -379,6 +379,7 @@ class DailyCostServiceOption(BaseModel):
     service_code: str
     service_name: str
     service_category: str
+    service_group: str = ""
     provider_type: str
     vendor_id: str | None
     vendor_code: str
@@ -460,6 +461,7 @@ class DailyCostBaselineBudgetOut(BaseModel):
     item_key: str
     item_code: str
     item_name: str
+    service_group: str = ""
     source_afe_line_id: str
     section_id: str | None
     phase_id: str | None
@@ -545,6 +547,7 @@ class DailyCostServiceLineOut(DailyCostLineOut):
     service_id: str
     service_code: str
     service_name: str
+    service_group: str = ""
     charging_basis: ChargingBasis
     charge_category: ChargeCategory
     baseline_service_rate_id: str | None
@@ -595,6 +598,9 @@ class DailyCostBudgetComparison(BaseModel):
     budget_kind: str
     item_code: str
     item_name: str
+    # Reporting group snapshotted with the AFE allowance; empty for consumables,
+    # tangibles and unbudgeted actuals.
+    service_group: str = ""
     planned: Decimal
     actual_to_date: Decimal
     balance: Decimal

@@ -5,6 +5,7 @@ import {
   type DailyCostWellSummary,
 } from '../../lib/dailyCost'
 import { MUD_COST_LOSS_METRICS, type MudCostMaterialBalance, type MudCostReconciliation } from '../../lib/mudCost'
+import { compareServiceCodes, compareServiceGroups, serviceGroupLabel } from '../../lib/serviceGroups'
 import { depthToMeters } from '../../lib/units'
 
 export type CostPrintReport = {
@@ -87,9 +88,11 @@ function costName(label: string) {
 const CONSUMABLE_ORDER = ['Mud Chemicals', 'Cement Additives', 'Fuel', 'Drill Bits'] as const
 
 function reportCostRows(budgetLines: DailyCostComparisonLine[]) {
+  // Services print in the fixed reporting-group sequence, then by item code.
   const services = [...budgetLines]
     .filter(line => line.cost_group === 'Services')
-    .sort((left, right) => left.item_code.localeCompare(right.item_code, undefined, { numeric: true, sensitivity: 'base' }))
+    .sort((left, right) => compareServiceGroups(left.service_group, right.service_group)
+      || compareServiceCodes(left.item_code, right.item_code))
   const consumableGroups = new Map<string, DailyCostComparisonLine>()
   for (const line of budgetLines.filter(item => item.cost_group === 'Consumables')) {
     const source = `${line.budget_kind} ${line.budget_key} ${line.item_code} ${line.item_name}`.toLowerCase()
@@ -289,10 +292,14 @@ function ReportCover({ report }: { report: CostPrintReport }) {
           <tr><th rowSpan={2}>Cost item</th><th rowSpan={2}>AFE</th><th colSpan={3}>Actual cost by activity</th><th rowSpan={2}>Total actual</th><th rowSpan={2}>Balance</th><th rowSpan={2}>Used</th></tr>
           <tr><th>Planned</th><th>UPA</th><th>NPT</th></tr>
         </thead>
-        <tbody>{rows.map(row => {
+        <tbody>{rows.map((row, index) => {
           const rowSplit = classificationSplit(row)
           return <tr key={row.budget_key}>
-            <td>{costName(row.item_name)}</td>
+            <td>
+              {serviceGroupLabel(row.service_group) && row.service_group !== rows[index - 1]?.service_group
+                && <span className="dcr-group">{row.service_group} · </span>}
+              {costName(row.item_name)}
+            </td>
             <td className="num">{dailyMoney(row.planned, currency)}</td>
             <td className="num">{dailyMoney(rowSplit.planned, currency)}</td>
             <td className="num">{dailyMoney(rowSplit.upa, currency)}</td>
