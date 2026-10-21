@@ -70,9 +70,9 @@ MUD_COST_LINE_BY_CODE: Mapping[str, MudCostLineSpec] = {
 }
 
 # Consumption/loss reporting keeps the user-facing matrix stable while
-# retaining older captured rows. Legacy Shakers and the former `others`
-# category roll into the final Other-loss row so Surface + Other = all stock
-# deductions for every historical and current entry.
+# retaining older captured rows. Legacy Shakers and the consumption/losses
+# Others row roll into Other losses. The separate Others category is a distinct
+# adjustment section and is intentionally excluded from loss reporting.
 MUD_LOSS_SURFACE_LINES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("verti_g_mud_on_cuttings", "Verti-G/Mud on Cuttings", ("verti_g_mud_on_cuttings",)),
     ("centrifuge", "Centrifuge", ("centrifuge",)),
@@ -85,9 +85,8 @@ MUD_LOSS_OTHER_LINES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("formation_seepage", "Formation/Seepage", ("formation_seepage",)),
     ("pit_cleaning_dump", "Pit Cleaning/Dump", ("pit_cleaning_dump",)),
     ("left_in_hole", "Left-In-Hole", ("left_in_hole",)),
-    ("other_losses", "Others", (
-        "consumption_losses_others", "shakers", "offline_centrifuge_loss",
-        "backloads", "obm_left_in_hole", "other_losses_others",
+    ("other_losses", "Other losses", (
+        "consumption_losses_others", "shakers",
     )),
 )
 MUD_LOSS_REPORT_LINES = (*MUD_LOSS_SURFACE_LINES, *MUD_LOSS_OTHER_LINES)

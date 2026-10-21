@@ -54,7 +54,7 @@ export const MUD_COST_ENTRY_LINES: MudCostLineSpec[] = [
   { code: 'pit_cleaning_dump', category: 'consumption_losses', label: 'Pit Cleaning/Dump' },
   { code: 'trips', category: 'consumption_losses', label: 'Trips' },
   { code: 'left_in_hole', category: 'consumption_losses', label: 'Left-In-Hole' },
-  { code: 'consumption_losses_others', category: 'consumption_losses', label: 'Others' },
+  { code: 'consumption_losses_others', category: 'consumption_losses', label: 'Other losses' },
   { code: 'offline_centrifuge_loss', category: 'others', label: 'Offline Centrifuge Loss' },
   { code: 'backloads', category: 'others', label: 'Backloads' },
   { code: 'obm_left_in_hole', category: 'others', label: 'OBM Left-In-Hole' },
@@ -309,7 +309,7 @@ export const MUD_COST_LOSS_METRICS = [
   { key: 'formation_seepage', label: 'Formation/Seepage', group: 'other' },
   { key: 'pit_cleaning_dump', label: 'Pit Cleaning/Dump', group: 'other' },
   { key: 'left_in_hole', label: 'Left-In-Hole', group: 'other' },
-  { key: 'other_losses', label: 'Others', group: 'other' },
+  { key: 'other_losses', label: 'Other losses', group: 'other' },
   { key: 'other_loss_total', label: 'Other losses total', group: 'other-total' },
   { key: 'total_losses', label: 'Total losses', group: 'grand-total' },
 ] as const
