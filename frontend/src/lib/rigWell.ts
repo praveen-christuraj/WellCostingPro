@@ -43,7 +43,9 @@ export type RigOption = {
 
 export type Well = {
   completion_status: 'active' | 'completed'
-  completion_config_status: 'draft' | 'configured'
+  completion_config_status: 'draft' | 'configured' | 'final_review'
+  /** The scope this row represents when the page lists scope-segregated wells. */
+  scope?: 'drilling' | 'completion'
   completion_section_count: number
   id: string
   rig_id: string
@@ -61,12 +63,16 @@ export type Well = {
   objective: string
   remarks: string
   status: 'active' | 'completed'
-  config_status: 'draft' | 'configured'
+  config_status: 'draft' | 'configured' | 'final_review'
   depth_unit: 'm' | 'ft'
+  completion_depth_unit: 'm' | 'ft'
   standard_depth_unit?: 'm'
   total_depth: string | number | null
   total_depth_m?: string | number | null
   total_days: string | number
+  completion_total_depth: string | number | null
+  completion_total_depth_m?: string | number | null
+  completion_total_days: string | number
   section_count: number
   sub_activity_count: number
   is_deleted: boolean
@@ -113,8 +119,9 @@ export type WellConfiguration = {
   rig_code: string
   rig_name: string
   status: 'active' | 'completed'
-  config_status: 'draft' | 'configured'
+  config_status: 'draft' | 'configured' | 'final_review'
   depth_unit: 'm' | 'ft'
+  completion_depth_unit: 'm' | 'ft'
   standard_depth_unit?: 'm'
   total_depth: string | number | null
   total_depth_m?: string | number | null
@@ -183,6 +190,7 @@ export type RigWellOverview = {
   deleted_sub_activities: number
   configured_wells: number
   draft_wells: number
+  final_review_wells: number
   completed_wells: number
   activity_counts: RigWellActivityCount[]
   recent_activity: RigWellRecentActivity[]

@@ -19,7 +19,7 @@ import { DrillThroughPanel } from '../components/business-dashboard/DrillThrough
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import {
-  AFE_STATUS_LABELS, EMPTY_FILTERS, compactMoney, count, dashboardQuery, decimal, displayDate,
+  AFE_STATUS_LABELS, currentYearFilters, EMPTY_FILTERS, compactMoney, count, dashboardQuery, decimal, displayDate,
   displayDateTime, money, percent, presetRange,
   type BusinessDashboard as BusinessDashboardData, type DashboardAfeRow, type DashboardFilters,
   type DashboardRigRow, type DashboardWellRow, type Money,
@@ -85,7 +85,7 @@ function DepthCell({ row }: { row: DashboardWellRow }) {
 export default function BusinessDashboard() {
   const { can } = useAuth()
   const theme = useTheme()
-  const [filters, setFilters] = useState<DashboardFilters>(EMPTY_FILTERS)
+  const [filters, setFilters] = useState<DashboardFilters>(currentYearFilters())
   const [data, setData] = useState<BusinessDashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')

@@ -338,6 +338,8 @@ class DailyCostWellOption(BaseModel):
     display_name: str
     status: str
     config_status: str
+    completion_status: str = "active"
+    completion_config_status: str = "draft"
     sections: list[DailyCostSectionOption]
 
 

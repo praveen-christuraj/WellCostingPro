@@ -46,8 +46,8 @@ function fieldDefs<T extends object>(columns: ColDef<T>[]): FieldDef[] {
 export function DataTable<T extends object>({ rows, columns, rowKey = 'id', searchPlaceholder = 'Search records...', exportName = 'export', onImport, canExport = true, selectable = false, onSelectionChange, onExport, selectionResetKey, fillHeight = false, fillReserve = 0 }: {
   rows: T[]
   columns: ColDef<T>[]
-  // Field that uniquely identifies a row. AG Grid collapses rows that share an id, so this must be unique.
-  rowKey?: string
+  // Field that uniquely identifies a row, or a function that builds one from a row record.
+  rowKey?: string | ((row: T) => string)
   searchPlaceholder?: string
   exportName?: string
   onImport?: () => void
@@ -262,7 +262,11 @@ export function DataTable<T extends object>({ rows, columns, rowKey = 'id', sear
         onPaginationChanged={e => setPageSize(e.api.paginationGetPageSize())}
         rowSelection={selectable ? { mode: 'multiRow', checkboxes: true, headerCheckbox: true, selectAll: 'filtered' } : undefined}
         onSelectionChanged={event => onSelectionChange?.(event.api.getSelectedRows())}
-        getRowId={p => String((p.data as Record<string, unknown>)[rowKey])}
+        getRowId={p => {
+          const data = p.data as Record<string, unknown>
+          const value = typeof rowKey === 'function' ? (rowKey as (row: T) => string)(p.data as T) : data[rowKey]
+          return String(value ?? '')
+        }}
         overlayNoRowsTemplate='<span class="grid-empty">No records match the current search or filters.</span>'
         suppressCellFocus
       />

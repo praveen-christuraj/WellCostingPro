@@ -5,7 +5,7 @@ import {
   FilterAltOffOutlined, InsightsOutlined, RestoreRounded, RefreshRounded, PrintOutlined,
 } from '@mui/icons-material'
 import {
-  Alert, Box, Button, CircularProgress, MenuItem, Paper, TextField, Typography,
+  Alert, Box, Button, CircularProgress, MenuItem, Paper, Tab, Tabs, TextField, Typography,
 } from '@mui/material'
 import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
@@ -20,6 +20,14 @@ import {
 } from '../lib/dailyCost'
 import { formatDepthMeters } from '../lib/units'
 
+type CostTab = 'register' | 'final_review' | 'completed'
+
+const TABS: { key: CostTab; label: string }[] = [
+  { key: 'register', label: 'Daily cost register' },
+  { key: 'final_review', label: 'Wells for final review' },
+  { key: 'completed', label: 'Completed wells' },
+]
+
 type PendingAction = { kind: 'delete' | 'restore' | 'purge'; rows: DailyCostEntry[] }
 
 function isValidCostDate(value: string): boolean {
@@ -28,11 +36,19 @@ function isValidCostDate(value: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }
 
+function scopeState(well: DailyCostReference['wells'][number], scope: 'drilling' | 'completion') {
+  return scope === 'completion'
+    ? { status: well.completion_status, config_status: well.completion_config_status }
+    : { status: well.status, config_status: well.config_status }
+}
+
 export default function DailyCostManagement() {
   const { can } = useAuth()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const deletedView = params.get('view') === 'deleted'
+  const requested = params.get('tab')
+  const active: CostTab = TABS.some(tab => tab.key === requested) ? (requested as CostTab) : 'register'
   const [rows, setRows] = useState<DailyCostEntry[]>([])
   const [reference, setReference] = useState<DailyCostReference | null>(null)
   const [loading, setLoading] = useState(true)
@@ -82,7 +98,30 @@ export default function DailyCostManagement() {
 
   useEffect(() => { void load() }, [load])
 
-  const wells = useMemo(() => reference?.wells.filter(well => well.status === 'active' && well.config_status === 'configured') ?? [], [reference])
+  const wellsById = useMemo(() => Object.fromEntries((reference?.wells ?? []).map(well => [well.id, well])), [reference])
+  const afesById = useMemo(() => Object.fromEntries((reference?.afes ?? []).map(afe => [afe.id, afe])), [reference])
+
+  const rowScope = (row: DailyCostEntry) => {
+    const well = wellsById[row.well_id]
+    const afe = afesById[row.afe_id]
+    if (!well || !afe) return 'drilling'
+    return afe.configuration_scope as 'drilling' | 'completion'
+  }
+
+  const rowTab = (row: DailyCostEntry): CostTab => {
+    const well = wellsById[row.well_id]
+    const afe = afesById[row.afe_id]
+    if (!well || !afe) return 'register'
+    const state = scopeState(well, afe.configuration_scope as 'drilling' | 'completion')
+    if (state.config_status === 'final_review') return 'final_review'
+    if (state.status === 'completed') return 'completed'
+    return 'register'
+  }
+
+  const tabRows = useMemo(() => rows.filter(row => deletedView ? true : rowTab(row) === active), [rows, active, deletedView])
+
+  // Wells whose at least one scope is configured can take new daily sheets; the sheet's scope follows its AFE.
+  const wells = useMemo(() => reference?.wells.filter(well => well.status === 'active' && (well.config_status === 'configured' || well.completion_config_status === 'configured')) ?? [], [reference])
   const selectedWell = wells.find(well => well.id === wellId)
   const afes = useMemo(() => reference?.afes.filter(afe => afe.well_id === wellId) ?? [], [reference, wellId])
   const selectedAfe = afes.find(afe => afe.id === afeId)
@@ -90,8 +129,6 @@ export default function DailyCostManagement() {
   const usdRateValid = !needsUsdExchangeRate || (Number.isFinite(Number(usdExchangeRate)) && Number(usdExchangeRate) > 0)
   const createDateValid = isValidCostDate(costDate)
   const selectedDuplicate = rows.find(row => row.well_id === wellId && row.afe_id === afeId && row.cost_date === costDate)
-  // Configuring the well sub activity in Rig & Well Management is mandatory
-  // before daily cost entry: every line is recorded under an Activity + Sub activity.
   const wellSubActivities = useMemo(() => reference?.sub_activities.filter(item => item.well_id === wellId) ?? [], [reference, wellId])
   const missingSubActivities = Boolean(selectedWell) && wellSubActivities.length === 0
 
@@ -191,7 +228,7 @@ export default function DailyCostManagement() {
 
   const exportAudit = async (format: 'csv' | 'xlsx' | 'pdf', recordCount: number) => {
     await api('/daily-cost/export-audit', { method: 'POST', body: body({
-      module: deletedView ? 'deleted' : 'entries', format, record_count: recordCount, include_deleted: deletedView,
+      module: deletedView ? 'deleted' : `daily-cost-${active}`, format, record_count: recordCount, include_deleted: deletedView,
     }) })
   }
 
@@ -200,11 +237,11 @@ export default function DailyCostManagement() {
     { headerName: 'DAILY SHEET', field: 'daily_cost_code', minWidth: 230, flex: 1.1 },
     { headerName: 'WELL', field: 'well_code', minWidth: 150, valueGetter: params => `${params.data?.well_code ?? ''} · ${params.data?.well_name ?? ''}` },
     { headerName: 'AFE', field: 'afe_code', minWidth: 165, valueGetter: params => `${params.data?.afe_code ?? ''} · ${params.data?.afe_name ?? ''}` },
+    { headerName: 'SCOPE', field: 'id', minWidth: 115, maxWidth: 130, valueGetter: params => params.data ? rowScope(params.data) : '', cellRenderer: (params: ICellRendererParams<DailyCostEntry>) => <Box display="flex" alignItems="center" height="100%"><Tag tone="info">{params.value === 'completion' ? 'Completion' : 'Drilling'}</Tag></Box> },
     { headerName: 'ACTUAL DEPTH (m)', field: 'actual_depth', minWidth: 140, valueFormatter: params => formatDepthMeters(params.data?.actual_depth, 'm') },
     { headerName: 'DAILY TOTAL', field: 'total_cost', minWidth: 155, valueFormatter: params => dailyMoney(String(params.value ?? '0'), params.data?.standard_currency) },
     { headerName: 'USD TOTAL', field: 'total_cost_usd', minWidth: 150, valueFormatter: params => dailyMoney(String(params.value ?? params.data?.total_cost ?? '0'), 'USD') },
     {
-      // Unexpected charges are part of the day's cost and are deducted from the AFE.
       headerName: 'OTHER EXPENSES', field: 'other_expenses_total', minWidth: 160,
       cellRenderer: (params: ICellRendererParams<DailyCostEntry>) => {
         const row = params.data
@@ -233,9 +270,8 @@ export default function DailyCostManagement() {
             {can('daily-cost:permanent-delete') && <Button size="small" color="error" aria-label={`Permanently delete ${record.daily_cost_code}`} onClick={() => { setActionError(''); setPending({ kind: 'purge', rows: [record] }) }}><DeleteForeverOutlined sx={{ fontSize: 17 }}/></Button>}
           </> : can('daily-cost:delete') && record.status === 'draft' && <Button size="small" color="error" aria-label={`Move ${record.daily_cost_code} to Deleted Entries`} onClick={() => { setActionError(''); setPending({ kind: 'delete', rows: [record] }) }}><DeleteOutlineRounded sx={{ fontSize: 17 }}/></Button>}
         </Box>
-      },
-    },
-  ], [can, deletedView])
+      } },
+  ], [can, deletedView, reference])
 
   const pendingCount = pending?.rows.length ?? 0
   const actionTitle = pending?.kind === 'delete'
@@ -270,71 +306,80 @@ export default function DailyCostManagement() {
         {!deletedView && can('daily-cost:create') && <Button variant="contained" startIcon={<AddRounded/>} onClick={openCreate} disabled={!wells.length || !reference?.afes.length}>New daily sheet</Button>}
       </Box>}
     />
-    <ErrorMessage message={loadError}/>
-    {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
 
-    {!deletedView && <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 2, mb: 1.8 }}>
-      <Box display="grid" gap={1.3} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1.3fr 1.3fr .8fr .8fr .8fr auto' } }} alignItems="center">
-        <TextField select label="Filter by well" value={filterWell} onChange={event => {
-          const next = event.target.value
-          setFilterWell(next)
-          setFilterAfe('')
-        }} helperText="Daily basis for one well">
-          <MenuItem value="">All wells</MenuItem>
-          {(reference?.wells ?? []).map(well => <MenuItem key={well.id} value={well.id}>{well.well_code} · {well.well_name}</MenuItem>)}
-        </TextField>
-        <TextField select label="Filter by AFE" value={filterAfe} onChange={event => setFilterAfe(event.target.value)} disabled={!reference?.afes.length}>
-          <MenuItem value="">All AFEs</MenuItem>
-          {(reference?.afes ?? []).filter(afe => !filterWell || afe.well_id === filterWell)
-            .map(afe => <MenuItem key={afe.id} value={afe.id}>{afe.display_name}</MenuItem>)}
-        </TextField>
-        <TextField select label="Status" value={filterStatus} onChange={event => setFilterStatus(event.target.value as '' | DailyCostStatus)}>
-          <MenuItem value="">All</MenuItem>
-          <MenuItem value="draft">Draft</MenuItem>
-          <MenuItem value="submitted">Submitted</MenuItem>
-        </TextField>
-        <TextField type="date" label="Cost date from" value={dateFrom} onChange={event => setDateFrom(event.target.value)} InputLabelProps={{ shrink: true }}/>
-        <TextField type="date" label="to" value={dateTo} onChange={event => setDateTo(event.target.value)} InputLabelProps={{ shrink: true }}/>
-        <Button variant="outlined" startIcon={<FilterAltOffOutlined/>} onClick={() => {
-          setFilterWell(''); setFilterAfe(''); setFilterStatus(''); setDateFrom(''); setDateTo('')
-        }} disabled={!filtersActive}>Clear</Button>
-      </Box>
-      {filtersActive && <Alert severity="info" sx={{ mt: 1.3, py: .4 }}>
-        Showing {rows.length} daily sheet{rows.length === 1 ? '' : 's'} for the selected filters.
-        {dateFrom && dateTo && dateFrom > dateTo ? ' The start date is after the end date, so no sheet can match.' : ''}
-      </Alert>}
-    </Paper>}
+    {!deletedView && <Box borderBottom={1} borderColor="divider" mb={2}>
+      <Tabs value={active} onChange={(_event, value: CostTab) => setParams(value === 'register' ? {} : { tab: value })} aria-label="Daily cost tabs">
+        {TABS.map(tab => <Tab key={tab.key} value={tab.key} label={tab.label} id={`daily-cost-tab-${tab.key}`} aria-controls={`daily-cost-panel-${tab.key}`} />)}
+      </Tabs>
+    </Box>}
 
-    {loading && !rows.length ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <>
-      {selected.length > 0 && <Paper variant="outlined" sx={{ p: 1.4, borderRadius: 2, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-        <Typography fontSize={12} fontWeight={700} mr="auto">{selected.length} sheet{selected.length === 1 ? '' : 's'} selected</Typography>
-        {deletedView ? <>
-          {can('daily-cost:restore') && <Button size="small" startIcon={<RestoreRounded/>} onClick={() => { setActionError(''); setPending({ kind: 'restore', rows: selected }) }}>Restore selected</Button>}
-          {can('daily-cost:permanent-delete') && <Button size="small" color="error" startIcon={<DeleteForeverOutlined/>} onClick={() => { setActionError(''); setPending({ kind: 'purge', rows: selected }) }}>Delete permanently</Button>}
-        </> : can('daily-cost:delete') && <>
-          {selected.some(row => row.status !== 'draft') && <Typography fontSize={11} color="warning.dark">Submitted sheets must be reopened before deleting.</Typography>}
-          <Button size="small" color="error" startIcon={<DeleteOutlineRounded/>} disabled={selected.some(row => row.status !== 'draft')} onClick={() => { setActionError(''); setPending({ kind: 'delete', rows: selected }) }}>Move to Deleted Entries</Button>
-        </>}
-      </Paper>}
-      <DataTable
-        fillHeight
-        fillReserve={!loading && rows.length === 0 ? 40 : 0}
-        rows={rows}
-        columns={columns}
-        rowKey="id"
-        searchPlaceholder={deletedView ? 'Search deleted sheets by date, well, AFE or code…' : 'Search sheets by date, well, AFE, amount or status…'}
-        exportName={deletedView ? 'daily-cost-deleted' : 'daily-cost-register'}
-        canExport={can('daily-cost:export')}
-        onExport={can('daily-cost:export') ? exportAudit : undefined}
-        selectable={deletedView ? can('daily-cost:restore') || can('daily-cost:permanent-delete') : can('daily-cost:delete')}
-        onSelectionChange={setSelected}
-      />
-      {!loading && rows.length === 0 && <Typography color="text.secondary" fontSize={12} mt={1.2}>
-        {deletedView ? 'There are no deleted daily sheets.' : 'No daily sheets yet. Start from a saved AFE estimate on a configured well.'}
-      </Typography>}
-    </>}
+    {!deletedView && <Box role="tabpanel" id={`daily-cost-panel-${active}`} aria-labelledby={`daily-cost-tab-${active}`}>
+      <ErrorMessage message={loadError} />
+      {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
 
-    <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={filterWell}/>
+      <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 2, mb: 1.8 }}>
+        <Box display="grid" gap={1.3} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1.3fr 1.3fr .8fr .8fr .8fr auto' } }} alignItems="center">
+          <TextField select label="Filter by well" value={filterWell} onChange={event => {
+            const next = event.target.value
+            setFilterWell(next)
+            setFilterAfe('')
+          }} helperText="Daily basis for one well">
+            <MenuItem value="">All wells</MenuItem>
+            {(reference?.wells ?? []).map(well => <MenuItem key={well.id} value={well.id}>{well.well_code} · {well.well_name}</MenuItem>)}
+          </TextField>
+          <TextField select label="Filter by AFE" value={filterAfe} onChange={event => setFilterAfe(event.target.value)} disabled={!reference?.afes.length}>
+            <MenuItem value="">All AFEs</MenuItem>
+            {(reference?.afes ?? []).filter(afe => !filterWell || afe.well_id === filterWell)
+              .map(afe => <MenuItem key={afe.id} value={afe.id}>{afe.display_name}</MenuItem>)}
+          </TextField>
+          <TextField select label="Status" value={filterStatus} onChange={event => setFilterStatus(event.target.value as '' | DailyCostStatus)}>
+            <MenuItem value="">All</MenuItem>
+            <MenuItem value="draft">Draft</MenuItem>
+            <MenuItem value="submitted">Submitted</MenuItem>
+          </TextField>
+          <TextField type="date" label="Cost date from" value={dateFrom} onChange={event => setDateFrom(event.target.value)} InputLabelProps={{ shrink: true }} />
+          <TextField type="date" label="to" value={dateTo} onChange={event => setDateTo(event.target.value)} InputLabelProps={{ shrink: true }} />
+          <Button variant="outlined" startIcon={<FilterAltOffOutlined/>} onClick={() => {
+            setFilterWell(''); setFilterAfe(''); setFilterStatus(''); setDateFrom(''); setDateTo('')
+          }} disabled={!filtersActive}>Clear</Button>
+        </Box>
+        {filtersActive && <Alert severity="info" sx={{ mt: 1.3, py: .4 }}>
+          Showing {tabRows.length} daily sheet{tabRows.length === 1 ? '' : 's'} for the selected filters.
+          {dateFrom && dateTo && dateFrom > dateTo ? ' The start date is after the end date, so no sheet can match.' : ''}
+        </Alert>}
+      </Paper>
+
+      {loading && !rows.length ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26} /></Box> : <>
+        {selected.length > 0 && <Paper variant="outlined" sx={{ p: 1.4, borderRadius: 2, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <Typography fontSize={12} fontWeight={700} mr="auto">{selected.length} sheet{selected.length === 1 ? '' : 's'} selected</Typography>
+          {deletedView ? <>
+            {can('daily-cost:restore') && <Button size="small" startIcon={<RestoreRounded/>} onClick={() => { setActionError(''); setPending({ kind: 'restore', rows: selected }) }}>Restore selected</Button>}
+            {can('daily-cost:permanent-delete') && <Button size="small" color="error" startIcon={<DeleteForeverOutlined/>} onClick={() => { setActionError(''); setPending({ kind: 'purge', rows: selected }) }}>Delete permanently</Button>}
+          </> : can('daily-cost:delete') && <>
+            {selected.some(row => row.status !== 'draft') && <Typography fontSize={11} color="warning.dark">Submitted sheets must be reopened before deleting.</Typography>}
+            <Button size="small" color="error" startIcon={<DeleteOutlineRounded/>} disabled={selected.some(row => row.status !== 'draft')} onClick={() => { setActionError(''); setPending({ kind: 'delete', rows: selected }) }}>Move to Deleted Entries</Button>
+          </>}
+        </Paper>}
+        <DataTable
+          fillHeight
+          fillReserve={!loading && tabRows.length === 0 ? 40 : 0}
+          rows={tabRows}
+          columns={columns}
+          rowKey="id"
+          searchPlaceholder={deletedView ? 'Search deleted sheets by date, well, AFE or code…' : 'Search sheets by date, well, AFE, amount or status…'}
+          exportName={deletedView ? 'daily-cost-deleted' : `daily-cost-${active}`}
+          canExport={can('daily-cost:export')}
+          onExport={can('daily-cost:export') ? exportAudit : undefined}
+          selectable={deletedView ? can('daily-cost:restore') || can('daily-cost:permanent-delete') : can('daily-cost:delete')}
+          onSelectionChange={setSelected}
+        />
+        {!loading && tabRows.length === 0 && <Typography color="text.secondary" fontSize={12} mt={1.2}>
+          {deletedView ? 'There are no deleted daily sheets.' : 'No daily sheets yet. Start from a saved AFE estimate on a configured well.'}
+        </Typography>}
+      </>}
+    </Box>}
+
+    <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={filterWell} />
 
     <FormDialog open={createOpen} title="Start a daily cost sheet" subtitle="The first sheet locks the AFE estimate, FX factors, well plan, service rates and Master Data catalogue prices for this well/AFE." onClose={() => setCreateOpen(false)} onSubmit={() => void createEntry()} busy={creating} submitLabel="Create daily sheet" submitDisabled={!selectedAfe || !selectedWell || !createDateValid || !usdRateValid || Boolean(selectedDuplicate) || missingSubActivities}>
       <Box display="grid" gap={1.6}>
@@ -371,16 +416,16 @@ export default function DailyCostManagement() {
         {selectedDuplicate && <Alert severity="warning" sx={{ py: 0 }} action={<Button component={RouterLink} to={`/daily-cost/entries/${selectedDuplicate.id}`} size="small" color="inherit" onClick={() => setCreateOpen(false)}>Open existing</Button>}>
           A sheet already exists for this well, AFE and date. Open it to review or continue editing instead of creating a duplicate.
         </Alert>}
-        <TextField required type="date" label="Cost date" value={costDate} onChange={event => { setCostDate(event.target.value); setCreateError('') }} error={Boolean(costDate) && !createDateValid} helperText={Boolean(costDate) && !createDateValid ? 'Enter a real calendar date.' : 'Each well + AFE + date can have one sheet.'} InputLabelProps={{ shrink: true }}/>
-        <TextField label="Shift / day remarks" value={remarks} onChange={event => setRemarks(event.target.value)} multiline minRows={2} inputProps={{ maxLength: 1000 }}/>
-        <ErrorMessage message={createError}/>
+        <TextField required type="date" label="Cost date" value={costDate} onChange={event => { setCostDate(event.target.value); setCreateError('') }} error={Boolean(costDate) && !createDateValid} helperText={Boolean(costDate) && !createDateValid ? 'Enter a real calendar date.' : 'Each well + AFE + date can have one sheet.'} InputLabelProps={{ shrink: true }} />
+        <TextField label="Shift / day remarks" value={remarks} onChange={event => setRemarks(event.target.value)} multiline minRows={2} inputProps={{ maxLength: 1000 }} />
+        <ErrorMessage message={createError} />
       </Box>
     </FormDialog>
 
     <FormDialog open={Boolean(pending)} title={actionTitle ?? 'Confirm action'} subtitle={actionSubtitle} onClose={() => { if (!actionBusy) setPending(null) }} onSubmit={() => void act()} busy={actionBusy} submitLabel={pending?.kind === 'purge' ? 'Delete permanently' : pending?.kind === 'restore' ? 'Restore' : 'Move to Deleted Entries'} danger={pending?.kind === 'purge'}>
       <Box display="grid" gap={1.2}>
         {pending?.kind === 'purge' && <Alert severity="warning">Permanent deletion cannot be undone. The locked AFE budget and well rate snapshots are kept for audit until the AFE or well itself is permanently deleted from its Deleted Entries.</Alert>}
-        <ErrorMessage message={actionError}/>
+        <ErrorMessage message={actionError} />
       </Box>
     </FormDialog>
   </>

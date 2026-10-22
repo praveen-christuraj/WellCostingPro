@@ -258,15 +258,23 @@ def test_configuration_uses_workspace_master_data_and_enforces_lifecycle_and_dep
             f"/api/v1/rig-well/wells/{well['id']}/transition", headers=headers,
             json={"action": "configure", "remarks": "Plan checked"},
         ).status_code == 200
+        # A scope passes through "marked for final review" before completion.
+        marked = client.post(
+            f"/api/v1/rig-well/wells/{well['id']}/transition", headers=headers,
+            json={"action": "final_review", "scope": "drilling", "remarks": "Ready for final review"},
+        )
+        assert marked.status_code == 200, marked.text
+        assert marked.json()["config_status"] == "final_review"
         completed = client.post(
             f"/api/v1/rig-well/wells/{well['id']}/transition", headers=headers,
-            json={"action": "complete", "remarks": "Operations complete"},
+            json={"action": "complete", "scope": "drilling", "remarks": "Operations complete"},
         )
         assert completed.status_code == 200, completed.text
         assert completed.json()["status"] == "completed"
         lifecycle = client.get("/api/v1/rig-well/overview", headers=headers).json()
         assert lifecycle["active_wells"] == 0
         assert lifecycle["configured_wells"] == 0
+        assert lifecycle["final_review_wells"] == 0
         assert lifecycle["completed_wells"] == 1
         locked = client.put(f"/api/v1/rig-well/wells/{well['id']}/configuration", headers=headers, json=payload)
         assert locked.status_code == 409

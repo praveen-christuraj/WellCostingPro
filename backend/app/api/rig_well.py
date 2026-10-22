@@ -282,10 +282,10 @@ def _validation_message(error: ValidationError) -> str:
     )
 
 
-def _well_totals(well: Well) -> tuple[Decimal | None, Decimal]:
+def _well_totals(sections: Any) -> tuple[Decimal | None, Decimal]:
     total_depth: Decimal | None = None
     total_days = Decimal("0")
-    for section in well.sections:
+    for section in sections:
         total_depth = section.to_depth
         for phase in section.phases:
             total_days += phase.days
@@ -339,8 +339,13 @@ def _well_out_for(db: Session, organization_id: str, well: Well, sub_activity_co
     return _well_out(well, sub_activity_count, plan_adjustment=plan_map.get(well.id))
 
 
+def _section_totals(sections: Any) -> tuple[Decimal | None, Decimal]:
+    return _well_totals(list(sections))
+
+
 def _well_out(well: Well, sub_activity_count: int = 0, *, plan_adjustment: Any | None = None) -> WellOut:
-    total_depth, total_days = _well_totals(well)
+    drilling_depth, drilling_days = _well_totals(well.sections)
+    completion_depth, completion_days = _section_totals(well.completion_sections)
     rig = well.rig
     return WellOut(
         completion_status=well.completion_status,
@@ -364,9 +369,13 @@ def _well_out(well: Well, sub_activity_count: int = 0, *, plan_adjustment: Any |
         config_status=well.config_status,
         depth_unit=well.depth_unit,
         standard_depth_unit="m",
-        total_depth=total_depth,
-        total_depth_m=depth_to_meters(total_depth, well.depth_unit),
-        total_days=total_days,
+        total_depth=drilling_depth,
+        total_depth_m=depth_to_meters(drilling_depth, well.depth_unit),
+        total_days=drilling_days,
+        completion_depth_unit=well.completion_depth_unit,
+        completion_total_depth=completion_depth,
+        completion_total_depth_m=depth_to_meters(completion_depth, well.completion_depth_unit),
+        completion_total_days=completion_days,
         section_count=len(well.sections),
         sub_activity_count=sub_activity_count,
         is_deleted=well.is_deleted,
@@ -602,6 +611,14 @@ def overview(db: Db, user: Current) -> RigWellOverview:
         Well, deleted=False, extra=(Well.config_status == "configured", Well.status == "active")
     )
     draft_wells = count(Well, deleted=False, extra=(Well.config_status == "draft", Well.status == "active"))
+    final_review_wells = count(
+        Well,
+        deleted=False,
+        extra=(
+            Well.status == "active",
+            or_(Well.config_status == "final_review", Well.completion_config_status == "final_review"),
+        ),
+    )
     completed_wells = count(Well, deleted=False, extra=(Well.status == "completed",))
     active_blocks = count(Block, deleted=False)
     deleted_blocks = count(Block, deleted=True)
@@ -672,6 +689,7 @@ def overview(db: Db, user: Current) -> RigWellOverview:
         deleted_sub_activities=deleted_sub_activities,
         configured_wells=configured_wells,
         draft_wells=draft_wells,
+        final_review_wells=final_review_wells,
         completed_wells=completed_wells,
         activity_counts=activity_counts,
         recent_activity=[
@@ -2054,18 +2072,31 @@ def transition_well(
             raise HTTPException(status_code=409, detail="The well is already in Draft")
         well.set_scope_value(data.scope, "config_status", "draft")
         label = "Draft"
+    elif action == "final_review":
+        if well.scope_value(data.scope, "status") != "active":
+            raise HTTPException(status_code=409, detail="Reactivate the well before marking its scope for final review")
+        if well.scope_value(data.scope, "config_status") != "configured":
+            raise HTTPException(status_code=409, detail="The well is already marked for final review")
+        if not well.sections_for_scope(data.scope):
+            raise HTTPException(status_code=409, detail="Save at least one section and phase before marking the scope for final review")
+        well.set_scope_value(data.scope, "config_status", "final_review")
+        label = "marked for final review"
     elif action == "complete":
         if well.scope_value(data.scope, "status") != "active":
             raise HTTPException(status_code=409, detail="The well is already completed")
-        if well.scope_value(data.scope, "config_status") != "configured" or not well.sections_for_scope(data.scope):
-            raise HTTPException(status_code=409, detail="Configure the well before marking it completed")
+        if (
+            well.scope_value(data.scope, "config_status") != "final_review"
+            or not well.sections_for_scope(data.scope)
+        ):
+            raise HTTPException(status_code=409, detail="Mark the scope for final review before marking it completed")
         well.set_scope_value(data.scope, "status", "completed")
         label = "completed"
     else:
         if well.scope_value(data.scope, "status") != "completed":
             raise HTTPException(status_code=409, detail="Only a completed well can be reactivated")
         well.set_scope_value(data.scope, "status", "active")
-        label = "active"
+        well.set_scope_value(data.scope, "config_status", "configured")
+        label = "reactivated"
     _record_audit(
         db, user=user, action="update", entity_type="well", record_id=well.id,
         entity_label=well.well_code,

@@ -818,6 +818,8 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
         wells=[DailyCostWellOption(
             id=well.id, rig_id=well.rig_id, well_code=well.well_code, well_name=well.well_name,
             display_name=_label(well.well_code, well.well_name), status=well.status, config_status=well.config_status,
+            completion_status=well.completion_status,
+            completion_config_status=well.completion_config_status,
             sections=[DailyCostSectionOption(
                 hole_section_id=section.hole_section_id, section_code=section.hole_section.section_code,
                 section_name=section.hole_section.section_name,

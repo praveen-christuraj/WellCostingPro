@@ -285,8 +285,14 @@ export type DashboardFilters = {
   includeDraft: boolean
 }
 
-export const EMPTY_FILTERS: DashboardFilters = {
-  from: '', to: '', rig: '', well: '', afe: '', afeType: '', status: '', currency: '', includeDraft: true,
+export const EMPTY_FILTERS: DashboardFilters = { from: '', to: '', rig: '', well: '', afe: '', afeType: '', status: '', currency: '', includeDraft: true }
+
+// Without an explicit query the dashboard shows the current year only; "All
+// time" (inception) and any other range must be chosen on the filter bar.
+export function currentYearFilters(): DashboardFilters {
+  const today = new Date()
+  const iso = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return { ...EMPTY_FILTERS, from: `${today.getFullYear()}-01-01`, to: iso(today) }
 }
 
 export function dashboardQuery(filters: Partial<DashboardFilters>): string {
