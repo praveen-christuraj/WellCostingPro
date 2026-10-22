@@ -24,7 +24,7 @@ from app.schemas.catalogue import FuelRevise
 from app.schemas.daily_cost import DailyCostEntryCreate
 from app.schemas.mud_cost import MudCostLineIn
 from app.schemas.rig_well import ConfigurationPhaseIn, ConfigurationSectionIn
-from app.schemas.sow_adjustment import AfeSowAdjustmentCreate, WellPlanAdjustmentCreate
+from app.schemas.sow_adjustment import AfeSowServiceLineIn, PlanPhaseIn
 from app.services.catalogue import final_cost
 from app.services.daily_cost import _fx, _money, _rate
 
@@ -62,17 +62,17 @@ def test_shared_decimal_contract_accepts_ten_places_and_rejects_eleven():
             "usd_exchange_rate",
         ),
         (
-            AfeSowAdjustmentCreate,
+            AfeSowServiceLineIn,
             {
-                "reason": "precision correction", "adjusted_services_total": TEN_PLACES,
-                "adjusted_consumables_total": "0", "adjusted_tangibles_total": "0",
+                "service_id": "service", "charging_basis": "Day Rate",
+                "currency": "USD", "service_amount": TEN_PLACES,
             },
-            "adjusted_services_total",
+            "service_amount",
         ),
         (
-            WellPlanAdjustmentCreate,
-            {"reason": "precision correction", "planned_days_after": TEN_PLACES},
-            "planned_days_after",
+            PlanPhaseIn,
+            {"phase_id": "phase", "days": TEN_PLACES},
+            "days",
         ),
     ],
 )

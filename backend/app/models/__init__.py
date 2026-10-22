@@ -51,4 +51,17 @@ from app.models.fuel_cost import (
     FuelCostCompanyLine,
     FuelCostEntry,
 )
-from app.models.sow_adjustment import AfeSowAdjustment, DailyCostAmendment, WellPlanAdjustment
+from app.models.sow_adjustment import (
+    AfeSowAdjustment,
+    AfeSowConsumableLine,
+    AfeSowExchangeRate,
+    AfeSowServiceCharge,
+    AfeSowServiceLine,
+    AfeSowServiceRate,
+    AfeSowServiceSectionRate,
+    AfeSowTangibleLine,
+    DailyCostAmendment,
+    WellPlanAdjustment,
+    WellPlanAdjustmentPhase,
+    WellPlanAdjustmentSection,
+)

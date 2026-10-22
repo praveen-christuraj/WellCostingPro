@@ -296,8 +296,12 @@ def test_day_sheet_summary_and_plan_adjustment_report_progress():
 
         # An approved plan adjustment replaces the configured planned days.
         adjustment = _post(client, f"/api/v1/rig-well/wells/{well['id']}/plan-adjustments", headers, {
-            "configuration_scope": "drilling", "planned_days_after": "12.5",
-            "section_count_after": 1, "reason": "Added a contingency window",
+            "configuration_scope": "drilling", "reason": "Added a contingency window",
+            "sections": [{
+                "pair_key": "s0", "hole_section_id": hole["id"],
+                "from_depth": "0", "to_depth": "1000", "remarks": "",
+                "phases": [{"pair_key": "p0-0", "phase_id": phase["id"], "days": "12.5", "remarks": ""}],
+            }],
         })
         approved = client.post(
             f"/api/v1/rig-well/plan-adjustments/{adjustment['id']}/approve", headers=headers, json={"remarks": ""},
