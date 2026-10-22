@@ -1,5 +1,26 @@
 import { depthToMeters } from './units'
 
+export type Block = {
+  id: string
+  block_code: string
+  block_name: string
+  description: string
+  well_count: number
+  is_deleted: boolean
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type BlockOption = {
+  id: string
+  block_code: string
+  block_name: string
+  description: string
+  display_name: string
+  well_count: number
+}
+
 export type Rig = {
   id: string
   rig_code: string
@@ -32,6 +53,10 @@ export type Well = {
   well_code: string
   well_name: string
   well_location: string
+  block_id: string
+  block_code: string
+  block_name: string
+  /** Block name, kept flat so printed reports and dashboards read one field. */
   block: string
   objective: string
   remarks: string
@@ -121,7 +146,7 @@ export type SubActivity = {
 
 export type DeletedRigWellRecord = {
   id: string
-  entity_type: 'rig' | 'well' | 'well_sub_activity'
+  entity_type: 'block' | 'rig' | 'well' | 'well_sub_activity'
   code: string
   name: string
   parent_label: string
@@ -139,7 +164,17 @@ export type RigWellRecentActivity = {
   created_at: string
 }
 
+export type RigWellBlockCount = {
+  block_id: string
+  block_code: string
+  block_name: string
+  well_count: number
+}
+
 export type RigWellOverview = {
+  active_blocks: number
+  deleted_blocks: number
+  block_counts: RigWellBlockCount[]
   active_rigs: number
   deleted_rigs: number
   active_wells: number
@@ -161,13 +196,14 @@ export type RigWellConfigurationOptions = {
   phases: MasterConfigurationOption[]
 }
 
+export type BlockPayload = { block_code: string; block_name: string; description: string }
 export type RigPayload = { rig_code: string; rig_name: string; remarks: string }
 export type WellPayload = {
   rig_id: string
+  block_id: string
   well_code: string
   well_name: string
   well_location: string
-  block: string
   objective: string
   remarks: string
 }
@@ -180,19 +216,22 @@ export type SubActivityPayload = {
   description: string
 }
 
+export const BLOCK_IMPORT_HEADERS = ['block_code', 'block_name']
+export const BLOCK_IMPORT_OPTIONAL_HEADERS = ['description']
 export const RIG_IMPORT_HEADERS = ['rig_code', 'rig_name']
 export const RIG_IMPORT_OPTIONAL_HEADERS = ['remarks']
 export const WELL_IMPORT_HEADERS = [
-  'rig_code', 'well_code', 'well_name', 'well_location', 'block', 'objective',
+  'rig_code', 'block_code', 'well_code', 'well_name', 'well_location', 'objective',
 ]
 export const WELL_IMPORT_OPTIONAL_HEADERS = ['remarks']
 export const SUB_ACTIVITY_IMPORT_HEADERS = [
   'sub_activity_code', 'sub_activity_name', 'activity', 'responsible_party', 'description',
 ]
 
+export const emptyBlockForm = (): BlockPayload => ({ block_code: '', block_name: '', description: '' })
 export const emptyRigForm = (): RigPayload => ({ rig_code: '', rig_name: '', remarks: '' })
 export const emptyWellForm = (): WellPayload => ({
-  rig_id: '', well_code: '', well_name: '', well_location: '', block: '', objective: '', remarks: '',
+  rig_id: '', block_id: '', well_code: '', well_name: '', well_location: '', objective: '', remarks: '',
 })
 export const emptySubActivityForm = (wellId = ''): SubActivityPayload => ({
   well_id: wellId,
@@ -226,6 +265,7 @@ export function formatDays(value: string | number | null | undefined): string {
 }
 
 export function entityLabel(kind: DeletedRigWellRecord['entity_type']): string {
+  if (kind === 'block') return 'Block'
   if (kind === 'rig') return 'Rig'
   if (kind === 'well') return 'Well'
   return 'Well sub activity'

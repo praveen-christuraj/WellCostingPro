@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
-import { AddRounded, BusinessOutlined, FactCheckOutlined, LanguageOutlined, RefreshRounded, TaskAltOutlined } from '@mui/icons-material'
+import { AddRounded, BusinessOutlined, FactCheckOutlined, GridViewOutlined, LanguageOutlined, RefreshRounded, TaskAltOutlined } from '@mui/icons-material'
 import { Alert, Box, Button, CircularProgress, List, ListItem, ListItemText, Paper, Typography, useTheme } from '@mui/material'
 import { ErrorMessage, PageHeading, Tag } from '../components/Common'
 import { useAuth } from '../context/AuthContext'
@@ -87,9 +87,10 @@ export default function RigWellOverview() {
     <PageHeading
       eyebrow="BUSINESS OPERATIONS / RIG & WELL MANAGEMENT"
       title="Rig & Well Management"
-      subtitle="A single operational directory for rigs, rig-scoped wells, well plans and well-scoped sub activities."
+      subtitle="A single operational directory for blocks, rigs, rig-scoped wells, well plans and well-scoped sub activities."
       action={<Box display="flex" gap={1} flexWrap="wrap">
         <Button variant="outlined" startIcon={<RefreshRounded/>} onClick={() => void load()} disabled={busy}>Refresh</Button>
+        {can('rig-well:create') && <Button component={RouterLink} to="/rig-well/blocks" variant="outlined" startIcon={<AddRounded/>}>Add block</Button>}
         {can('rig-well:create') && <Button component={RouterLink} to="/rig-well/rigs" variant="outlined" startIcon={<AddRounded/>}>Add rig</Button>}
         {can('rig-well:create') && <Button component={RouterLink} to="/rig-well/wells" variant="contained" startIcon={<AddRounded/>}>Add well</Button>}
       </Box>}
@@ -97,7 +98,8 @@ export default function RigWellOverview() {
 
     <ErrorMessage message={error}/>
     {busy && !overview ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={28}/></Box> : overview && <>
-      <Box className="stat-grid" sx={{ gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(6, minmax(0, 1fr))' }, mb: 2.5 }}>
+      <Box className="stat-grid" sx={{ gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, mb: 2.5 }}>
+        <StatCard label="Active blocks" value={overview.active_blocks} hint={`${overview.deleted_blocks} retained in Deleted Entries`} icon={<GridViewOutlined sx={{ fontSize: 18 }}/> } tone="slate"/>
         <StatCard label="Active rigs" value={overview.active_rigs} hint={`${overview.deleted_rigs} retained in Deleted Entries`} icon={<BusinessOutlined sx={{ fontSize: 18 }}/>}/>
         <StatCard label="Active wells" value={overview.active_wells} hint={`${overview.deleted_wells} deleted wells`} icon={<LanguageOutlined sx={{ fontSize: 18 }}/> } tone="blue"/>
         <StatCard label="In planning" value={overview.draft_wells} hint="Active wells with a draft plan" icon={<FactCheckOutlined sx={{ fontSize: 18 }}/> } tone="slate"/>
@@ -105,14 +107,31 @@ export default function RigWellOverview() {
         <StatCard label="Sub activities" value={overview.active_sub_activities} hint={`${overview.deleted_sub_activities} retained in Deleted Entries`} icon={<TaskAltOutlined sx={{ fontSize: 18 }}/>}/>
         <Paper className="stat-card" variant="outlined" sx={{ p: 2.2, borderRadius: 2, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <Typography color="text.secondary" fontSize={11} fontWeight={800} letterSpacing={.8} textTransform="uppercase">Operational structure</Typography>
-          <Typography fontWeight={800} fontSize={15} mt={1}>Rig → Well → Sub activity</Typography>
-          <Typography color="text.secondary" fontSize={11.5} mt={.6}>Activities, phases and hole sections are managed in Master Data.</Typography>
+          <Typography fontWeight={800} fontSize={15} mt={1}>Block → Rig → Well → Sub activity</Typography>
+          <Typography color="text.secondary" fontSize={11.5} mt={.6}>Block codes are the well segregation key; activities, phases and hole sections are managed in Master Data.</Typography>
         </Paper>
       </Box>
 
-      {overview.active_rigs === 0 && <Alert severity="info" sx={{ mb: 2.2 }}>
-        Start with a rig. Wells are created under a rig, and well sub activities are classified by an Activity in Master Data.
+      {overview.active_blocks === 0 && <Alert severity="info" sx={{ mb: 2.2 }} action={can('rig-well:create') ? <Button component={RouterLink} to="/rig-well/blocks" size="small">Create a block</Button> : undefined}>
+        Start with a block and a rig. Every well belongs to one block and one rig, and well sub activities are classified by an Activity in Master Data.
       </Alert>}
+
+      <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2, mb: 2.2 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap">
+          <Box>
+            <Typography fontFamily="Manrope" fontWeight={800} fontSize={15}>Wells by block</Typography>
+            <Typography color="text.secondary" fontSize={12} mt={.35}>Active wells segregated by the block they belong to.</Typography>
+          </Box>
+          <Button component={RouterLink} to="/rig-well/wells" size="small" variant="outlined">Open well register</Button>
+        </Box>
+        {overview.block_counts.length ? <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: '1fr 1fr', lg: '1fr 1fr 1fr' }} gap={1.2} mt={1.8}>
+          {overview.block_counts.map(block => <Box key={block.block_id} className="stat-card" sx={{ border: 1, borderColor: 'divider', borderRadius: 1.5, p: 1.5 }}>
+            <Typography fontSize={11} fontWeight={800} letterSpacing={.6} color="text.secondary" textTransform="uppercase">{block.block_code}</Typography>
+            <Typography fontWeight={800} fontSize={14} mt={.3}>{block.block_name}</Typography>
+            <Typography color="text.secondary" fontSize={12} mt={.4}>{block.well_count.toLocaleString()} active {block.well_count === 1 ? 'well' : 'wells'}</Typography>
+          </Box>)}
+        </Box> : <Typography color="text.secondary" fontSize={13} py={2.5}>No blocks yet. Create a block to segregate wells in this workspace.</Typography>}
+      </Paper>
 
       <Box display="grid" gridTemplateColumns={{ xs: '1fr', lg: '1.1fr .9fr' }} gap={2.2}>
         <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2, minHeight: 330 }}>

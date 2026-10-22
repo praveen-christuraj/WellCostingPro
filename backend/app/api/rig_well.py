@@ -1,9 +1,10 @@
 """Tenant-scoped Rig & Well Management APIs.
 
-Rigs own wells. Well configuration uses the workspace's Hole Sections and
-Phases master data, while well sub activities are tied to one well and one
-workspace Activity. All business rows are soft-deleted first, exports/imports
-and lifecycle changes are audited, and every lookup is organization-scoped.
+Blocks group wells by concession / field area and rigs own wells. Well
+configuration uses the workspace's Hole Sections and Phases master data, while
+well sub activities are tied to one well and one workspace Activity. All
+business rows are soft-deleted first, exports/imports and lifecycle changes
+are audited, and every lookup is organization-scoped.
 """
 
 from collections import defaultdict
@@ -23,6 +24,7 @@ from app.models import (
     Activity,
     Afe,
     AuditLog,
+    Block,
     DailyCostConsumableLine,
     DailyCostEntry,
     DailyCostOtherExpenseLine,
@@ -49,6 +51,10 @@ from app.services.retention import (
     snapshot_summary,
 )
 from app.schemas.rig_well import (
+    BlockCreate,
+    BlockDropdownOut,
+    BlockOut,
+    BlockUpdate,
     DeletedRigWellRecord,
     DeletedSelection,
     RigCreate,
@@ -56,6 +62,7 @@ from app.schemas.rig_well import (
     RigUpdate,
     RigOut,
     RigWellActivityCount,
+    RigWellBlockCount,
     RigWellBulkActionResponse,
     RigWellExportAudit,
     RigWellIDs,
@@ -80,8 +87,9 @@ from app.services import audit
 router = APIRouter(prefix="/rig-well", tags=["Rig & Well Management"])
 
 IMPORT_MAX_ROWS = 5000
-RECENT_AUDIT_TYPES = ("rig", "well", "well_configuration", "well_sub_activity")
+RECENT_AUDIT_TYPES = ("block", "rig", "well", "well_configuration", "well_sub_activity")
 ENTITY_MODELS: dict[str, Any] = {
+    "block": Block,
     "rig": Rig,
     "well": Well,
     "well_sub_activity": WellSubActivity,
@@ -144,6 +152,53 @@ def _rig_or_404(
     if rig is None:
         raise HTTPException(status_code=404, detail="Rig not found in this workspace")
     return rig
+
+
+def _block_or_404(
+    db: Session,
+    block_id: str,
+    organization_id: str,
+    *,
+    include_deleted: bool = True,
+) -> Block:
+    statement = select(Block).where(
+        Block.id == block_id,
+        Block.organization_id == organization_id,
+    )
+    if not include_deleted:
+        statement = statement.where(Block.is_deleted.is_(False))
+    block = db.scalar(statement)
+    if block is None:
+        raise HTTPException(status_code=404, detail="Block not found in this workspace")
+    return block
+
+
+def _block_well_counts(db: Session, organization_id: str) -> dict[str, int]:
+    """Active wells per block, used by the register, dropdown and overview."""
+    rows = db.execute(
+        select(Well.block_id, func.count(Well.id))
+        .where(
+            Well.organization_id == organization_id,
+            Well.is_deleted.is_(False),
+            Well.status == "active",
+        )
+        .group_by(Well.block_id)
+    ).all()
+    return {block_id: int(value) for block_id, value in rows}
+
+
+def _block_out(block: Block, well_count: int = 0) -> BlockOut:
+    return BlockOut(
+        id=block.id,
+        block_code=block.block_code,
+        block_name=block.block_name,
+        description=block.description or "",
+        well_count=well_count,
+        is_deleted=block.is_deleted,
+        deleted_at=block.deleted_at,
+        created_at=block.created_at,
+        updated_at=block.updated_at,
+    )
 
 
 def _well_or_404(
@@ -299,6 +354,9 @@ def _well_out(well: Well, sub_activity_count: int = 0, *, plan_adjustment: Any |
         well_code=well.well_code,
         well_name=well.well_name,
         well_location=well.well_location,
+        block_id=well.block_id,
+        block_code=well.block_record.block_code if well.block_record else "",
+        block_name=well.block_record.block_name if well.block_record else "",
         block=well.block,
         objective=well.objective,
         remarks=well.remarks or "",
@@ -545,6 +603,23 @@ def overview(db: Db, user: Current) -> RigWellOverview:
     )
     draft_wells = count(Well, deleted=False, extra=(Well.config_status == "draft", Well.status == "active"))
     completed_wells = count(Well, deleted=False, extra=(Well.status == "completed",))
+    active_blocks = count(Block, deleted=False)
+    deleted_blocks = count(Block, deleted=True)
+    block_well_counts = _block_well_counts(db, org_id)
+    block_rows = db.scalars(
+        select(Block)
+        .where(Block.organization_id == org_id, Block.is_deleted.is_(False))
+        .order_by(Block.block_code)
+    ).all()
+    block_counts = [
+        RigWellBlockCount(
+            block_id=block.id,
+            block_code=block.block_code,
+            block_name=block.block_name,
+            well_count=block_well_counts.get(block.id, 0),
+        )
+        for block in block_rows
+    ]
 
     activity_rows = db.execute(
         select(
@@ -586,6 +661,9 @@ def overview(db: Db, user: Current) -> RigWellOverview:
             .limit(8)
         ).all()
     return RigWellOverview(
+        active_blocks=active_blocks,
+        deleted_blocks=deleted_blocks,
+        block_counts=block_counts,
         active_rigs=active_rigs,
         deleted_rigs=deleted_rigs,
         active_wells=active_wells,
@@ -1016,6 +1094,345 @@ def import_rigs(data: RigWellImportRequest, request: Request, db: Db, user: Curr
 
 
 # ---------------------------------------------------------------------------
+# Blocks
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/blocks/dropdown",
+    response_model=list[BlockDropdownOut],
+    dependencies=[Depends(require("rig-well:read"))],
+)
+def list_blocks_dropdown(db: Db, user: Current) -> list[BlockDropdownOut]:
+    counts = _block_well_counts(db, user.organization_id)
+    blocks = db.scalars(
+        select(Block)
+        .where(Block.organization_id == user.organization_id, Block.is_deleted.is_(False))
+        .order_by(Block.block_code)
+    ).all()
+    return [
+        BlockDropdownOut(
+            id=block.id,
+            block_code=block.block_code,
+            block_name=block.block_name,
+            description=block.description or "",
+            display_name=f"{block.block_code} — {block.block_name}",
+            well_count=counts.get(block.id, 0),
+        )
+        for block in blocks
+    ]
+
+
+@router.get("/blocks", response_model=list[BlockOut], dependencies=[Depends(require("rig-well:read"))])
+def list_blocks(
+    db: Db,
+    user: Current,
+    search: str | None = Query(default=None, max_length=200),
+) -> list[BlockOut]:
+    statement = select(Block).where(
+        Block.organization_id == user.organization_id,
+        Block.is_deleted.is_(False),
+    )
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        statement = statement.where(
+            or_(Block.block_code.ilike(like), Block.block_name.ilike(like), Block.description.ilike(like))
+        )
+    records = db.scalars(statement.order_by(Block.block_code)).all()
+    counts = _block_well_counts(db, user.organization_id)
+    return [_block_out(record, counts.get(record.id, 0)) for record in records]
+
+
+@router.post(
+    "/blocks",
+    response_model=BlockOut,
+    status_code=201,
+    dependencies=[Depends(require("rig-well:create"))],
+)
+def create_block(data: BlockCreate, request: Request, db: Db, user: Current) -> BlockOut:
+    existing = db.scalar(
+        select(Block).where(
+            Block.organization_id == user.organization_id,
+            Block.block_code == data.block_code,
+        )
+    )
+    if existing is not None:
+        if not existing.is_deleted:
+            raise HTTPException(status_code=409, detail=_code_conflict_message("Block", data.block_code))
+        existing.block_name = data.block_name
+        existing.description = data.description
+        existing.is_deleted = False
+        existing.deleted_at = None
+        _record_audit(
+            db, user=user, action="restore", entity_type="block", record_id=existing.id,
+            entity_label=existing.block_code,
+            summary=f"Restored and updated block {existing.block_code} from create",
+            request=request,
+        )
+        _commit(db)
+        db.refresh(existing)
+        return _block_out(existing)
+
+    block = Block(
+        organization_id=user.organization_id,
+        block_code=data.block_code,
+        block_name=data.block_name,
+        description=data.description,
+    )
+    db.add(block)
+    db.flush()
+    _record_audit(
+        db, user=user, action="create", entity_type="block", record_id=block.id,
+        entity_label=block.block_code,
+        summary=f"Created block {block.block_code} — {block.block_name}",
+        request=request,
+    )
+    _commit(db)
+    db.refresh(block)
+    return _block_out(block)
+
+
+@router.patch(
+    "/blocks/{block_id}",
+    response_model=BlockOut,
+    dependencies=[Depends(require("rig-well:update"))],
+)
+def update_block(block_id: str, data: BlockUpdate, request: Request, db: Db, user: Current) -> BlockOut:
+    block = _block_or_404(db, block_id, user.organization_id, include_deleted=False)
+    payload = data.model_dump(exclude_unset=True)
+    changed: list[str] = []
+    for field, value in payload.items():
+        if value is None:
+            continue
+        if field == "description":
+            value = value or ""
+        if getattr(block, field) == value:
+            continue
+        if field == "block_code":
+            duplicate = db.scalar(
+                select(Block).where(
+                    Block.organization_id == user.organization_id,
+                    Block.block_code == value,
+                    Block.id != block.id,
+                )
+            )
+            if duplicate is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=_code_conflict_message("Block", value, deleted=duplicate.is_deleted),
+                )
+        setattr(block, field, value)
+        changed.append(field)
+    if changed:
+        _record_audit(
+            db, user=user, action="update", entity_type="block", record_id=block.id,
+            entity_label=block.block_code,
+            summary=f"Updated block {block.block_code}: {', '.join(changed)}",
+            request=request,
+        )
+        _commit(db)
+        db.refresh(block)
+    return _block_out(block)
+
+
+@router.delete(
+    "/blocks/{block_id}",
+    response_model=BlockOut,
+    dependencies=[Depends(require("rig-well:delete"))],
+)
+def soft_delete_block(block_id: str, request: Request, db: Db, user: Current) -> BlockOut:
+    block = _block_or_404(db, block_id, user.organization_id, include_deleted=False)
+    active_wells = _count_children(db, Well, user.organization_id, block_id=block.id, is_deleted=False)
+    if active_wells:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Block {block.block_code} still owns {active_wells} well(s). Move those wells to "
+                "Deleted Entries or reassign them to another block first."
+            ),
+        )
+    block.is_deleted = True
+    block.deleted_at = _now()
+    _record_audit(
+        db, user=user, action="soft_delete", entity_type="block", record_id=block.id,
+        entity_label=block.block_code,
+        summary=f"Moved block {block.block_code} to Deleted Entries",
+        request=request,
+    )
+    _commit(db)
+    db.refresh(block)
+    return _block_out(block)
+
+
+@router.post(
+    "/blocks/{block_id}/restore",
+    response_model=BlockOut,
+    dependencies=[Depends(require("rig-well:restore"))],
+)
+def restore_block(block_id: str, request: Request, db: Db, user: Current) -> BlockOut:
+    block = _block_or_404(db, block_id, user.organization_id)
+    if not block.is_deleted:
+        raise HTTPException(status_code=409, detail="Only a deleted block can be restored")
+    block.is_deleted = False
+    block.deleted_at = None
+    _record_audit(
+        db, user=user, action="restore", entity_type="block", record_id=block.id,
+        entity_label=block.block_code,
+        summary=f"Restored block {block.block_code}",
+        request=request,
+    )
+    _commit(db)
+    db.refresh(block)
+    return _block_out(block)
+
+
+@router.delete(
+    "/blocks/{block_id}/permanent",
+    status_code=204,
+    dependencies=[Depends(require("rig-well:permanent-delete"))],
+)
+def permanently_delete_block(block_id: str, request: Request, db: Db, user: Current) -> None:
+    block = _block_or_404(db, block_id, user.organization_id)
+    if not block.is_deleted:
+        raise HTTPException(status_code=409, detail="Move the block to Deleted Entries before permanent deletion")
+    retained_wells = _count_children(db, Well, user.organization_id, block_id=block.id)
+    if retained_wells:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Block {block.block_code} still has {retained_wells} well record(s). Permanently delete those "
+                "wells from Deleted Entries first."
+            ),
+        )
+    _record_audit(
+        db, user=user, action="permanent_delete", entity_type="block", record_id=block.id,
+        entity_label=block.block_code,
+        summary=f"Permanently deleted block {block.block_code}",
+        request=request,
+    )
+    db.delete(block)
+    _commit(db)
+
+
+@router.post(
+    "/blocks/bulk-delete",
+    response_model=RigWellBulkActionResponse,
+    dependencies=[Depends(require("rig-well:delete"))],
+)
+def bulk_delete_blocks(data: RigWellIDs, request: Request, db: Db, user: Current) -> RigWellBulkActionResponse:
+    blocks = _records_for_ids(db, Block, data.ids, user.organization_id, deleted=False)
+    block_ids = [block.id for block in blocks]
+    well_counts = _counts_by_parent(
+        db, Well, Well.block_id, user.organization_id, block_ids, active_only=True
+    )
+    blocked = [(block, well_counts[block.id]) for block in blocks if well_counts.get(block.id)]
+    if blocked:
+        block, count = blocked[0]
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Block {block.block_code} still owns {count} well(s). Move or reassign them "
+                "before deleting the block."
+            ),
+        )
+    deleted_at = _now()
+    for block in blocks:
+        block.is_deleted = True
+        block.deleted_at = deleted_at
+        _record_audit(
+            db, user=user, action="soft_delete", entity_type="block", record_id=block.id,
+            entity_label=block.block_code,
+            summary=f"Moved block {block.block_code} to Deleted Entries (bulk action)",
+            request=request,
+        )
+    _record_audit(
+        db, user=user, action="delete", entity_type="block", record_id=None,
+        entity_label="Block register",
+        summary=f"Moved {len(blocks)} blocks to Deleted Entries",
+        request=request,
+    )
+    _commit(db)
+    return RigWellBulkActionResponse(affected_count=len(blocks))
+
+
+@router.post(
+    "/blocks/import",
+    response_model=RigWellImportResponse,
+    dependencies=[Depends(require("rig-well:import"))],
+)
+def import_blocks(data: RigWellImportRequest, request: Request, db: Db, user: Current) -> RigWellImportResponse:
+    imported = 0
+    errors: list[str] = []
+    seen_codes: set[str] = set()
+    for row_number, row in enumerate(data.rows, start=1):
+        code = _string(_row_value(row, "block_code", "code", "blockcode")).upper()
+        name = _string(_row_value(row, "block_name", "name", "blockname"))
+        description = _string(_row_value(row, "description", "remarks", "remark"))
+        if not code:
+            errors.append(f"Row {row_number}: block_code is required")
+            continue
+        if not name:
+            errors.append(f"Row {row_number} ({code}): block_name is required")
+            continue
+        if code in seen_codes:
+            errors.append(f"Row {row_number} ({code}): duplicate block_code in this import")
+            continue
+        seen_codes.add(code)
+        try:
+            payload = BlockCreate.model_validate(
+                {"block_code": code, "block_name": name, "description": description}
+            )
+        except ValidationError as error:
+            errors.append(f"Row {row_number} ({code}): {_validation_message(error)}")
+            continue
+        existing = db.scalar(
+            select(Block).where(
+                Block.organization_id == user.organization_id,
+                Block.block_code == payload.block_code,
+            )
+        )
+        if existing is None:
+            existing = Block(
+                organization_id=user.organization_id,
+                block_code=payload.block_code,
+                block_name=payload.block_name,
+                description=payload.description,
+            )
+            db.add(existing)
+            action = "create"
+            summary = f"Created block {payload.block_code} from import"
+        else:
+            action = "restore" if existing.is_deleted else "update"
+            existing.block_name = payload.block_name
+            existing.description = payload.description
+            existing.is_deleted = False
+            existing.deleted_at = None
+            summary = (
+                f"{'Restored and updated' if action == 'restore' else 'Updated'} block "
+                f"{payload.block_code} from import"
+            )
+        db.flush()
+        _record_audit(
+            db, user=user, action=action, entity_type="block", record_id=existing.id,
+            entity_label=payload.block_code, summary=summary, request=request,
+        )
+        imported += 1
+    _record_audit(
+        db, user=user, action="import", entity_type="block", record_id=None,
+        entity_label="Block register",
+        summary=f"Imported {imported} blocks with {len(errors)} row error(s)",
+        request=request,
+    )
+    _commit(db)
+    return RigWellImportResponse(
+        imported_count=imported,
+        error_count=len(errors),
+        errors=errors[:100],
+        success=not errors,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Wells
 # ---------------------------------------------------------------------------
 
@@ -1029,6 +1446,7 @@ def list_wells(
     db: Db,
     user: Current,
     rig_id: str | None = None,
+    block_id: str | None = None,
     status: Literal["active", "completed"] | None = None,
     config_status: Literal["draft", "configured"] | None = None,
     block: str | None = Query(default=None, max_length=200),
@@ -1038,19 +1456,31 @@ def list_wells(
         select(Well)
         .options(
             joinedload(Well.rig),
+            joinedload(Well.block_record),
             selectinload(Well.sections).selectinload(WellSection.phases),
         )
-        .where(Well.organization_id == user.organization_id, Well.is_deleted.is_(False))
+        .join(Block, Well.block_id == Block.id)
+        .where(
+            Well.organization_id == user.organization_id,
+            Well.is_deleted.is_(False),
+            Block.organization_id == user.organization_id,
+        )
     )
     if rig_id:
         _rig_or_404(db, rig_id, user.organization_id, include_deleted=False)
         statement = statement.where(Well.rig_id == rig_id)
+    if block_id:
+        _block_or_404(db, block_id, user.organization_id, include_deleted=False)
+        statement = statement.where(Well.block_id == block_id)
     if status:
         statement = statement.where(Well.status == status)
     if config_status:
         statement = statement.where(Well.config_status == config_status)
     if block and block.strip():
-        statement = statement.where(Well.block.ilike(block.strip()))
+        text = block.strip()
+        statement = statement.where(
+            or_(Block.block_code.ilike(text), Block.block_name.ilike(text))
+        )
     if search and search.strip():
         pattern = f"%{search.strip()}%"
         statement = statement.where(
@@ -1058,12 +1488,15 @@ def list_wells(
                 Well.well_code.ilike(pattern),
                 Well.well_name.ilike(pattern),
                 Well.well_location.ilike(pattern),
-                Well.block.ilike(pattern),
+                Block.block_code.ilike(pattern),
+                Block.block_name.ilike(pattern),
                 Well.objective.ilike(pattern),
                 Well.remarks.ilike(pattern),
             )
         )
-    wells = db.scalars(statement.order_by(Well.well_code)).all()
+    # Block-first ordering keeps each block's wells together in the register, so
+    # the list reads as a block-by-block segregation by default.
+    wells = db.scalars(statement.order_by(Block.block_code, Well.well_code)).all()
     count_rows = db.execute(
         select(WellSubActivity.well_id, func.count(WellSubActivity.id))
         .where(
@@ -1086,6 +1519,7 @@ def list_wells(
 )
 def create_well(data: WellCreate, request: Request, db: Db, user: Current) -> WellOut:
     rig = _rig_or_404(db, data.rig_id, user.organization_id, include_deleted=False)
+    block = _block_or_404(db, data.block_id, user.organization_id, include_deleted=False)
     existing = db.scalar(
         select(Well).where(
             Well.organization_id == user.organization_id,
@@ -1096,9 +1530,9 @@ def create_well(data: WellCreate, request: Request, db: Db, user: Current) -> We
         if not existing.is_deleted:
             raise HTTPException(status_code=409, detail=_code_conflict_message("Well", data.well_code))
         existing.rig = rig
+        existing.block_record = block
         existing.well_name = data.well_name
         existing.well_location = data.well_location
-        existing.block = data.block
         existing.objective = data.objective
         existing.remarks = data.remarks
         existing.is_deleted = False
@@ -1115,10 +1549,10 @@ def create_well(data: WellCreate, request: Request, db: Db, user: Current) -> We
     well = Well(
         organization_id=user.organization_id,
         rig_id=rig.id,
+        block_id=block.id,
         well_code=data.well_code,
         well_name=data.well_name,
         well_location=data.well_location,
-        block=data.block,
         objective=data.objective,
         remarks=data.remarks,
     )
@@ -1159,6 +1593,12 @@ def update_well(well_id: str, data: WellUpdate, request: Request, db: Db, user: 
                     detail="This well has retained Mud Cost Analysis history. Permanently delete those entries before changing its rig.",
                 )
             well.rig = _rig_or_404(db, value, user.organization_id, include_deleted=False)
+            changed.append(field)
+            continue
+        elif field == "block_id":
+            well.block_record = _block_or_404(
+                db, value, user.organization_id, include_deleted=False
+            )
             changed.append(field)
             continue
         elif field == "well_code":
@@ -1391,12 +1831,31 @@ def import_wells(data: RigWellImportRequest, request: Request, db: Db, user: Cur
         if rig is None:
             errors.append(f"Row {row_number}: rig_code '{rig_ref or '—'}' is missing or is not an active rig in this workspace")
             continue
+        block_ref = _string(_row_value(row, "block_code", "block", "block_name"))
+        block = None
+        if block_ref:
+            block = db.scalar(
+                select(Block).where(
+                    Block.organization_id == user.organization_id,
+                    Block.is_deleted.is_(False),
+                    or_(
+                        Block.block_code == block_ref.upper(),
+                        Block.block_name.ilike(block_ref),
+                    ),
+                )
+            )
+        if block is None:
+            errors.append(
+                f"Row {row_number}: block_code '{block_ref or '—'}' is missing or is not an active block "
+                "in this workspace. Add the block in Rig & Well Management → Blocks first."
+            )
+            continue
         raw = {
             "rig_id": rig.id,
+            "block_id": block.id,
             "well_code": _row_value(row, "well_code", "code", "wellcode"),
             "well_name": _row_value(row, "well_name", "name", "wellname"),
             "well_location": _row_value(row, "well_location", "location"),
-            "block": _row_value(row, "block"),
             "objective": _row_value(row, "objective"),
             "remarks": _row_value(row, "remarks", "remark") or "",
         }
@@ -1419,10 +1878,10 @@ def import_wells(data: RigWellImportRequest, request: Request, db: Db, user: Cur
             existing = Well(
                 organization_id=user.organization_id,
                 rig_id=rig.id,
+                block_id=block.id,
                 well_code=payload.well_code,
                 well_name=payload.well_name,
                 well_location=payload.well_location,
-                block=payload.block,
                 objective=payload.objective,
                 remarks=payload.remarks,
             )
@@ -1432,9 +1891,9 @@ def import_wells(data: RigWellImportRequest, request: Request, db: Db, user: Cur
         else:
             action = "restore" if existing.is_deleted else "update"
             existing.rig = rig
+            existing.block_record = block
             existing.well_name = payload.well_name
             existing.well_location = payload.well_location
-            existing.block = payload.block
             existing.objective = payload.objective
             existing.remarks = payload.remarks
             existing.is_deleted = False
@@ -2133,6 +2592,21 @@ def import_sub_activities(
 def list_deleted_entries(db: Db, user: Current) -> list[DeletedRigWellRecord]:
     organization_id = user.organization_id
     output: list[DeletedRigWellRecord] = []
+    blocks = db.scalars(
+        select(Block).where(Block.organization_id == organization_id, Block.is_deleted.is_(True))
+    ).all()
+    for block in blocks:
+        output.append(
+            DeletedRigWellRecord(
+                id=block.id,
+                entity_type="block",
+                code=block.block_code,
+                name=block.block_name,
+                parent_label="Block register",
+                deleted_at=block.deleted_at or block.updated_at,
+                created_at=block.created_at,
+            )
+        )
     rigs = db.scalars(
         select(Rig).where(Rig.organization_id == organization_id, Rig.is_deleted.is_(True))
     ).all()
@@ -2255,11 +2729,14 @@ def bulk_restore_deleted(
         _master_record_or_422(db, Activity, item.activity_id, user.organization_id, "Activity")
 
     restored_count = 0
-    for entity_type in ("rig", "well", "well_sub_activity"):
+    for entity_type in ("block", "rig", "well", "well_sub_activity"):
         for record in records.get(entity_type, []):
             record.is_deleted = False
             record.deleted_at = None
-            if entity_type == "rig":
+            if entity_type == "block":
+                label = record.block_code
+                summary = f"Restored block {record.block_code} (bulk action)"
+            elif entity_type == "rig":
                 label = record.rig_code
                 summary = f"Restored rig {record.rig_code} (bulk action)"
             elif entity_type == "well":
@@ -2295,6 +2772,24 @@ def bulk_permanently_delete(
     user: Current,
 ) -> RigWellBulkActionResponse:
     records = _selected_deleted_records(db, data.records, user.organization_id)
+    block_well_counts = _counts_by_parent(
+        db, Well, Well.block_id, user.organization_id,
+        [record.id for record in records.get("block", [])],
+    )
+    blocked_blocks = [
+        (record, block_well_counts[record.id])
+        for record in records.get("block", [])
+        if block_well_counts.get(record.id)
+    ]
+    if blocked_blocks:
+        record, count = blocked_blocks[0]
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Block {record.block_code} retains {count} well record(s). "
+                "Permanently delete those wells first."
+            ),
+        )
     selected_rigs = _selected_ids(records, "rig")
     selected_wells = _selected_ids(records, "well")
     selected_sub_activities = _selected_ids(records, "well_sub_activity")
@@ -2445,6 +2940,16 @@ def bulk_permanently_delete(
         )
         db.delete(record)
         purged_count += 1
+    db.flush()
+    for record in records.get("block", []):
+        _record_audit(
+            db, user=user, action="permanent_delete", entity_type="block", record_id=record.id,
+            entity_label=record.block_code,
+            summary=f"Permanently deleted block {record.block_code} (bulk action)",
+            request=request,
+        )
+        db.delete(record)
+        purged_count += 1
     _record_audit(
         db, user=user, action="permanent_delete", entity_type="rig_well_deleted", record_id=None,
         entity_label="Deleted Entries",
@@ -2465,6 +2970,7 @@ def bulk_permanently_delete(
 )
 def audit_export(data: RigWellExportAudit, request: Request, db: Db, user: Current) -> Response:
     labels = {
+        "blocks": "Blocks",
         "rigs": "Rigs",
         "wells": "Wells",
         "well-sub-activities": "Well Sub Activities",

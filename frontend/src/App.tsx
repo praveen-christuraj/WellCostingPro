@@ -25,6 +25,7 @@ const Tangibles = lazy(() => import('./pages/Tangibles'))
 const Consumables = lazy(() => import('./pages/Consumables'))
 const CatalogueLists = lazy(() => import('./pages/CatalogueLists'))
 const RigWellOverview = lazy(() => import('./pages/RigWellOverview'))
+const Blocks = lazy(() => import('./pages/Blocks'))
 const Rigs = lazy(() => import('./pages/Rigs'))
 const Wells = lazy(() => import('./pages/Wells'))
 const WellSubActivities = lazy(() => import('./pages/WellSubActivities'))
@@ -99,6 +100,7 @@ export default function App() {
           <Route path="master-data/catalogue-lists" element={<Guard permission="master-data:read"><CatalogueLists/></Guard>}/>
           <Route path="master-data/deleted" element={<Guard permission="master-data:read"><DeletedMasterData/></Guard>}/>
           <Route path="rig-well" element={<Guard permission="rig-well:read"><RigWellOverview/></Guard>}/>
+          <Route path="rig-well/blocks" element={<Guard permission="rig-well:read"><Blocks/></Guard>}/>
           <Route path="rig-well/rigs" element={<Guard permission="rig-well:read"><Rigs/></Guard>}/>
           <Route path="rig-well/wells" element={<Guard permission="rig-well:read"><Wells/></Guard>}/>
           <Route path="rig-well/sub-activities" element={<Guard permission="rig-well:read"><WellSubActivities/></Guard>}/>

@@ -17,6 +17,7 @@ import {
   formatDepth,
   WELL_IMPORT_HEADERS,
   WELL_IMPORT_OPTIONAL_HEADERS,
+  type BlockOption,
   type ImportResult,
   type RigOption,
   type Well,
@@ -78,6 +79,8 @@ export default function Wells() {
   const { can } = useAuth()
   const [rows, setRows] = useState<Well[]>([])
   const [rigs, setRigs] = useState<RigOption[]>([])
+  const [blocks, setBlocks] = useState<BlockOption[]>([])
+  const [blockFilter, setBlockFilter] = useState('')
   const [selectedRows, setSelectedRows] = useState<Well[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -105,19 +108,22 @@ export default function Wells() {
     setLoading(true)
     setError('')
     try {
-      const [wellRows, rigOptions] = await Promise.all([
-        api<Well[]>('/rig-well/wells'),
+      const query = blockFilter ? `?block_id=${encodeURIComponent(blockFilter)}` : ''
+      const [wellRows, rigOptions, blockOptions] = await Promise.all([
+        api<Well[]>(`/rig-well/wells${query}`),
         api<RigOption[]>('/rig-well/rigs/dropdown'),
+        api<BlockOption[]>('/rig-well/blocks/dropdown'),
       ])
       setRows(wellRows)
       setRigs(rigOptions)
+      setBlocks(blockOptions)
       setSelectedRows([])
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Wells could not be loaded')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [blockFilter])
 
   useEffect(() => { void load() }, [load])
 
@@ -131,10 +137,10 @@ export default function Wells() {
     setFormRecord(well)
     setForm({
       rig_id: well.rig_id,
+      block_id: well.block_id,
       well_code: well.well_code,
       well_name: well.well_name,
       well_location: well.well_location,
-      block: well.block,
       objective: well.objective,
       remarks: well.remarks,
     })
@@ -147,10 +153,10 @@ export default function Wells() {
     setFormError('')
     const payload = {
       rig_id: form.rig_id,
+      block_id: form.block_id,
       well_code: form.well_code.trim(),
       well_name: form.well_name.trim(),
       well_location: form.well_location.trim(),
-      block: form.block.trim(),
       objective: form.objective.trim(),
       remarks: form.remarks.trim(),
     }
@@ -160,7 +166,7 @@ export default function Wells() {
         setNotice(`${formRecord.well_code} was updated.`)
       } else {
         const created = await api<Well>('/rig-well/wells', { method: 'POST', body: body(payload) })
-        setNotice(`${created.well_code} was created under ${created.rig_code}.`)
+        setNotice(`${created.well_code} was created under ${created.rig_code} in block ${created.block_code}.`)
       }
       setFormOpen(false)
       setFormRecord(null)
@@ -245,7 +251,8 @@ export default function Wells() {
     { headerName: 'WELL CODE', field: 'well_code', minWidth: 125, flex: .75 },
     { headerName: 'WELL NAME', field: 'well_name', minWidth: 180, flex: 1.1 },
     { headerName: 'RIG', field: 'rig_display', minWidth: 170, flex: 1 },
-    { headerName: 'LOCATION / BLOCK', field: 'well_location', minWidth: 170, valueFormatter: params => params.data ? `${params.data.well_location} / ${params.data.block}` : '' },
+    { headerName: 'BLOCK', field: 'block_code', minWidth: 190, flex: 1, valueFormatter: params => params.data ? `${params.data.block_code} — ${params.data.block_name}` : '' },
+    { headerName: 'LOCATION', field: 'well_location', minWidth: 155, valueFormatter: params => params.value || '—' },
     { headerName: 'OBJECTIVE', field: 'objective', minWidth: 145, flex: .9 },
     { headerName: 'DRILLING STATUS', field: 'status', minWidth: 115, maxWidth: 130, cellRenderer: ({ value }: { value: string }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={value === 'completed' ? 'neutral' : 'success'}>{value}</Tag></Box> },
     { headerName: 'DRILLING PLAN', field: 'config_status', minWidth: 120, maxWidth: 145, cellRenderer: ({ value }: { value: string }) => <Box display="flex" alignItems="center" height="100%"><Tag tone={value === 'configured' ? 'info' : 'warning'}>{value}</Tag></Box> },
@@ -285,24 +292,45 @@ export default function Wells() {
       subtitle="Every well belongs to one active rig. Configure its hole-section depth intervals and planned phases, then manage its lifecycle."
       action={<Box display="flex" gap={1} flexWrap="wrap">
         <Button component={RouterLink} to="/rig-well/deleted" variant="outlined" startIcon={<DeleteOutlineRounded/>}>Deleted entries</Button>
-        {can('rig-well:create') && <Button variant="contained" startIcon={<AddRounded/>} onClick={openCreate} disabled={!rigs.length}>Add well</Button>}
+        {can('rig-well:create') && <Button variant="contained" startIcon={<AddRounded/>} onClick={openCreate} disabled={!rigs.length || !blocks.length}>Add well</Button>}
       </Box>}
     />
 
     {!rigs.length && <Alert severity="warning" sx={{ mb: 1.8 }} action={can('rig-well:create') ? <Button component={RouterLink} to="/rig-well/rigs" size="small">Create a rig</Button> : undefined}>Create at least one active rig before adding wells. Rigs are maintained in the Rig register.</Alert>}
+    {!blocks.length && <Alert severity="warning" sx={{ mb: 1.8 }} action={can('rig-well:create') ? <Button component={RouterLink} to="/rig-well/blocks" size="small">Create a block</Button> : undefined}>Create at least one active block before adding wells. Every well takes its block from the Block register, and the well register is segregated by block.</Alert>}
     {notice && <Alert severity="success" onClose={() => setNotice('')} sx={{ mb: 1.5 }}>{notice}</Alert>}
     <ErrorMessage message={error}/>
     <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2.2 }, mb: 1.8, borderRadius: 2 }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap">
-        <Box><Typography fontWeight={800} fontSize={15}>Well register</Typography><Typography color="text.secondary" fontSize={12} mt={.35}>{rows.filter(row => row.status === 'active').length} active wells · {rows.filter(row => row.status === 'active' && row.config_status === 'configured').length} configured · {rows.filter(row => row.status === 'completed').length} completed.</Typography></Box>
-        {can('rig-well:delete') && <Button color="error" variant="outlined" size="small" startIcon={<DeleteOutlineRounded/>} disabled={!selectedRows.length} onClick={() => openDelete()}>Move {selectedRows.length || ''} to Deleted Entries</Button>}
+        <Box>
+          <Typography fontWeight={800} fontSize={15}>Well register</Typography>
+          <Typography color="text.secondary" fontSize={12} mt={.35}>
+            {rows.filter(row => row.status === 'active').length} active wells · {rows.filter(row => row.status === 'active' && row.config_status === 'configured').length} configured · {rows.filter(row => row.status === 'completed').length} completed
+            {blockFilter ? ` · segregated to ${blocks.find(block => block.id === blockFilter)?.display_name ?? 'the selected block'}` : '.'}
+          </Typography>
+        </Box>
+        <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
+          <TextField
+            select
+            size="small"
+            label="Segregate by block"
+            value={blockFilter}
+            onChange={event => setBlockFilter(event.target.value)}
+            sx={{ minWidth: 245 }}
+          >
+            <MenuItem value="">All blocks ({blocks.reduce((total, block) => total + block.well_count, 0)} wells)</MenuItem>
+            {blocks.map(block => <MenuItem key={block.id} value={block.id}>{block.display_name} ({block.well_count})</MenuItem>)}
+          </TextField>
+          {blockFilter && <Button size="small" variant="outlined" onClick={() => setBlockFilter('')}>Clear</Button>}
+          {can('rig-well:delete') && <Button color="error" variant="outlined" size="small" startIcon={<DeleteOutlineRounded/>} disabled={!selectedRows.length} onClick={() => openDelete()}>Move {selectedRows.length || ''} to Deleted Entries</Button>}
+        </Box>
       </Box>
     </Paper>
     {loading ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <DataTable
       fillHeight
       rows={rows}
       columns={columns}
-      searchPlaceholder="Search wells by code, rig, location, block, objective..."
+      searchPlaceholder="Search wells by code, rig, block, location, objective..."
       exportName="well-register"
       onImport={can('rig-well:import') ? () => setImportOpen(true) : undefined}
       canExport={can('rig-well:export')}
@@ -314,12 +342,12 @@ export default function Wells() {
     <FormDialog
       open={formOpen}
       title={formRecord ? `Edit well ${formRecord.well_code}` : 'Add well'}
-      subtitle="Assign the well to an active rig. Well codes are unique across the workspace."
+      subtitle="Assign the well to an active rig and block. Well codes are unique across the workspace."
       onClose={() => { if (!saving) { setFormOpen(false); setFormRecord(null) } }}
       onSubmit={() => void save()}
       busy={saving}
       dirty={formDirty}
-      submitDisabled={!rigs.length || !form.rig_id || !form.well_code.trim() || !form.well_name.trim() || !form.well_location.trim() || !form.block.trim() || !form.objective.trim()}
+      submitDisabled={!rigs.length || !blocks.length || !form.rig_id || !form.block_id || !form.well_code.trim() || !form.well_name.trim() || !form.well_location.trim() || !form.objective.trim()}
       submitLabel={formRecord ? 'Save changes' : 'Create well'}
     >
       <Box display="grid" gap={2} pt={.5}>
@@ -332,7 +360,17 @@ export default function Wells() {
         </Box>
         <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: '1.4fr 1fr' }} gap={1.5}>
           <TextField label="Well location" required fullWidth value={form.well_location} onChange={event => setForm({ ...form, well_location: event.target.value })} inputProps={{ maxLength: 300 }}/>
-          <TextField label="Block" required fullWidth value={form.block} onChange={event => setForm({ ...form, block: event.target.value })} inputProps={{ maxLength: 200 }}/>
+          <TextField
+            select
+            label="Block"
+            required
+            fullWidth
+            value={form.block_id}
+            onChange={event => setForm({ ...form, block_id: event.target.value })}
+            helperText={blocks.length ? 'Blocks are maintained in the Block register.' : 'Create a block first.'}
+          >
+            {blocks.map(block => <MenuItem key={block.id} value={block.id}>{block.display_name}</MenuItem>)}
+          </TextField>
         </Box>
         <TextField label="Objective" required fullWidth multiline minRows={2} value={form.objective} onChange={event => setForm({ ...form, objective: event.target.value })} inputProps={{ maxLength: 500 }}/>
         <TextField label="Remarks" fullWidth multiline minRows={2} value={form.remarks} onChange={event => setForm({ ...form, remarks: event.target.value })} inputProps={{ maxLength: 1000 }}/>
@@ -359,10 +397,10 @@ export default function Wells() {
       open={importOpen}
       onClose={() => setImportOpen(false)}
       title="Import wells"
-      subtitle="Preview before import. Rig codes must resolve to active rigs in this workspace. Existing well codes are updated and deleted matches are restored."
+      subtitle="Preview before import. Rig and block codes must resolve to active records in this workspace. Existing well codes are updated and deleted matches are restored."
       headers={WELL_IMPORT_HEADERS}
       optionalHeaders={WELL_IMPORT_OPTIONAL_HEADERS}
-      sample={{ rig_code: 'RIG-001', well_code: 'WELL-001', well_name: 'North appraisal well', well_location: 'North field', block: 'Block A', objective: 'Appraisal', remarks: 'Sample row' }}
+      sample={{ rig_code: 'RIG-001', block_code: 'BLOCK-A', well_code: 'WELL-001', well_name: 'North appraisal well', well_location: 'North field', objective: 'Appraisal', remarks: 'Sample row' }}
       templateName="well-register-template.csv"
       onRows={importRows}
     />

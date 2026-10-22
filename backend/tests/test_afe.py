@@ -74,12 +74,26 @@ def create_rig(client, headers, code="RIG-01"):
     return response.json()
 
 
+def create_block(client, headers, code="BLOCK-A"):
+    response = client.post(
+        "/api/v1/rig-well/blocks", headers=headers,
+        json={"block_code": code, "block_name": f"Block {code}", "description": ""},
+    )
+    if response.status_code == 409:
+        existing = client.get("/api/v1/rig-well/blocks", headers=headers).json()
+        return next(block for block in existing if block["block_code"] == code)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
 def create_well(client, headers, rig_id, code="WELL-01"):
+    block = create_block(client, headers)
     response = client.post(
         "/api/v1/rig-well/wells", headers=headers,
         json={
-            "rig_id": rig_id, "well_code": code, "well_name": f"Well {code}", "well_location": "North field",
-            "block": "Block A", "objective": "Production appraisal", "remarks": "",
+            "rig_id": rig_id, "block_id": block["id"], "well_code": code,
+            "well_name": f"Well {code}", "well_location": "North field",
+            "objective": "Production appraisal", "remarks": "",
         },
     )
     assert response.status_code == 201, response.text

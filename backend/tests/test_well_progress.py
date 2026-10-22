@@ -86,9 +86,12 @@ def setup_well(client, headers, *, scope="drilling", days="10"):
         "provider_type": "Third Party Services", "vendor_id": vendor["id"], "description": "",
     })
     rig = _post(client, "/api/v1/rig-well/rigs", headers, {"rig_code": "RIG-01", "rig_name": "Rig One", "remarks": ""})
+    block = _post(client, "/api/v1/rig-well/blocks", headers, {
+        "block_code": "BLOCK-A", "block_name": "Block A", "description": "",
+    })
     well = _post(client, "/api/v1/rig-well/wells", headers, {
-        "rig_id": rig["id"], "well_code": "WELL-01", "well_name": "Well One", "well_location": "North field",
-        "block": "A", "objective": "Development", "remarks": "",
+        "rig_id": rig["id"], "block_id": block["id"], "well_code": "WELL-01", "well_name": "Well One",
+        "well_location": "North field", "objective": "Development", "remarks": "",
     })
     sections = [
         {
