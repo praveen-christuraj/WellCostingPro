@@ -51,6 +51,9 @@ CAPABILITIES = {resource: actions for resource, actions in {
         "submit", "reopen",
         # Amend allows reopening submitted sheets well after their cost date.
         "amend",
+        # The Fuel Cost Register opening stock is a physical anchor; breaking the
+        # carry-forward chain is separately grantable, like the mud correction.
+        "fuel-opening-stock",
     ),
     "mud-cost": ("opening-stock-update",),
     "costing-sets": ("read", "create", "update", "delete", "import", "export"),

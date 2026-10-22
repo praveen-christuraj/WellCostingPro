@@ -1,4 +1,4 @@
-.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check mud-cost-reconciliation-check lih-worksheet-check
+.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check mud-cost-reconciliation-check lih-worksheet-check fuel-cost-check
 
 test:
 	cd backend && ../.venv/bin/python -m pytest -q
@@ -47,3 +47,11 @@ lih-worksheet-check:
 		--bundle --platform=node --format=esm --jsx=automatic --log-level=error \
 		--outfile=node_modules/.cache/lih-worksheet-check.mjs --external:jsdom && \
 		node node_modules/.cache/lih-worksheet-check.mjs
+
+# Fuel Cost Register: daily AGO/gas entry, company classification and material balance.
+fuel-cost-check:
+	cd frontend && npm install --no-save jsdom && \
+		NODE_PATH="$$PWD/node_modules" ./node_modules/.bin/esbuild ../.agent/tools/fuel-cost-check.jsx \
+		--bundle --platform=node --format=esm --jsx=automatic --log-level=error \
+		--outfile=node_modules/.cache/fuel-cost-check.mjs --external:jsdom && \
+		node node_modules/.cache/fuel-cost-check.mjs
