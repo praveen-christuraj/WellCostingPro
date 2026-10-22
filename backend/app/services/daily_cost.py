@@ -38,7 +38,7 @@ from app.models import (
     DailyCostBaselineSection, DailyCostBaselineServiceRate, DailyCostCatalogueRateSnapshot,
     DailyCostConsumableLine, DailyCostEntry, DailyCostOtherExpenseLine, DailyCostServiceLine,
     DailyCostTangibleLine,
-    DailyCostWellRateBaseline, DrillBit, FuelType, HoleSection, MudChemical, Phase, Rig,
+    DailyCostWellRateBaseline, DrillBit, FuelType, HoleSection, LihCostEntry, MudChemical, Phase, Rig,
     Service, Tangible, Vendor, Well, WellPhase, WellSection, WellSubActivity,
 )
 from app.models.daily_cost import OTHER_EXPENSE_TYPE_LABELS
@@ -52,6 +52,7 @@ from app.schemas.daily_cost import (
     DailyCostComparisonGroup, DailyCostConsumableLineIn, DailyCostConsumableLineOut,
     DailyCostDailyRow, DailyCostDayOut, DailyCostEntryCreate, DailyCostEntryOut, DailyCostExportAudit,
     DailyCostFactorGroup, DailyCostFactorRow, DailyCostGroupSummary, DailyCostIDs,
+    DailyCostLihDay, DailyCostLihDeduction, DailyCostLihSummary,
     DailyCostImportRequest, DailyCostImportResponse, DailyCostOtherExpenseLineIn,
     DailyCostOtherExpenseLineOut, DailyCostOtherExpenseTypeOption, DailyCostOverview, DailyCostPreviewOut,
     DailyCostRateOut, DailyCostReference, DailyCostReopenIn, DailyCostRigOption, DailyCostSaveIn,
@@ -64,6 +65,7 @@ from app.schemas.daily_cost import (
 )
 from app.services import afe as afe_service
 from app.services import audit
+from app.services import lih_cost as lih_cost_service
 from app.services import mud_cost as mud_cost_service
 from app.models.catalogue import CatalogueOption
 from app.core.precision import DECIMAL_QUANT
@@ -2413,6 +2415,15 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
     other_expenses_to_date = actual_by_group["Other Expenses"]
     planned_total = _money(sum(planned_by_group.values(), Decimal("0")))
     actual_to_date = _money(tracked_actual_to_date + other_expenses_to_date)
+    # ---- LIH Cost Register ---------------------------------------------------
+    # The register is manual and lives outside the daily cost groups. Its cost is
+    # added to the actual cost and deducted from the AFE amount explicitly, so
+    # the balance is (AFE total − LIH) − daily actuals.
+    lih_to_date = lih_cost_service.lih_total_for_afe(
+        db, entry.organization_id, entry.afe_id, through_date=as_of, currency=entry.standard_currency,
+    )
+    afe_available = _money(planned_total - lih_to_date)
+    actual_including_lih = _money(actual_to_date + lih_to_date)
     upa = _money(sum((Decimal(row.standard_amount) for _, row in actual_all if row.classification == "UPA"), Decimal("0")))
     npt = _money(sum((Decimal(row.standard_amount) for _, row in actual_all if row.classification == "NPT"), Decimal("0")))
     # An approved SOW adjustment revises the plan; the locked planned_total stays
@@ -2429,15 +2440,20 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
         actual_to_date=actual_to_date,
         tracked_actual_to_date=tracked_actual_to_date,
         other_expenses_to_date=_money(other_expenses_to_date),
-        balance=_money(planned_total - actual_to_date),
-        over_budget=actual_to_date > planned_total,
+        lih_cost_to_date=lih_to_date,
+        actual_including_lih=actual_including_lih,
+        afe_available=afe_available,
+        balance=_money(planned_total - lih_to_date - actual_to_date),
+        over_budget=actual_including_lih > planned_total,
         includes_draft_entries=True,
         upa_to_date=upa,
         npt_to_date=npt,
         groups=groups,
         budget_lines=comparison_lines,
         adjusted_planned_total=adjusted_total,
-        adjusted_balance=_money(adjusted_total - actual_to_date) if adjusted_total is not None else None,
+        adjusted_balance=(
+            _money(adjusted_total - lih_to_date - actual_to_date) if adjusted_total is not None else None
+        ),
         has_adjustment=adjusted_total is not None,
     )
 
@@ -2478,11 +2494,23 @@ def _warnings(entry: DailyCostEntry, comparison: DailyCostComparison) -> list[Da
                 ),
             )
         )
+    if comparison.lih_cost_to_date:
+        warnings.append(
+            DailyCostWarnings(
+                code="lih-cost-deducted", severity="warning",
+                message=(
+                    f"LIH Cost Register: {entry.standard_currency} {comparison.lih_cost_to_date:,.2f} filed against "
+                    f"this AFE is added to the actual cost and deducted from the AFE total. AFE available after "
+                    f"LIH: {entry.standard_currency} {comparison.afe_available:,.2f}; actual cost including LIH: "
+                    f"{entry.standard_currency} {comparison.actual_including_lih:,.2f}."
+                ),
+            )
+        )
     if comparison.over_budget:
         warnings.append(
             DailyCostWarnings(
                 code="afe-over-budget", severity="warning",
-                message=f"Actual cost to {comparison.effective_on.isoformat()} is over the AFE budget by {entry.standard_currency} {abs(comparison.balance):,.2f}.",
+                message=f"Actual cost to {comparison.effective_on.isoformat()} (including LIH) is over the AFE budget by {entry.standard_currency} {abs(comparison.balance):,.2f}.",
             )
         )
     if entry.upa_total:
@@ -3041,6 +3069,14 @@ def overview(db: Session, organization_id: str, user: User) -> DailyCostOverview
     planned_out = {code: _money(planned[code]) for code in currencies}
     actual_out = {code: _money(actual[code]) for code in currencies}
     remaining_out = {code: _money(planned[code] - actual[code]) for code in currencies}
+    # The LIH Cost Register is reported apart: it is deducted from the AFE total,
+    # not reconciled against a budget line.
+    lih_out = lih_cost_service.lih_currency_totals(db, organization_id)
+    lih_entries_count, lih_lines_count = db.execute(
+        select(func.count(LihCostEntry.id), func.coalesce(func.sum(LihCostEntry.line_count), 0)).where(
+            LihCostEntry.organization_id == organization_id, LihCostEntry.is_deleted.is_(False)
+        )
+    ).one()
     groups = [
         DailyCostGroupSummary(
             currency=currency, cost_group=group, planned=_money(group_planned[(currency, group)]),
@@ -3082,6 +3118,8 @@ draft_entries=sum(1 for row in active if row.status == "draft"),
         wells_tracked=len({row.well_id for row in active}), active_baselines=len(baselines),
         over_budget_afes=over_budget, total_planned_by_currency=planned_out,
         actual_to_date_by_currency=actual_out, remaining_by_currency=remaining_out,
+        lih_cost_by_currency={code: _money(value) for code, value in sorted(lih_out.items())},
+        lih_entries=int(lih_entries_count or 0), lih_lines=int(lih_lines_count or 0),
         groups=groups, trend=trend, recent_activity=recent,
     )
 
@@ -3695,6 +3733,26 @@ def well_cost_summary(
     consumables = totals_by_group.get("Consumables", Decimal("0"))
     tangibles = totals_by_group.get("Tangibles", Decimal("0"))
     other_expenses = totals_by_group.get("Other Expenses", Decimal("0"))
+    # ---- LIH Cost Register ---------------------------------------------------
+    # The manual LIH register is read as its own block. Only entries recorded in
+    # this well's comparison currency are added, so unlike currencies are never
+    # summed; anything left out is reported as a warning.
+    lih_by_currency = lih_cost_service.lih_totals_by_currency(
+        db, organization_id, well_id, date_from=date_from, date_to=date_to,
+    )
+    lih_total, lih_lines, lih_entries = lih_cost_service.lih_totals_for_well(
+        db, organization_id, well_id, date_from=date_from, date_to=date_to, currency=currency,
+    )
+    lih_by_afe = lih_cost_service.lih_totals_by_afe(
+        db, organization_id, well_id, date_from=date_from, date_to=date_to, currency=currency,
+    )
+    lih_by_day = lih_cost_service.lih_totals_by_day(
+        db, organization_id, well_id, date_from=date_from, date_to=date_to, currency=currency,
+    )
+    lih_excluded = {
+        code or "Currency not specified": _money(amount)
+        for code, amount in lih_by_currency.items() if code != currency and amount
+    }
     # Services split by the activity classification of each daily line. The cost
     # report prints actual under Planned, UPA and NPT beside the whole group.
     classification_by_group: dict[tuple[str, str], Decimal] = {}
@@ -3877,13 +3935,24 @@ def well_cost_summary(
                 ))
     comparison_actual = _money(actual_total - actual_mud_chemicals + comparison_mud_cost)
     comparison_consumables = _money(consumables - actual_mud_chemicals + comparison_mud_cost)
+    # LIH is added to the actual cost and deducted from the AFE amount explicitly.
+    actual_including_lih = _money(actual_total + lih_total)
+    comparison_actual_including_lih = _money(comparison_actual + lih_total)
     comparison_balance = _money(planned_total - comparison_actual)
+    comparison_balance_including_lih = _money(planned_total - lih_total - comparison_actual)
     comparison_used = (
         (comparison_actual / planned_total * Decimal("100")).quantize(Decimal("0.01"))
         if planned_total > 0 else Decimal("0.00")
     )
+    comparison_used_including_lih = (
+        (comparison_actual_including_lih / planned_total * Decimal("100")).quantize(Decimal("0.01"))
+        if planned_total > 0 else Decimal("0.00")
+    )
     comparison_adjusted_balance = (
         _money(adjusted_planned - comparison_actual) if adjusted_planned is not None else None
+    )
+    comparison_adjusted_balance_including_lih = (
+        _money(adjusted_planned - lih_total - comparison_actual) if adjusted_planned is not None else None
     )
 
     # ---- daily run sheet -----------------------------------------------------
@@ -3922,6 +3991,7 @@ def well_cost_summary(
     )
     cumulative = Decimal("0")
     cumulative_usd = Decimal("0")
+    cumulative_lih = Decimal("0")
     daily: list[DailyCostDailyRow] = []
     for day_date in sorted(per_day):
         values = per_day[day_date]
@@ -3931,6 +4001,8 @@ def well_cost_summary(
         day_usd = _money(Decimal(values.get("usd_total", Decimal("0"))))
         cumulative = _money(cumulative + total)
         cumulative_usd = _money(cumulative_usd + day_usd)
+        day_lih = lih_by_day.get(day_date, Decimal("0.00"))
+        cumulative_lih = _money(cumulative_lih + day_lih)
         statuses = values["statuses"]
         day_depth = summary_day_depths.get((well_id, day_date))
         daily.append(DailyCostDailyRow(
@@ -3940,6 +4012,9 @@ def well_cost_summary(
             total=total,
             upa=_money(values["UPA"]), npt=_money(values["NPT"]), cumulative=cumulative,
             budget_balance=_money(planned_total - cumulative),
+            lih=day_lih,
+            cumulative_including_lih=_money(cumulative + cumulative_lih),
+            budget_balance_including_lih=_money(planned_total - cumulative - cumulative_lih),
             sheets=len(values["sheets"]),
             status=("submitted" if statuses == {"submitted"} else "draft" if statuses == {"draft"} else "mixed"),
             adjusted_budget_balance=_money(adjusted_planned - cumulative) if adjusted_planned is not None else None,
@@ -3960,18 +4035,25 @@ def well_cost_summary(
         # total_cost already contains the other expenses, so the balance below is the
         # AFE total net of those deductions; the split is reported alongside it.
         other_for_afe = _money(sum((Decimal(row.other_expenses_total) for row in entry_rows), Decimal("0")))
+        lih_for_afe = lih_by_afe.get(option.id, Decimal("0.00"))
         days_recorded = sorted({row.cost_date for row in entry_rows})
         adjusted_for_afe = adjusted_by_afe.get(option.id)
         positions.append(DailyCostAfePosition(
             afe_id=option.id, afe_code=option.afe_code, afe_name=option.afe_name,
             afe_status=option.status, currency=option.standard_currency,
             planned_total=_money(planned), actual=actual, other_expenses=other_for_afe,
+            lih_cost=lih_for_afe,
+            actual_including_lih=_money(actual + lih_for_afe),
+            afe_available=_money(planned - lih_for_afe),
             balance=_money(planned - actual),
-            over_budget=actual > planned, sheets=len(entry_rows), days_recorded=len(days_recorded),
+            balance_including_lih=_money(planned - lih_for_afe - actual),
+            over_budget=actual + lih_for_afe > planned, sheets=len(entry_rows), days_recorded=len(days_recorded),
             first_day=days_recorded[0] if days_recorded else None,
             last_day=days_recorded[-1] if days_recorded else None,
             adjusted_planned_total=adjusted_for_afe,
-            adjusted_balance=_money(adjusted_for_afe - actual) if adjusted_for_afe is not None else None,
+            adjusted_balance=(
+                _money(adjusted_for_afe - lih_for_afe - actual) if adjusted_for_afe is not None else None
+            ),
             has_adjustment=adjusted_for_afe is not None,
         ))
 
@@ -4037,6 +4119,29 @@ def well_cost_summary(
             rows=_factor_rows(db, lines, "currency", currency=currency, total=actual_total, native=True),
         ),
     ]
+
+    # LIH cost has no activity, section or phase, so it is only added to the
+    # cost-group cut. It is shown as its own group with no AFE allowance.
+    if lih_total:
+        cost_group_factor = next((group for group in factors if group.dimension == "cost_group"), None)
+        if cost_group_factor is not None:
+            factor_base = _money(actual_total + lih_total)
+            cost_group_factor.total = factor_base
+            cost_group_factor.rows.append(DailyCostFactorRow(
+                key="lih",
+                code="LIH",
+                name="LIH Cost Register",
+                detail="No AFE allowance · deducted from the AFE total",
+                amount=lih_total,
+                planned=Decimal("0.00"),
+                balance=_money(-lih_total),
+                share=(
+                    (lih_total / factor_base * Decimal("100")).quantize(Decimal("0.01"))
+                    if factor_base > 0 else Decimal("0.00")
+                ),
+                quantity=Decimal(lih_lines),
+            ))
+            cost_group_factor.rows.sort(key=lambda row: (-row.amount, row.code))
 
     # ---- budget reconciliation ----------------------------------------------
     budget_rows = db.execute(
@@ -4131,6 +4236,24 @@ def well_cost_summary(
             code="other-expenses-deducted", severity="warning",
             message=f"Other expenses (LIH, hole problems and similar) so far: {currency} {other_expenses:,.2f}. "
                     "They have no AFE allowance and are deducted from the AFE total above."))
+    if lih_total:
+        warnings.append(DailyCostWarnings(
+            code="lih-cost-deducted", severity="warning",
+            message=(
+                f"LIH Cost Register: {currency} {lih_total:,.2f} across {lih_entries} day(s) and "
+                f"{lih_lines} item(s) is added to the actual cost and deducted explicitly from the AFE "
+                f"total. AFE available after LIH: {currency} {_money(planned_total - lih_total):,.2f}; "
+                f"actual cost including LIH: {currency} {actual_including_lih:,.2f}."
+            )))
+    if lih_excluded:
+        warnings.append(DailyCostWarnings(
+            code="lih-cost-currency-excluded", severity="info",
+            message=(
+                "LIH cost recorded in another currency is not added to this "
+                f"{currency} comparison: "
+                + ", ".join(f"{code} {amount:,.2f}" for code, amount in sorted(lih_excluded.items()))
+                + ". Align the register AFE with the well's standard currency."
+            )))
     unrated = next((group for group in factors if group.dimension == "rate_source"
                     and any(row.key == "" for row in group.rows)), None)
     if unrated:
@@ -4204,6 +4327,15 @@ def well_cost_summary(
         reconciled_mud_cost=_money(reconciled_mud_cost),
         comparison_mud_cost=_money(comparison_mud_cost),
         mud_cost_adjustment=_money(comparison_mud_cost - actual_mud_chemicals),
+        lih_cost=lih_total,
+        lih_line_count=lih_lines,
+        lih_entries=lih_entries,
+        afe_available=_money(planned_total - lih_total),
+        actual_including_lih=actual_including_lih,
+        comparison_actual_including_lih=comparison_actual_including_lih,
+        comparison_balance_including_lih=comparison_balance_including_lih,
+        comparison_used_percent_including_lih=comparison_used_including_lih,
+        comparison_adjusted_balance_including_lih=comparison_adjusted_balance_including_lih,
         comparison_actual=comparison_actual,
         comparison_consumables=comparison_consumables,
         comparison_balance=comparison_balance,
@@ -4211,6 +4343,60 @@ def well_cost_summary(
         comparison_adjusted_balance=comparison_adjusted_balance,
         has_mud_reconciliation=bool(mud_reconciliation and mud_reconciliation.available),
     )
+    # ---- LIH Cost Register block --------------------------------------------
+    lih_day_rows: list[Any] = []
+    if lih_entries:
+        lih_query = select(LihCostEntry).where(
+            LihCostEntry.organization_id == organization_id,
+            LihCostEntry.well_id == well_id,
+            LihCostEntry.is_deleted.is_(False),
+            LihCostEntry.currency == currency,
+        )
+        if date_from is not None:
+            lih_query = lih_query.where(LihCostEntry.cost_date >= date_from)
+        if date_to is not None:
+            lih_query = lih_query.where(LihCostEntry.cost_date <= date_to)
+        lih_day_rows = list(db.scalars(lih_query.order_by(LihCostEntry.cost_date, LihCostEntry.id)).all())
+    # Label every AFE that carries an LIH deduction, including one that has no
+    # daily sheet yet, so the deduction always names its AFE.
+    lih_afe_labels = {
+        row.id: row for row in db.scalars(
+            select(Afe).where(Afe.organization_id == organization_id, Afe.well_id == well_id)
+        ).all()
+    }
+    lih_summary = DailyCostLihSummary(
+        available=bool(lih_entries),
+        currency=currency,
+        total=lih_total,
+        line_count=lih_lines,
+        entry_count=lih_entries,
+        deductions_by_afe=[
+            DailyCostLihDeduction(
+                afe_id=afe_id,
+                afe_code=lih_afe_labels[afe_id].afe_code if afe_id in lih_afe_labels else "",
+                afe_name=lih_afe_labels[afe_id].afe_name if afe_id in lih_afe_labels else "",
+                currency=currency,
+                lih_cost=amount,
+                afes_total=next(
+                    (position.planned_total for position in positions if position.afe_id == afe_id), Decimal("0.00")
+                ),
+            )
+            for afe_id, amount in sorted(lih_by_afe.items())
+        ],
+        days=[
+            DailyCostLihDay(
+                entry_id=row.id,
+                cost_date=row.cost_date,
+                afe_id=row.afe_id,
+                afe_code=row.afe_code_snapshot,
+                currency=row.currency,
+                line_count=row.line_count,
+                total_cost=_money(row.total_cost),
+            )
+            for row in lih_day_rows
+        ],
+    )
+
     return DailyCostWellSummary(
         well=DailyCostWellHeader(
             id=well.id, well_code=well.well_code, well_name=well.well_name,
@@ -4220,7 +4406,7 @@ def well_cost_summary(
         from_date=date_from, to_date=date_to, as_of=max(days) if days else None,
         include_draft=include_draft, totals=totals, afes=positions, daily=daily,
         factors=factors, budget_lines=budget_lines, warnings=warnings,
-        progress=progress_rows, mud_cost=mud_reconciliation,
+        progress=progress_rows, mud_cost=mud_reconciliation, lih_cost=lih_summary,
     )
 
 

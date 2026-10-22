@@ -3,7 +3,7 @@ import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
 import type { EChartsOption } from 'echarts'
 import {
-  AccountBalanceWalletOutlined, AnalyticsOutlined, CalculateOutlined, CalendarMonthOutlined, DownloadOutlined,
+  AccountBalanceWalletOutlined, AnalyticsOutlined, ArrowForwardRounded, CalculateOutlined, CalendarMonthOutlined, DownloadOutlined,
   PrintOutlined, RefreshRounded, ReportProblemOutlined, SavingsOutlined, TimelineOutlined, TrendingUpRounded,
   WarningAmberRounded,
 } from '@mui/icons-material'
@@ -218,7 +218,11 @@ export default function DailyCostAnalysis() {
   const comparisonBalance = summary?.totals.comparison_balance ?? summary?.totals.balance ?? '0'
   const comparisonUsedPercent = summary?.totals.comparison_used_percent ?? summary?.totals.used_percent ?? '0'
   const comparisonAdjustedBalance = summary?.totals.comparison_adjusted_balance ?? null
-  const comparisonCardCount = 7 + (hasAdjustment ? 1 : 0) + (hasMudReconciliation ? 1 : 0)
+  // LIH Cost Register cost is tracked outside the daily cost groups: it is added
+  // to the actual cost and deducted explicitly from the AFE amount.
+  const lih = summary?.lih_cost ?? null
+  const hasLih = Boolean(lih?.available && Number(lih.total) !== 0)
+  const comparisonCardCount = 7 + (hasAdjustment ? 1 : 0) + (hasMudReconciliation ? 1 : 0) + (hasLih ? 1 : 0)
 
   const dailyColumns: ColDef<DailyCostDailyRow>[] = [
     { headerName: 'DATE', field: 'cost_date', minWidth: 140, width: 150, valueFormatter: params => displayDate(String(params.value ?? '')) },
@@ -226,6 +230,14 @@ export default function DailyCostAnalysis() {
     { headerName: 'SERVICES', field: 'services', minWidth: 140, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
     { headerName: 'CONSUMABLES', field: 'consumables', minWidth: 140, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
     { headerName: 'TANGIBLES', field: 'tangibles', minWidth: 135, valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency) },
+    {
+      headerName: 'LIH COST', field: 'lih', minWidth: 145,
+      headerTooltip: 'LIH Cost Register cost filed on this day, deducted from the AFE',
+      valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency),
+      cellRenderer: (params: ICellRendererParams<DailyCostDailyRow>) => Number(params.data?.lih ?? 0) > 0
+        ? <Typography fontSize={12} fontWeight={700} color="warning.main">− {dailyMoney(String(params.data?.lih ?? '0'), currency)}</Typography>
+        : <Typography fontSize={12} color="text.secondary">—</Typography>,
+    },
     {
       headerName: 'OTHER EXPENSES', field: 'other_expenses', minWidth: 155,
       valueFormatter: params => dailyMoney(String(params.value ?? '0'), currency),
@@ -336,6 +348,7 @@ export default function DailyCostAnalysis() {
         {hasAdjustment && summary.totals.adjusted_planned != null && <StatCard label="Adjusted AFE" value={dailyMoney(summary.totals.adjusted_planned, currency)} hint={`${summary.totals.adjusted_used_percent ?? '—'}% of the adjusted AFE spent`} icon={<AccountBalanceWalletOutlined fontSize="small"/>}/>}
         <StatCard label="Actual to date" value={dailyMoney(summary.totals.actual, currency)} hint={`${summary.totals.used_percent}% of the locked AFE`} icon={<TrendingUpRounded fontSize="small"/>}/>
         {hasMudReconciliation && <StatCard label="Comparison total" value={dailyMoney(comparisonActual, currency)} hint={`${comparisonUsedPercent}% of the locked AFE after mud reconciliation`} icon={<CalculateOutlined fontSize="small"/>}/>}
+        {lih && hasLih && <StatCard label="LIH cost (register)" value={dailyMoney(lih.total, lih.currency)} hint={`${lih.entry_count} register day${lih.entry_count === 1 ? '' : 's'} · deducted from the AFE, added to actual`} tone="warning" icon={<ReportProblemOutlined fontSize="small"/>}/>}
         <StatCard label="Other expenses" value={dailyMoney(summary.totals.other_expenses, currency)} hint="LIH and similar charges deducted from the AFE" tone={Number(summary.totals.other_expenses) > 0 ? 'warning' : 'default'} icon={<ReportProblemOutlined fontSize="small"/>}/>
         <StatCard label="Remaining balance" value={dailyMoney(comparisonBalance, currency)} hint={hasMudReconciliation ? 'Planned less the reconciled comparison total' : Number(comparisonBalance) < 0 ? 'Over the AFE budget' : 'Planned less actual to date'} tone={Number(comparisonBalance) < 0 ? 'warning' : 'good'} icon={<SavingsOutlined fontSize="small"/>}/>
         <StatCard label="Average per day" value={dailyMoney(summary.totals.average_per_day, currency)} hint={`${summary.totals.recorded_days} recorded of ${summary.totals.elapsed_days} elapsed days`} icon={<TimelineOutlined fontSize="small"/>}/>
@@ -375,7 +388,7 @@ export default function DailyCostAnalysis() {
         </Box>
         <Box sx={{ overflowX: 'auto' }}>
           <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 720, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
-            <thead><tr><th>AFE</th><th>STATUS</th><th>SHEETS</th><th align="right">PLANNED</th>{hasAdjustment && <th align="right">ADJUSTED</th>}<th align="right">ACTUAL</th><th align="right">OTHER EXPENSES</th><th align="right">BALANCE</th>{hasAdjustment && <th align="right">ADJ BALANCE</th>}<th align="right">DAYS</th></tr></thead>
+            <thead><tr><th>AFE</th><th>STATUS</th><th>SHEETS</th><th align="right">PLANNED</th>{hasAdjustment && <th align="right">ADJUSTED</th>}<th align="right">ACTUAL</th><th align="right">OTHER EXPENSES</th><th align="right">LIH COST</th><th align="right">ACTUAL INCL. LIH</th><th align="right">BALANCE</th>{hasAdjustment && <th align="right">ADJ BALANCE</th>}<th align="right">DAYS</th></tr></thead>
             <tbody>{summary.afes.map(afe => <tr key={afe.afe_id}>
               <td><Typography fontSize={12} fontWeight={700}>{afe.afe_code}</Typography><Typography fontSize={10.5} color="text.secondary">{afe.afe_name}</Typography></td>
               <td><Tag tone={afe.over_budget ? 'warning' : 'info'}>{afe.afe_status}</Tag></td>
@@ -384,7 +397,9 @@ export default function DailyCostAnalysis() {
               {hasAdjustment && <td align="right">{afe.adjusted_planned_total != null ? dailyMoney(afe.adjusted_planned_total, afe.currency) : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>}
               <td align="right">{dailyMoney(afe.actual, afe.currency)}</td>
               <td align="right">{Number(afe.other_expenses) > 0 ? <Typography fontSize={12} fontWeight={700} color="warning.main">− {dailyMoney(afe.other_expenses, afe.currency)}</Typography> : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
-              <td align="right"><Typography fontSize={12} fontWeight={700} color={Number(afe.balance) < 0 ? 'error.main' : 'success.main'}>{dailyMoney(afe.balance, afe.currency)}</Typography></td>
+              <td align="right">{Number(afe.lih_cost ?? 0) > 0 ? <Typography fontSize={12} fontWeight={700} color="warning.main">− {dailyMoney(afe.lih_cost, afe.currency)}</Typography> : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
+              <td align="right">{dailyMoney(afe.actual_including_lih ?? afe.actual, afe.currency)}</td>
+              <td align="right"><Typography fontSize={12} fontWeight={700} color={Number(afe.balance_including_lih ?? afe.balance) < 0 ? 'error.main' : 'success.main'}>{dailyMoney(afe.balance_including_lih ?? afe.balance, afe.currency)}</Typography></td>
               {hasAdjustment && <td align="right">{afe.adjusted_balance != null ? <Typography fontSize={12} fontWeight={700} color={Number(afe.adjusted_balance) < 0 ? 'error.main' : 'success.main'}>{dailyMoney(afe.adjusted_balance, afe.currency)}</Typography> : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>}
               <td align="right">{afe.days_recorded}</td>
             </tr>)}</tbody>
@@ -425,6 +440,55 @@ export default function DailyCostAnalysis() {
             {comparisonAdjustedBalance != null && <> · Adjusted AFE comparison balance {dailyMoney(comparisonAdjustedBalance, currency)}</>}
           </Typography>
         </Box>
+      </Paper>}
+
+      {lih && <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, mb: 1.8 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={1} flexWrap="wrap" mb={1}>
+          <Box>
+            <Typography fontWeight={800} fontSize={15}>LIH cost · Lost In Hole register</Typography>
+            <Typography color="text.secondary" fontSize={11.5} mt={.25}>
+              Recorded separately from the daily cost groups. LIH is added to the actual cost and subtracted from the AFE total
+              it is filed against; it is never folded into a budgeted line.
+            </Typography>
+          </Box>
+          <Box display="flex" gap={1} alignItems="center" flexWrap="wrap">
+            <Tag tone={lih.available ? 'warning' : 'info'}>{lih.available ? 'Included in every comparison' : 'No LIH cost recorded'}</Tag>
+            <Button component={RouterLink} to="/daily-cost/lih-register" size="small" endIcon={<ArrowForwardRounded fontSize="small"/>}>Open register</Button>
+          </Box>
+        </Box>
+        {hasLih && <>
+          <Box display="grid" gap={1.3} mb={1.4} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' } }}>
+            <Box sx={{ p: 1.2, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+              <Typography fontSize={10.5} fontWeight={800} letterSpacing={.6} color="text.secondary">TOTAL LIH COST</Typography>
+              <Typography fontSize={19} fontWeight={800} mt={.4}>{dailyMoney(lih.total, lih.currency)}</Typography>
+            </Box>
+            <Box sx={{ p: 1.2, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+              <Typography fontSize={10.5} fontWeight={800} letterSpacing={.6} color="text.secondary">ITEMS ON REGISTER</Typography>
+              <Typography fontSize={19} fontWeight={800} mt={.4}>{lih.line_count.toLocaleString()}</Typography>
+            </Box>
+            <Box sx={{ p: 1.2, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+              <Typography fontSize={10.5} fontWeight={800} letterSpacing={.6} color="text.secondary">AFEs DEDUCTED</Typography>
+              <Typography fontSize={19} fontWeight={800} mt={.4}>{lih.deductions_by_afe.length.toLocaleString()}</Typography>
+            </Box>
+          </Box>
+          <Box sx={{ overflowX: 'auto' }}>
+            <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 560, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
+              <thead><tr><th>AFE</th><th align="right">LIH COST</th><th align="right">AFE TOTAL</th><th align="right">AFE AVAILABLE AFTER LIH</th></tr></thead>
+              <tbody>{lih.deductions_by_afe.map(row => <tr key={row.afe_id}>
+                <td><Typography fontSize={12} fontWeight={700}>{row.afe_code}</Typography><Typography fontSize={10.5} color="text.secondary">{row.afe_name}</Typography></td>
+                <td align="right"><Typography fontSize={12} fontWeight={700} color="warning.main">− {dailyMoney(row.lih_cost, row.currency)}</Typography></td>
+                <td align="right">{dailyMoney(row.afes_total, row.currency)}</td>
+                <td align="right">{dailyMoney(Number(row.afes_total) - Number(row.lih_cost), row.currency)}</td>
+              </tr>)}</tbody>
+            </Box>
+          </Box>
+          <Typography color="text.secondary" fontSize={11.5} mt={1.2}>
+            {lih.days.length} LIH register day{lih.days.length === 1 ? '' : 's'} in this filter
+            {lih.days.length ? ` · first ${displayDate(lih.days[0].cost_date)} · last ${displayDate(lih.days[lih.days.length - 1].cost_date)}` : ''}
+            {' '}· each day's total is added to that day's actual cost in the daily sheet and the printed report.
+          </Typography>
+        </>}
+        {!hasLih && <Typography color="text.secondary" fontSize={12}>No LIH item has been recorded against this well in the selected period.</Typography>}
       </Paper>}
 
       <Box mb={1.8}>

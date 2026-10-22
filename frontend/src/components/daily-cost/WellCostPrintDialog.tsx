@@ -6,6 +6,7 @@ import {
   costReportTitle, displayDate, localToday, type DailyCostDay, type DailyCostWellOption, type DailyCostWellSummary,
 } from '../../lib/dailyCost'
 import type { MudCostMaterialBalance, MudCostReconciliation } from '../../lib/mudCost'
+import type { LihCostReport } from '../../lib/lihCost'
 import { useCostPrint, validLeadLagDays, type LeadLagKind } from './DailyCostPrintSheet'
 
 export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }: {
@@ -49,7 +50,9 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
       if (mode === 'range') mudParams.set('from', dateFrom)
       const mudBalanceParams = new URLSearchParams({ rig_id: well?.rig_id ?? '', well_id: wellId, view: 'section', to })
       if (mode === 'range') mudBalanceParams.set('from', dateFrom)
-      const [days, summary, mudReconciliation, mudBalance] = await Promise.all([
+      const lihParams = new URLSearchParams({ well_id: wellId, to })
+      if (mode === 'range') lihParams.set('from', dateFrom)
+      const [days, summary, mudReconciliation, mudBalance, lihReport] = await Promise.all([
         api<DailyCostDay[]>(`/daily-cost/wells/${wellId}/cost-report?${params}`),
         // A mixed-standard-currency well cannot expose one combined summary;
         // retain the existing per-AFE/currency print path in that case.
@@ -60,6 +63,9 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
         well?.rig_id
           ? api<MudCostMaterialBalance>(`/mud-cost/material-balance?${mudBalanceParams}`).catch(() => null)
           : Promise.resolve(null),
+        // The LIH Cost Register is separate from daily sheets, so it is fetched
+        // by well and period rather than derived from the printed days.
+        api<LihCostReport>(`/lih-cost/wells/${wellId}/report?${lihParams}`).catch(() => null),
       ])
       if (!days.length) { setError('No saved daily sheets match this well and period.'); return }
       await api('/daily-cost/export-audit', { method: 'POST', body: body({
@@ -76,7 +82,7 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
         : (summary?.well.afes.map(afe => afe.configuration_scope) ?? [])
       print({ title: costReportTitle('well', scopes, well?.well_name ?? days[0].entry.well_name),
         period: `${mode === 'range' ? displayDate(dateFrom) : 'Inception (first recorded cost)'} to ${displayDate(to)} · ${includeDraft ? 'Draft and submitted sheets' : 'Submitted sheets only'}`,
-        days, overviewDays: days, summary, mudReconciliation, mudBalance, sections: well?.sections,
+        days, overviewDays: days, summary, mudReconciliation, mudBalance, lihReport, sections: well?.sections,
         reportKind: 'well', milestoneLabel: milestoneLabel.trim() || 'Spud date & time',
         leadLagKind, leadLagDays })
     } catch (caught) {

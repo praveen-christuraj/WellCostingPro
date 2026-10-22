@@ -354,7 +354,10 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
     print-color-adjust: exact;
   }
   .daily-cost-print-sheet .dcr-topline { display: grid; grid-template-columns: .85fr 1.55fr .8fr; gap: 1.05mm; }
-  .daily-cost-print-sheet .dcr-bottomline { min-height: 0; display: grid; grid-template-columns: .82fr 1fr 1.18fr; gap: 1.05mm; }
+  .daily-cost-print-sheet .dcr-bottomline { min-height: 0; display: grid; grid-template-columns: 1fr 1fr 1.18fr; gap: 1.05mm; }
+  /* The LIH register panel takes the bottom-left slot under Tangibles; the AFE
+     vs actual summary stacks below it rather than staying beside the mud cost. */
+  .daily-cost-print-sheet .dcr-stack { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto 1fr; gap: 1.05mm; }
   .daily-cost-print-sheet .dcr-panel table { table-layout: fixed; margin: 0; font-size: 5.7pt; line-height: 1.08; }
   .daily-cost-print-sheet .dcr-panel th,
   .daily-cost-print-sheet .dcr-panel td { padding: .42mm .55mm; border-color: #B9CCE0; }
@@ -401,6 +404,13 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-milestone dd,
   .daily-cost-print-sheet .dcr-time dd { margin: 0; font-weight: 700; text-align: right; }
   .daily-cost-print-sheet .dcr-tangibles div { min-height: 8mm; display: grid; grid-template-columns: repeat(4, 1fr); align-items: center; }
+  .daily-cost-print-sheet .dcr-lih div { display: grid; grid-template-columns: repeat(4, 1fr); align-items: center; }
+  .daily-cost-print-sheet .dcr-lih span { padding: .8mm 1.2mm; border-right: .5pt solid #B9CCE0; color: #4A6F96; }
+  .daily-cost-print-sheet .dcr-lih span:last-child { border-right: 0; }
+  .daily-cost-print-sheet .dcr-lih strong { display: block; margin-top: .35mm; color: #0B2A47; font-size: 6.6pt; }
+  .daily-cost-print-sheet .dcr-lih .dcr-lih-deduct { color: #9B2C2C; }
+  .daily-cost-print-sheet .dcr-lih .dcr-lih-deduct strong { color: #9B2C2C; }
+  .daily-cost-print-sheet .dcr-lih-note { margin: 0; padding: .7mm 1.2mm; border-top: .5pt solid #B9CCE0; color: #4A6F96; font-size: 5.4pt; }
   .daily-cost-print-sheet .dcr-tangibles span { padding: 0 1.5mm; border-right: .5pt solid #B9CCE0; color: #4A6F96; }
   .daily-cost-print-sheet .dcr-tangibles span:last-child { border-right: 0; }
   .daily-cost-print-sheet .dcr-tangibles strong { display: block; margin-top: .6mm; color: #0B2A47; font-size: 7pt; }
