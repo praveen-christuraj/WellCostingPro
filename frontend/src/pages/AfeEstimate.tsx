@@ -948,7 +948,7 @@ export default function AfeEstimate() {
 
     <Card
       title="Tangibles"
-      subtitle="Items from Master Data at their captured rate. Enter an override rate only when the quoted price differs."
+      subtitle="Items from Master Data at their captured rate. Enter an override rate only when the quoted price differs; the advanced selector adds several tangibles at once."
       count={tangibleRows.length}
       actions={<>
         {editable && selected.tangible.length > 0 && <Button color="error" variant="outlined" size="small" onClick={() => setBulkDelete('tangible')}>Delete {selected.tangible.length} selected</Button>}

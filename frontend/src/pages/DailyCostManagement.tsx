@@ -379,7 +379,7 @@ export default function DailyCostManagement() {
 
     <FormDialog open={Boolean(pending)} title={actionTitle ?? 'Confirm action'} subtitle={actionSubtitle} onClose={() => { if (!actionBusy) setPending(null) }} onSubmit={() => void act()} busy={actionBusy} submitLabel={pending?.kind === 'purge' ? 'Delete permanently' : pending?.kind === 'restore' ? 'Restore' : 'Move to Deleted Entries'} danger={pending?.kind === 'purge'}>
       <Box display="grid" gap={1.2}>
-        {pending?.kind === 'purge' && <Alert severity="warning">Permanent deletion cannot be undone. The AFE budget and well rate snapshots are retained for audit.</Alert>}
+        {pending?.kind === 'purge' && <Alert severity="warning">Permanent deletion cannot be undone. The locked AFE budget and well rate snapshots are kept for audit until the AFE or well itself is permanently deleted from its Deleted Entries.</Alert>}
         <ErrorMessage message={actionError}/>
       </Box>
     </FormDialog>
