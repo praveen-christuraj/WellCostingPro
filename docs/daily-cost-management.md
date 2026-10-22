@@ -55,6 +55,15 @@
    - The selector displays the item, UOM and unit price from the daily sheet's locked catalogue snapshot. The user enters a positive usage quantity beside every checked item; submitting with a checked item whose usage is missing, zero or invalid keeps the selector open and identifies the item that needs correction.
    - One action creates a separate draft daily-cost line for every selected item. Those lines inherit the Activity, well Sub Activity, section/phase, actual depth and responsible party already selected in the parent dialog, preserve any previously collected items, and use the same locked-rate and FX rules as individual entry. They are committed only when the daily sheet itself is saved.
 
+7. **LIH Cost Register worksheet** (`/daily-cost/lih-register`)
+   - Lost In Hole cost is captured on one editable worksheet per rig, well and date. Items are typed as rows, duplicated from a similar item, or pasted from a block copied out of Excel; the whole sheet is saved together in a single `PUT /api/v1/lih-cost/day` call instead of one request per item.
+   - `lih_cost_entries` keeps the day header and its `revision`; `lih_cost_lines` keeps one typed row per item with its position (`sort_order`) and how it was captured (`source`: manual, duplicate, import). No JSON payload is stored and the client can never set an amount — item totals are units × unit cost and the day total is their sum, both recomputed by the server.
+   - Each save is atomic and authoritative: rows with an `id` are updated, new rows are created, omitted rows are removed, and the array order becomes the saved order. A save carrying an old `revision` is rejected with **409** rather than overwriting another user's work.
+   - Keyboard entry is the primary path: Ctrl+S saves, Ctrl+Enter adds a row, Ctrl+D duplicates the current row, Ctrl+I inserts below, Enter/Shift+Enter move down/up, Tab/Shift+Tab move across, and Alt+arrows move freely. Previously used descriptions fill their equipment details (never the serial number) on blur.
+   - Saved rows stay editable; only the fields that change are re-sent. Days can be switched freely when the sheet is clean; while it is dirty the day selectors are locked and navigation/tab close is protected by the standard save/discard/continue-editing guard.
+   - `POST /api/v1/lih-cost/import` bulk-imports up to 2,000 items for one well from `.xlsx`/`.csv`, validates every row first, groups the valid rows by their optional Date column and appends them to the matching day. Row-numbered errors appear beside the import preview while valid rows still save.
+   - Permissions: `daily-cost:create` to open a day, `daily-cost:update` to save an existing day, `daily-cost:delete` to remove rows or the day, `daily-cost:import` for bulk import, `daily-cost:export` for the register and worksheet exports. Every worksheet save, bulk removal and import is audited.
+
 ## Awaiting the reference daily sheet
 
 No reference sheet was attached to the request implemented in this increment. Existing capture fields and pricing/approval/import/delete functionality have been retained; exact reference-template parity is **not claimed**.

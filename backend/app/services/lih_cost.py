@@ -1,8 +1,9 @@
 """LIH Cost Register services (Daily Cost Management).
 
 The register is deliberately manual: a user picks the rig, the well and the
-date, adds the LIH items one by one, and the system sums them into the day's
-LIH cost. Those totals are then read by Daily Cost Management:
+date, captures every LIH item on one worksheet, and saves the worksheet in a
+single transaction. The system sums the items into the day's LIH cost. Those
+totals are then read by Daily Cost Management:
 
 * the daily sheet comparison and the whole-well cost analysis add LIH to the
   actual cost and deduct it from the AFE amount explicitly,
@@ -19,6 +20,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Sequence
 
 from fastapi import HTTPException, Request
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
@@ -31,11 +33,16 @@ from app.schemas.lih_cost import (
     LihCostBulkActionOut,
     LihCostCurrencyTotal,
     LihCostDayOut,
+    LihCostDaySave,
     LihCostEntryCreate,
     LihCostEntryOut,
     LihCostEntryUpdate,
     LihCostExportAudit,
     LihCostIDs,
+    LihCostImportRequest,
+    LihCostImportResponse,
+    LihCostImportRow,
+    LihCostItemSuggestion,
     LihCostLineIn,
     LihCostLineOut,
     LihCostReference,
@@ -48,6 +55,7 @@ from app.services import audit
 
 CENT = Decimal("0.01")
 TEN_PLACES = Decimal("0.0000000001")
+SUGGESTION_LIMIT = 200
 
 
 def _money(value: Decimal | int | str | None) -> Decimal:
@@ -207,6 +215,7 @@ def _entry_out(entry: LihCostEntry) -> LihCostEntryOut:
         remarks=entry.remarks,
         line_count=entry.line_count,
         total_cost=_money(entry.total_cost),
+        revision=entry.revision or 0,
         display_name=f"{entry.well_code_snapshot} · {entry.cost_date.isoformat()}"
         + (f" · {entry.afe_code_snapshot}" if entry.afe_code_snapshot else " · No AFE"),
         is_deleted=entry.is_deleted,
@@ -234,6 +243,7 @@ def _line_out(line: LihCostLine) -> LihCostLineOut:
         unit_cost=_quantity(line.unit_cost),
         total_cost=_money(line.total_cost),
         remarks=line.remarks,
+        source=line.source or "manual",
         sort_order=line.sort_order,
         created_at=line.created_at,
         updated_at=line.updated_at,
@@ -241,9 +251,11 @@ def _line_out(line: LihCostLine) -> LihCostLineOut:
 
 
 def _day_out(entry: LihCostEntry) -> LihCostDayOut:
+    # Sort here as well as in the relationship: a session that already holds the
+    # collection must still answer in worksheet order after a reorder save.
     return LihCostDayOut(
         entry=_entry_out(entry),
-        lines=[_line_out(line) for line in entry.lines],
+        lines=[_line_out(line) for line in sorted(entry.lines, key=lambda row: row.sort_order)],
     )
 
 
@@ -251,6 +263,83 @@ def _recalculate(entry: LihCostEntry) -> None:
     """Keep the day's line count and total equal to its items, server-side."""
     entry.line_count = len(entry.lines)
     entry.total_cost = _money(sum((Decimal(line.total_cost) for line in entry.lines), Decimal("0")))
+
+
+def _bump_revision(entry: LihCostEntry) -> None:
+    """A worksheet save invalidates any stale copy another browser still holds."""
+    entry.revision = int(entry.revision or 0) + 1
+
+
+def _apply_line(line: LihCostLine, data: LihCostLineIn, *, sort_order: int) -> None:
+    """Copy one worksheet row onto its stored line, recomputing the total."""
+    line.item_description = data.item_description
+    line.od_size = data.od_size
+    line.id_size = data.id_size
+    line.fish_neck_od = data.fish_neck_od
+    line.fish_neck_length = data.fish_neck_length
+    line.serial_number = data.serial_number
+    line.connection = data.connection
+    line.length = data.length
+    line.no_of_units = Decimal(data.no_of_units)
+    line.unit = data.unit
+    line.unit_cost = Decimal(data.unit_cost)
+    line.total_cost = _money(Decimal(data.no_of_units) * Decimal(data.unit_cost))
+    line.remarks = data.remarks
+    line.sort_order = sort_order
+
+
+def _new_line(organization_id: str, entry: LihCostEntry, data: LihCostLineIn, *, sort_order: int, source: str | None = None) -> LihCostLine:
+    line = LihCostLine(
+        id=uid(),
+        organization_id=organization_id,
+        entry_id=entry.id,
+        sort_order=sort_order,
+        source=source or data.source,
+    )
+    _apply_line(line, data, sort_order=sort_order)
+    return line
+
+
+def _apply_entry_budget(entry: LihCostEntry, afe: Afe | None, currency: str) -> bool:
+    """Point the day at an AFE (and its standard currency). Returns True if changed."""
+    afe_id = afe.id if afe else None
+    if entry.afe_id == afe_id and entry.currency == currency:
+        return False
+    entry.afe_id = afe_id
+    entry.afe_code_snapshot = afe.afe_code if afe else ""
+    entry.afe_name_snapshot = afe.afe_name if afe else ""
+    entry.currency = currency
+    return True
+
+
+def _currency_for(db: Session, organization_id: str, afe: Afe | None) -> str:
+    if afe and afe.standard_currency:
+        return str(afe.standard_currency).upper()
+    return _workspace_default_currency(db, organization_id).upper()
+
+
+def _reindex(entry: LihCostEntry) -> None:
+    """Saved item order always matches the worksheet order, without gaps."""
+    ordered = sorted(entry.lines, key=lambda row: row.sort_order)
+    for index, line in enumerate(ordered):
+        line.sort_order = index
+    # Keep the in-memory collection in step with the stored order as well.
+    entry.lines.sort(key=lambda row: row.sort_order)
+
+
+def _validation_message(error: ValidationError) -> str:
+    """The first human-readable problem from a Pydantic validation error."""
+    for item in error.errors():
+        field = str(item.get("loc", ["value"])[-1]).replace("_", " ").capitalize()
+        message = str(item.get("msg", "is invalid"))
+        if message.startswith("Value error, "):
+            return message.removeprefix("Value error, ")
+        if message == "Input should be a valid decimal":
+            return f"{field} must be a number."
+        if message.startswith("String should have at least 1 character"):
+            return f"{field} is mandatory."
+        return f"{field}: {message}"
+    return "the row is invalid"
 
 
 def reference_data(db: Session, organization_id: str) -> LihCostReference:
@@ -302,7 +391,50 @@ def reference_data(db: Session, organization_id: str) -> LihCostReference:
             for row in uoms
         ],
         default_currency=_workspace_default_currency(db, organization_id),
+        previous_items=_previous_items(db, organization_id),
     )
+
+
+def _previous_items(db: Session, organization_id: str) -> list[LihCostItemSuggestion]:
+    """Recently used items, one per description, for quick re-entry.
+
+    The worksheet offers these while the user types a description, so a repeat
+    item (a drill collar, a stabilizer) fills its dimensions, UOM and unit cost
+    with one pick. The serial number is never copied: it belongs to one tool.
+    """
+    rows = db.scalars(
+        select(LihCostLine)
+        .join(LihCostEntry, LihCostEntry.id == LihCostLine.entry_id)
+        .where(
+            LihCostLine.organization_id == organization_id,
+            LihCostEntry.is_deleted.is_(False),
+        )
+        .order_by(LihCostLine.updated_at.desc(), LihCostLine.id.desc())
+        .limit(SUGGESTION_LIMIT * 4)
+    ).all()
+    seen: set[str] = set()
+    suggestions: list[LihCostItemSuggestion] = []
+    for row in rows:
+        key = row.item_description.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        suggestions.append(
+            LihCostItemSuggestion(
+                item_description=row.item_description,
+                od_size=_quantity(row.od_size) if row.od_size is not None else None,
+                id_size=_quantity(row.id_size) if row.id_size is not None else None,
+                fish_neck_od=_quantity(row.fish_neck_od) if row.fish_neck_od is not None else None,
+                fish_neck_length=_quantity(row.fish_neck_length) if row.fish_neck_length is not None else None,
+                connection=row.connection,
+                length=_quantity(row.length) if row.length is not None else None,
+                unit=row.unit,
+                unit_cost=_quantity(row.unit_cost),
+            )
+        )
+        if len(suggestions) >= SUGGESTION_LIMIT:
+            break
+    return suggestions
 
 
 def create_entry(
@@ -401,6 +533,7 @@ def update_entry(
         entry.remarks = data.remarks
         changes.append("remarks")
     entry.updated_by = _actor_name(user)
+    _bump_revision(entry)
     _audit(
         db, user=user, action="update", entity_type="lih_cost", entity_id=entry.id,
         entity_label=f"LIH · {entry.well_code_snapshot} · {entry.cost_date.isoformat()}",
@@ -460,28 +593,11 @@ def add_line(
     db: Session, organization_id: str, entry_id: str, data: LihCostLineIn, user: User, request: Request | None
 ) -> LihCostDayOut:
     entry = _entry_or_404(db, organization_id, entry_id)
-    total = _money(Decimal(data.no_of_units) * Decimal(data.unit_cost))
-    line = LihCostLine(
-        id=uid(),
-        organization_id=organization_id,
-        entry_id=entry.id,
-        item_description=data.item_description,
-        od_size=data.od_size,
-        id_size=data.id_size,
-        fish_neck_od=data.fish_neck_od,
-        fish_neck_length=data.fish_neck_length,
-        serial_number=data.serial_number,
-        connection=data.connection,
-        length=data.length,
-        no_of_units=Decimal(data.no_of_units),
-        unit=data.unit,
-        unit_cost=Decimal(data.unit_cost),
-        total_cost=total,
-        remarks=data.remarks,
-        sort_order=len(entry.lines),
-    )
+    line = _new_line(organization_id, entry, data, sort_order=len(entry.lines))
+    total = Decimal(line.total_cost)
     entry.lines.append(line)
     _recalculate(entry)
+    _bump_revision(entry)
     entry.updated_by = _actor_name(user)
     _audit(
         db, user=user, action="create", entity_type="lih_cost_line", entity_id=line.id,
@@ -517,21 +633,10 @@ def update_line(
 ) -> LihCostDayOut:
     entry = _entry_or_404(db, organization_id, entry_id)
     line = _line_or_404(db, entry, line_id)
-    total = _money(Decimal(data.no_of_units) * Decimal(data.unit_cost))
-    line.item_description = data.item_description
-    line.od_size = data.od_size
-    line.id_size = data.id_size
-    line.fish_neck_od = data.fish_neck_od
-    line.fish_neck_length = data.fish_neck_length
-    line.serial_number = data.serial_number
-    line.connection = data.connection
-    line.length = data.length
-    line.no_of_units = Decimal(data.no_of_units)
-    line.unit = data.unit
-    line.unit_cost = Decimal(data.unit_cost)
-    line.total_cost = total
-    line.remarks = data.remarks
+    _apply_line(line, data, sort_order=line.sort_order)
+    total = Decimal(line.total_cost)
     _recalculate(entry)
+    _bump_revision(entry)
     entry.updated_by = _actor_name(user)
     _audit(
         db, user=user, action="update", entity_type="lih_cost_line", entity_id=line.id,
@@ -555,6 +660,7 @@ def delete_line(
     entry.lines.remove(line)
     db.delete(line)
     _recalculate(entry)
+    _bump_revision(entry)
     entry.updated_by = _actor_name(user)
     _audit(
         db, user=user, action="delete", entity_type="lih_cost_line", entity_id=line_id,
@@ -567,6 +673,331 @@ def delete_line(
     )
     _commit(db)
     return _day_out(_entry_or_404(db, organization_id, entry.id))
+
+
+# ---------------------------------------------------------------------------
+# Worksheet save, bulk removal and import
+# ---------------------------------------------------------------------------
+
+
+def day_exists(db: Session, organization_id: str, well_id: str, cost_date: date) -> bool:
+    """Whether an active register day already exists (used to choose the RBAC key)."""
+    return db.scalar(
+        select(LihCostEntry.id).where(
+            LihCostEntry.organization_id == organization_id,
+            LihCostEntry.well_id == well_id,
+            LihCostEntry.cost_date == cost_date,
+            LihCostEntry.is_deleted.is_(False),
+        ).limit(1)
+    ) is not None
+
+
+def save_day(
+    db: Session, organization_id: str, data: LihCostDaySave, user: User, request: Request | None
+) -> LihCostDayOut:
+    """Save a whole LIH day — header and every item — in one transaction.
+
+    The payload is authoritative: rows carrying an ``id`` are updated, rows
+    without one are created, rows missing from the payload are removed, and the
+    array order becomes the saved order. The day's total, item count and
+    revision are recomputed server-side, so a client can never write a total.
+    """
+    well = _well_or_404(db, organization_id, data.well_id)
+    if data.rig_id and data.rig_id != well.rig_id:
+        raise HTTPException(status_code=422, detail="The selected well does not belong to the selected rig")
+    entry = db.scalars(
+        _entry_query(organization_id, deleted=False).where(
+            LihCostEntry.well_id == well.id, LihCostEntry.cost_date == data.cost_date,
+        )
+    ).unique().first()
+    # An existing day keeps its AFE when the payload does not name one, so a
+    # partial client can never silently move the deduction to another budget.
+    if data.afe_id:
+        afe = _afe_for_well(db, organization_id, well.id, data.afe_id)
+    elif entry is not None and entry.afe_id:
+        afe = db.get(Afe, entry.afe_id)
+    else:
+        afe = _resolve_afe(db, organization_id, well, "")
+    currency = _currency_for(db, organization_id, afe)
+    actor = _actor_name(user)
+
+    if entry is None:
+        if not data.lines:
+            raise HTTPException(
+                status_code=422,
+                detail="Add at least one LIH item before saving the register day.",
+            )
+        entry = LihCostEntry(
+            id=uid(),
+            organization_id=organization_id,
+            rig_id=well.rig_id,
+            rig_code_snapshot=well.rig.rig_code if well.rig else "",
+            rig_name_snapshot=well.rig.rig_name if well.rig else "",
+            well_id=well.id,
+            well_code_snapshot=well.well_code,
+            well_name_snapshot=well.well_name,
+            afe_id=afe.id if afe else None,
+            afe_code_snapshot=afe.afe_code if afe else "",
+            afe_name_snapshot=afe.afe_name if afe else "",
+            cost_date=data.cost_date,
+            currency=currency,
+            remarks=data.remarks,
+            line_count=0,
+            total_cost=Decimal("0"),
+            revision=0,
+            created_by=actor,
+            updated_by=actor,
+        )
+        db.add(entry)
+        db.flush()
+        created = len(data.lines)
+        updated = removed = 0
+        for index, payload in enumerate(data.lines):
+            entry.lines.append(_new_line(organization_id, entry, payload, sort_order=index))
+        action = "create"
+    else:
+        if data.expected_revision is not None and int(entry.revision or 0) != data.expected_revision:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This LIH day was saved by someone else after you opened it. Reload the day to see "
+                    "the latest items, then apply your changes again."
+                ),
+            )
+        _apply_entry_budget(entry, afe, currency)
+        entry.remarks = data.remarks
+        existing = {line.id: line for line in entry.lines}
+        kept: set[str] = set()
+        created = updated = 0
+        for index, payload in enumerate(data.lines):
+            if payload.id:
+                line = existing.get(payload.id)
+                if line is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Item {index + 1} ({payload.item_description}) is no longer on this day. "
+                            "Reload the day to see the latest items before saving again."
+                        ),
+                    )
+                if payload.id in kept:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Item {index + 1} appears twice in the same save.",
+                    )
+                kept.add(payload.id)
+                _apply_line(line, payload, sort_order=index)
+                updated += 1
+            else:
+                entry.lines.append(_new_line(organization_id, entry, payload, sort_order=index))
+                created += 1
+        removed = 0
+        for line_id, line in existing.items():
+            if line_id in kept:
+                continue
+            entry.lines.remove(line)
+            db.delete(line)
+            removed += 1
+        action = "save"
+
+    _reindex(entry)
+    _recalculate(entry)
+    _bump_revision(entry)
+    entry.updated_by = actor
+    saved = f"{entry.line_count} item(s), {entry.currency} {Decimal(entry.total_cost):,.2f}"
+    if action == "create":
+        summary = (
+            f"Opened the LIH register for {well.well_code} on {data.cost_date.isoformat()} and saved "
+            f"{created} item(s) in one entry: {saved}"
+            + (f", deducted from AFE {afe.afe_code}" if afe else ", without an AFE")
+        )
+    else:
+        summary = (
+            f"Saved the LIH worksheet for {well.well_code} on {data.cost_date.isoformat()}: "
+            f"{created} added, {updated} updated, {removed} removed; {saved}"
+        )
+    _audit(
+        db, user=user, action=action, entity_type="lih_cost", entity_id=entry.id,
+        entity_label=f"LIH · {well.well_code} · {data.cost_date.isoformat()}",
+        summary=summary,
+        request=request,
+    )
+    _commit(db)
+    return _day_out(_entry_or_404(db, organization_id, entry.id))
+
+
+def delete_lines(
+    db: Session, organization_id: str, entry_id: str, line_ids: Sequence[str], user: User, request: Request | None
+) -> LihCostDayOut:
+    """Remove several worksheet items in one call, keeping order and totals exact."""
+    entry = _entry_or_404(db, organization_id, entry_id)
+    wanted = list(dict.fromkeys(line_ids))
+    existing = {line.id: line for line in entry.lines}
+    missing = [line_id for line_id in wanted if line_id not in existing]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail="One or more selected LIH items are no longer on this day. Reload the day and try again.",
+        )
+    for line_id in wanted:
+        line = existing[line_id]
+        entry.lines.remove(line)
+        db.delete(line)
+    _reindex(entry)
+    _recalculate(entry)
+    _bump_revision(entry)
+    entry.updated_by = _actor_name(user)
+    _audit(
+        db, user=user, action="delete", entity_type="lih_cost_line", entity_id=entry.id,
+        entity_label=f"LIH · {entry.well_code_snapshot} · {entry.cost_date.isoformat()}",
+        summary=(
+            f"Removed {len(wanted)} LIH item(s) from {entry.well_code_snapshot} on "
+            f"{entry.cost_date.isoformat()}; the day is now {entry.line_count} item(s), "
+            f"{entry.currency} {Decimal(entry.total_cost):,.2f}"
+        ),
+        request=request,
+    )
+    _commit(db)
+    return _day_out(_entry_or_404(db, organization_id, entry.id))
+
+
+def _import_line(row: LihCostImportRow) -> LihCostLineIn:
+    """Turn a loose spreadsheet row into a validated LIH item."""
+
+    def text(value: Any) -> str:
+        return "" if value is None else str(value).strip()
+
+    def measured(value: Any, label: str, *, required: bool = False) -> str | None:
+        raw = text(value)
+        if raw == "":
+            if required:
+                raise ValueError(f"{label} is mandatory.")
+            return None
+        return raw
+
+    description = text(row.item_description)
+    if not description:
+        raise ValueError("Item description is mandatory.")
+    if len(description) > 300:
+        raise ValueError("Item description cannot be longer than 300 characters.")
+    return LihCostLineIn(
+        source="import",
+        item_description=description,
+        od_size=measured(row.od_size, "OD size"),
+        id_size=measured(row.id_size, "ID size"),
+        fish_neck_od=measured(row.fish_neck_od, "Fish neck OD"),
+        fish_neck_length=measured(row.fish_neck_length, "Fish neck length"),
+        serial_number=text(row.serial_number),
+        connection=text(row.connection),
+        length=measured(row.length, "Length"),
+        no_of_units=measured(row.no_of_units, "No of units", required=True),
+        unit=text(row.unit),
+        unit_cost=measured(row.unit_cost, "Unit cost", required=True),
+        remarks=text(row.remarks),
+    )
+
+
+def import_lines(
+    db: Session, organization_id: str, data: LihCostImportRequest, user: User, request: Request | None
+) -> LihCostImportResponse:
+    """Import many LIH items for one well, grouped by date, in one request.
+
+    Every row is validated first, so the response lists precise row errors
+    ("Row 7: No of units is mandatory.") while the valid rows still save. Each
+    date is written in its own nested transaction: one bad date cannot lose the
+    rest of the file, and an existing day is appended to rather than replaced.
+    """
+    well = _well_or_404(db, organization_id, data.well_id)
+    afe = _resolve_afe(db, organization_id, well, data.afe_id)
+    currency = _currency_for(db, organization_id, afe)
+    actor = _actor_name(user)
+
+    errors: list[str] = []
+    grouped: dict[date, list[tuple[int, LihCostLineIn]]] = {}
+    for number, row in enumerate(data.rows, start=1):
+        day = row.cost_date or data.cost_date
+        if day is None:
+            errors.append(f"Row {number}: a LIH date is required (fill the Date column or choose a date).")
+            continue
+        try:
+            payload = _import_line(row)
+        except ValidationError as error:
+            errors.append(f"Row {number}: {_validation_message(error)}")
+            continue
+        except (ValueError, TypeError) as error:
+            errors.append(f"Row {number}: {error}")
+            continue
+        grouped.setdefault(day, []).append((number, payload))
+
+    imported = 0
+    touched: set[date] = set()
+    for day in sorted(grouped):
+        rows = grouped[day]
+        row_numbers = ", ".join(str(number) for number, _ in rows)
+        try:
+            with db.begin_nested():
+                entry = db.scalars(
+                    _entry_query(organization_id, deleted=False).where(
+                        LihCostEntry.well_id == well.id, LihCostEntry.cost_date == day,
+                    )
+                ).unique().first()
+                if entry is None:
+                    entry = LihCostEntry(
+                        id=uid(),
+                        organization_id=organization_id,
+                        rig_id=well.rig_id,
+                        rig_code_snapshot=well.rig.rig_code if well.rig else "",
+                        rig_name_snapshot=well.rig.rig_name if well.rig else "",
+                        well_id=well.id,
+                        well_code_snapshot=well.well_code,
+                        well_name_snapshot=well.well_name,
+                        afe_id=afe.id if afe else None,
+                        afe_code_snapshot=afe.afe_code if afe else "",
+                        afe_name_snapshot=afe.afe_name if afe else "",
+                        cost_date=day,
+                        currency=currency,
+                        remarks="",
+                        line_count=0,
+                        total_cost=Decimal("0"),
+                        revision=0,
+                        created_by=actor,
+                        updated_by=actor,
+                    )
+                    db.add(entry)
+                    db.flush()
+                start = max((line.sort_order for line in entry.lines), default=-1) + 1
+                for offset, (_, payload) in enumerate(rows):
+                    entry.lines.append(
+                        _new_line(organization_id, entry, payload, sort_order=start + offset)
+                    )
+                _recalculate(entry)
+                _bump_revision(entry)
+                entry.updated_by = actor
+                db.flush()
+            imported += len(rows)
+            touched.add(day)
+        except IntegrityError:
+            errors.append(f"Row {row_numbers}: a LIH register already exists for this date.")
+        except SQLAlchemyError:
+            errors.append(f"Row {row_numbers}: the item(s) for {day.isoformat()} could not be saved.")
+
+    _audit(
+        db, user=user, action="import", entity_type="lih_cost_import", entity_id=well.id,
+        entity_label=f"LIH import · {well.well_code}",
+        summary=(
+            f"Imported {imported} LIH item(s) into {len(touched)} day(s) for {well.well_code}; "
+            f"{len(errors)} row error(s)"
+        ),
+        request=request,
+    )
+    _commit(db)
+    return LihCostImportResponse(
+        imported_count=imported,
+        error_count=len(errors),
+        success=not errors,
+        day_count=len(touched),
+        errors=errors,
+    )
 
 
 def _selected_entries(db: Session, organization_id: str, ids: Sequence[str], *, deleted: bool) -> list[LihCostEntry]:

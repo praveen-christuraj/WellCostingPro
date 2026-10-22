@@ -1,4 +1,4 @@
-.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check mud-cost-reconciliation-check
+.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check mud-cost-reconciliation-check lih-worksheet-check
 
 test:
 	cd backend && ../.venv/bin/python -m pytest -q
@@ -39,3 +39,11 @@ mud-cost-reconciliation-check:
 		--bundle --platform=node --format=esm --jsx=automatic \
 		--outfile=node_modules/.cache/mud-cost-reconciliation-check.mjs --external:jsdom && \
 		node node_modules/.cache/mud-cost-reconciliation-check.mjs
+
+# LIH worksheet: multi-row entry, duplicate, paste, shortcuts and the one-save payload.
+lih-worksheet-check:
+	cd frontend && npm install --no-save jsdom && \
+		NODE_PATH="$$PWD/node_modules" ./node_modules/.bin/esbuild ../.agent/tools/lih-worksheet-check.jsx \
+		--bundle --platform=node --format=esm --jsx=automatic --log-level=error \
+		--outfile=node_modules/.cache/lih-worksheet-check.mjs --external:jsdom && \
+		node node_modules/.cache/lih-worksheet-check.mjs

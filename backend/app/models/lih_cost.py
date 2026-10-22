@@ -1,10 +1,19 @@
 """LIH Cost Register persistence models.
 
 The Lost In Hole (LIH) register is a manual, well-scoped register inside Daily
-Cost Management. A *LIH day* is one rig / well / AFE / date record; the user
-adds the LIH items one by one under that date, and every item carries its own
-equipment dimensions (OD, ID, fish-neck OD and length, connection, serial
-number and total length) as ordinary typed columns.
+Cost Management. A *LIH day* is one rig / well / AFE / date record. The day is
+an aggregate: its items are edited as one worksheet and saved together in a
+single atomic request, so a user never has to add them one call at a time.
+Every item carries its own equipment dimensions (OD, ID, fish-neck OD and
+length, connection, serial number and total length) as ordinary typed columns.
+
+Two columns keep the aggregate honest:
+
+* ``revision`` on the day is bumped on every save, so a worksheet opened in one
+  browser cannot silently overwrite items saved from another,
+* ``source`` on the item records how the row was created (manual entry,
+  duplicated from another item, or imported), which keeps bulk imports and
+  duplicated rows distinguishable in the register and the audit trail.
 
 LIH cost is deliberately accounted outside the AFE estimate:
 
@@ -47,6 +56,7 @@ LIH_MAX_ITEM_DESCRIPTION = 300
 LIH_MAX_SERIAL_NUMBER = 100
 LIH_MAX_CONNECTION = 100
 LIH_MAX_REMARKS = 500
+LIH_LINE_SOURCES = ("manual", "duplicate", "import")
 
 
 class LihCostEntry(Base):
@@ -57,6 +67,7 @@ class LihCostEntry(Base):
         UniqueConstraint("organization_id", "well_id", "cost_date", name="uq_lih_cost_entries_org_well_date"),
         CheckConstraint("total_cost >= 0", name="ck_lih_cost_entries_total"),
         CheckConstraint("line_count >= 0", name="ck_lih_cost_entries_line_count"),
+        CheckConstraint("revision >= 0", name="ck_lih_cost_entries_revision"),
         Index("ix_lih_cost_entries_org_rig", "organization_id", "rig_id"),
         Index("ix_lih_cost_entries_org_afe_date", "organization_id", "afe_id", "cost_date"),
         Index("ix_lih_cost_entries_org_deleted_date", "organization_id", "is_deleted", "cost_date"),
@@ -86,6 +97,9 @@ class LihCostEntry(Base):
     remarks: Mapped[str] = mapped_column(String(1000), default="", server_default="", nullable=False)
     line_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     total_cost: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=Decimal("0"), server_default="0", nullable=False)
+    # Bumped on every worksheet save; a stale client is rejected instead of
+    # overwriting items somebody else has saved in the meantime.
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str] = mapped_column(String(255), default="", server_default="", nullable=False)
@@ -106,11 +120,13 @@ class LihCostEntry(Base):
 
 
 class LihCostLine(Base):
-    """One manually entered LIH item under a LIH day.
+    """One LIH item under a LIH day.
 
     ``item_description``, ``no_of_units`` and ``unit_cost`` are mandatory; the
     server computes ``total_cost`` as units × unit cost. The remaining columns
     are optional equipment details kept as typed measurements and text.
+    ``source`` is how the row entered the register (manual, duplicate, import)
+    and ``sort_order`` is its position on the day's worksheet.
     """
 
     __tablename__ = "lih_cost_lines"
@@ -132,7 +148,11 @@ class LihCostLine(Base):
             "fish_neck_length IS NULL OR fish_neck_length >= 0", name="ck_lih_cost_lines_fish_neck_length"
         ),
         CheckConstraint("length IS NULL OR length >= 0", name="ck_lih_cost_lines_length"),
+        CheckConstraint(
+            "source IN ('manual', 'duplicate', 'import')", name="ck_lih_cost_lines_source"
+        ),
         Index("ix_lih_cost_lines_entry_order", "entry_id", "sort_order"),
+        Index("ix_lih_cost_lines_org_description", "organization_id", "item_description"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
@@ -155,6 +175,8 @@ class LihCostLine(Base):
     unit_cost: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=Decimal("0"), server_default="0", nullable=False)
     total_cost: Mapped[Decimal] = mapped_column(Numeric(28, 10), default=Decimal("0"), server_default="0", nullable=False)
     remarks: Mapped[str] = mapped_column(String(LIH_MAX_REMARKS), default="", server_default="", nullable=False)
+    # manual | duplicate | import — how this row was captured.
+    source: Mapped[str] = mapped_column(String(20), default="manual", server_default="manual", nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now, nullable=False)
