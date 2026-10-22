@@ -72,13 +72,15 @@ export type LihWorksheetProps = {
   savedCount: number
   /** Focus the first cell when the sheet opens after the day selection changes. */
   autoFocus?: boolean
+  /** A parent dialog can own Save/Cancel while the worksheet keeps its other tools. */
+  showSaveActions?: boolean
 }
 
 type FocusRequest = { key: string; column: number }
 
 export function LihWorksheet({
   rows, onRowsChange, currency, uoms, suggestions, removedCount, canEdit, canImport, canExport, saving, dirty,
-  saveError, onSave, onDiscard, onImport, onExportSheet, savedCount, autoFocus = false,
+  saveError, onSave, onDiscard, onImport, onExportSheet, savedCount, autoFocus = false, showSaveActions = true,
 }: LihWorksheetProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -334,7 +336,7 @@ export function LihWorksheet({
         {canImport && onImport && <Button size="small" variant="outlined" startIcon={<UploadFileRounded sx={{ fontSize: 18 }}/>} onClick={onImport}>
           Import items
         </Button>}
-        {canEdit && <Button
+        {canEdit && showSaveActions && <Button
           size="small"
           variant="outlined"
           color="inherit"
@@ -344,7 +346,7 @@ export function LihWorksheet({
         >
           Discard changes
         </Button>}
-        {canEdit && <Button
+        {canEdit && showSaveActions && <Button
           size="small"
           variant="contained"
           startIcon={<SaveOutlined sx={{ fontSize: 18 }}/>}

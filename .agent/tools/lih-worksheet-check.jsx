@@ -7,6 +7,7 @@
 //     --outfile=node_modules/.cache/lih-worksheet-check.mjs --external:jsdom && \
 //     node node_modules/.cache/lih-worksheet-check.mjs
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 
 const dom = new JSDOM('<html><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: 'http://localhost/' })
@@ -45,7 +46,7 @@ const rootElement = document.getElementById('root')
 const root = createRoot(rootElement)
 let savedCalls = 0
 
-function Harness({ initial, canEdit = true, removedCount = 0, savedCount = 0 }) {
+function Harness({ initial, canEdit = true, removedCount = 0, savedCount = 0, showSaveActions = true }) {
   const [rows, setRows] = useState(initial)
   const dirty = rows.some(rowHasChanged)
   return createElement(LihWorksheet, {
@@ -67,6 +68,7 @@ function Harness({ initial, canEdit = true, removedCount = 0, savedCount = 0 }) 
     onExportSheet: () => {},
     savedCount,
     autoFocus: false,
+    showSaveActions,
   })
 }
 
@@ -229,6 +231,21 @@ assert.equal(fields().every(field => field.disabled), true, 'read-only users can
 assert.equal([...rootElement.querySelectorAll('button')].some(button => button.textContent.includes('Save all items')), false,
   'read-only users get no save action')
 assert.match(rootElement.textContent, /read-only with your current permissions/)
+
+// ---------------------------------------------------------------------------
+// 9. The register keeps the worksheet off the main page and opens it on demand.
+// ---------------------------------------------------------------------------
+await render(createElement(Harness, { key: 'dialog-mode', initial: [blankDraftRow()], showSaveActions: false }))
+assert.equal([...rootElement.querySelectorAll('button')].some(button => button.textContent.includes('Save all items')), false,
+  'the dialog can own the single save action without duplicating it inside the worksheet')
+assert.ok([...rootElement.querySelectorAll('button')].some(button => button.textContent.includes('Add row')),
+  'dialog mode retains the worksheet entry tools')
+const registerSource = readFileSync('../frontend/src/pages/LihCostRegister.tsx', 'utf8')
+assert.ok(registerSource.includes('open={worksheetOpen}') && registerSource.includes('submitLabel="Save all items"'),
+  'the register hosts the worksheet in the standard save-protected dialog')
+assert.ok(registerSource.includes('Add items') && registerSource.includes('View items'),
+  'the compact main page exposes one Add items action and a saved-day detail action')
+assert.ok(registerSource.includes('showSaveActions={false}'), 'the dialog footer is the only worksheet save action')
 
 await act(async () => { root.unmount() })
 w.close()

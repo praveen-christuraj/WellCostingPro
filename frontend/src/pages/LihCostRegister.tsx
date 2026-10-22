@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  DeleteForeverOutlined, DeleteOutlineRounded, EventNoteOutlined, FilterAltOffOutlined,
+  AddRounded, DeleteForeverOutlined, DeleteOutlineRounded, EventNoteOutlined, FilterAltOffOutlined,
   OpenInNewRounded, RefreshRounded, RestoreRounded,
 } from '@mui/icons-material'
 import {
@@ -48,6 +48,7 @@ export default function LihCostRegister() {
   const [importOpen, setImportOpen] = useState(false)
   const [sheetExportAnchor, setSheetExportAnchor] = useState<HTMLElement | null>(null)
   const [autoFocusSheet, setAutoFocusSheet] = useState(false)
+  const [worksheetOpen, setWorksheetOpen] = useState(false)
 
   const [filterRig, setFilterRig] = useState('')
   const [filterWell, setFilterWell] = useState('')
@@ -228,9 +229,7 @@ export default function LihCostRegister() {
         }),
       })
       setDay(updated)
-      setNotice(day
-        ? `LIH worksheet saved — ${updated.entry.line_count} item(s), ${dailyMoney(updated.entry.total_cost, updated.entry.currency)}.`
-        : `LIH register opened and saved with ${updated.entry.line_count} item(s).`)
+      setNotice(`LIH day saved — ${updated.entry.line_count} item(s), total ${dailyMoney(updated.entry.total_cost, updated.entry.currency)}.`)
       await loadRegister()
       return true
     } catch (caught) {
@@ -246,14 +245,18 @@ export default function LihCostRegister() {
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
-      if (!dirty || saving || !canSave || showDeleted || importOpen || pending) return
-      if ((event.target as HTMLElement | null)?.closest('.MuiDialog-root')) return
+      if (!worksheetOpen || !dirty || saving || !canSave || showDeleted || importOpen || pending) return
       event.preventDefault()
-      void saveWorksheet()
+      void saveWorksheet().then(saved => {
+        if (saved) {
+          setWorksheetOpen(false)
+          setAutoFocusSheet(false)
+        }
+      })
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [canSave, dirty, importOpen, pending, saveWorksheet, saving, showDeleted])
+  }, [canSave, dirty, importOpen, pending, saveWorksheet, saving, showDeleted, worksheetOpen])
 
   const leaveGuard = useUnsavedChangesGuard({
     when: dirty,
@@ -334,11 +337,39 @@ export default function LihCostRegister() {
       setSaveError('Save or discard the current worksheet before opening another LIH day.')
       return
     }
+    setDay(null)
+    setDraft([])
     setRigId(entry.rig_id)
     setWellId(entry.well_id)
     setAfeId(entry.afe_id ?? '')
     setCostDate(entry.cost_date)
     setAutoFocusSheet(false)
+    setWorksheetOpen(true)
+    void loadDay(entry.well_id, entry.cost_date)
+  }
+
+  const openWorksheet = () => {
+    setSaveError('')
+    if (!rigId || !wellId || !costDate) {
+      setDayError('Choose the rig, well and LIH date before adding items.')
+      return
+    }
+    setDayError('')
+    setAutoFocusSheet(true)
+    setWorksheetOpen(true)
+  }
+
+  const closeWorksheet = () => {
+    if (dirty) discardDraft()
+    setWorksheetOpen(false)
+    setAutoFocusSheet(false)
+  }
+
+  const saveAndCloseWorksheet = async () => {
+    if (await saveWorksheet()) {
+      setWorksheetOpen(false)
+      setAutoFocusSheet(false)
+    }
   }
 
   const exportAudit = async (
@@ -408,14 +439,14 @@ export default function LihCostRegister() {
     {
       headerName: 'ACTIONS',
       colId: 'actions',
-      minWidth: 120,
+      minWidth: 150,
       sortable: false,
       filter: false,
       cellRenderer: (params: ICellRendererParams<LihCostEntry>) => {
         const entry = params.data
         if (!entry) return null
-        return <Box display="flex" gap={.4}>
-          <Tooltip title="Open this LIH day"><span><IconButton size="small" aria-label="Open LIH day" onClick={() => openRegisterDay(entry)}><OpenInNewRounded sx={{ fontSize: 17 }}/></IconButton></span></Tooltip>
+        return <Box display="flex" gap={.4} alignItems="center">
+          {!showDeleted && <Button size="small" startIcon={<OpenInNewRounded sx={{ fontSize: 16 }}/>} onClick={() => openRegisterDay(entry)}>View items</Button>}
           {!showDeleted && can('daily-cost:delete') && <Tooltip title="Move to Deleted Entries"><span><IconButton size="small" color="error" aria-label="Delete LIH day" onClick={() => { setActionError(''); setPending({ kind: 'delete', rows: [entry] }) }}><DeleteOutlineRounded sx={{ fontSize: 17 }}/></IconButton></span></Tooltip>}
           {showDeleted && can('daily-cost:restore') && <Tooltip title="Restore"><span><IconButton size="small" aria-label="Restore LIH day" onClick={() => { setActionError(''); setPending({ kind: 'restore', rows: [entry] }) }}><RestoreRounded sx={{ fontSize: 17 }}/></IconButton></span></Tooltip>}
           {showDeleted && can('daily-cost:permanent-delete') && <Tooltip title="Delete permanently"><span><IconButton size="small" color="error" aria-label="Permanently delete LIH day" onClick={() => { setActionError(''); setPending({ kind: 'purge', rows: [entry] }) }}><DeleteForeverOutlined sx={{ fontSize: 17 }}/></IconButton></span></Tooltip>}
@@ -457,18 +488,19 @@ export default function LihCostRegister() {
         <Box>
           <Typography fontWeight={800} fontSize={15}>Select the LIH day</Typography>
           <Typography color="text.secondary" fontSize={11.5} mt={.25}>
-            Choose the rig and its well, then the date the LIH cost belongs to. The worksheet opens for that day.
+            Choose the rig and its well, then the date the LIH cost belongs to. Open the item dialog only when you are ready to enter or review lines.
           </Typography>
         </Box>
         <Box display="flex" gap={0.7} flexWrap="wrap">
           {day && <Tag tone={day.entry.afe_id ? 'info' : 'warning'}>{day.entry.afe_id ? `Deducted from ${day.entry.afe_code}` : 'No AFE on this well'}</Tag>}
           {day && <Tag>Revision {day.entry.revision}</Tag>}
           {day && <Tag tone={day.entry.line_count ? 'success' : 'neutral'}>{day.entry.line_count} saved item{day.entry.line_count === 1 ? '' : 's'}</Tag>}
+          {day && <Tag tone="info">Total {dailyMoney(day.entry.total_cost, day.entry.currency)}</Tag>}
         </Box>
       </Box>
-      <Box display="grid" gap={1.3} sx={{ gridTemplateColumns: { xs: '1fr', md: '1fr 1.3fr .9fr .9fr' } }} alignItems="center">
+      <Box display="grid" gap={1.3} sx={{ gridTemplateColumns: { xs: '1fr', md: '1fr 1.3fr .9fr .9fr auto' } }} alignItems="center">
         <TextField select label="Rig" value={rigId} onChange={event => chooseRig(event.target.value)} helperText="Rigs in this workspace" disabled={dayLocked}>
-          <MenuItem value="">All rigs</MenuItem>
+          <MenuItem value="">Choose rig</MenuItem>
           {(reference?.rigs ?? []).map(rig => <MenuItem key={rig.id} value={rig.id}>{rig.display_name}</MenuItem>)}
         </TextField>
         <TextField select required label="Well" value={wellId} onChange={event => chooseWell(event.target.value)} disabled={dayLocked || !wellsForRig.length}
@@ -485,6 +517,10 @@ export default function LihCostRegister() {
             </TextField>
           : <TextField label="AFE" value={selectedAfe ? `${selectedAfe.afe_code} · ${selectedAfe.afe_name}` : 'No AFE yet'} InputProps={{ readOnly: true }}
               helperText={selectedAfe ? `Standard currency ${selectedAfe.standard_currency}` : 'Recorded in the workspace default currency'}/>}
+        <Button variant="contained" startIcon={<AddRounded/>} onClick={openWorksheet}
+          disabled={!rigId || !wellId || !costDate || dayLoading || (!day && !canCreate)}>
+          Add items
+        </Button>
       </Box>
       {dayLocked && <Alert severity="info" sx={{ mt: 1.3, py: .4 }}>
         The worksheet has unsaved changes. Save all items or discard the changes before switching to another day.
@@ -498,17 +534,25 @@ export default function LihCostRegister() {
     <ErrorMessage message={dayError}/>
     {!showDeleted && wellId && dayLoading && <Box py={4} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={24}/></Box>}
 
-    {!showDeleted && wellId && !dayLoading && !dayError && draft.length > 0 && <>
-      <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 2, mb: 1.4 }}>
+    <FormDialog
+      open={worksheetOpen}
+      title={worksheetTitle}
+      subtitle={day
+        ? `${day.entry.rig_code} · ${day.entry.rig_name} · ${day.entry.afe_code || 'No AFE'} · recorded in ${day.entry.currency}`
+        : `${selectedWell?.well_code ?? ''} · ${selectedAfe?.afe_code ?? 'No AFE'} · ${dayCurrency || 'currency from the AFE'}. The day is created when the first items are saved.`}
+      onClose={closeWorksheet}
+      onSubmit={() => void saveAndCloseWorksheet()}
+      busy={saving}
+      busyLabel="Saving all items…"
+      submitLabel="Save all items"
+      submitDisabled={!dirty || !canEdit || dayLoading}
+      dirty={dirty}
+      maxWidth="xl"
+    >
+      {dayLoading ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box>
+        : dayError ? <ErrorMessage message={dayError}/>
+        : draft.length > 0 ? <Box>
         <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={1} flexWrap="wrap" mb={1.2}>
-          <Box>
-            <Typography fontWeight={800} fontSize={15}>{worksheetTitle}</Typography>
-            <Typography color="text.secondary" fontSize={11.5} mt={.25}>
-              {day
-                ? `${day.entry.rig_code} · ${day.entry.rig_name} · ${day.entry.afe_code || 'No AFE'} · recorded in ${day.entry.currency}`
-                : `${selectedWell?.well_code ?? ''} · ${selectedAfe?.afe_code ?? 'No AFE'} · ${dayCurrency || 'currency from the AFE'}. The day is created when the first items are saved.`}
-            </Typography>
-          </Box>
           <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
             <Box sx={{ px: 1.4, py: .7, border: '1px solid', borderColor: 'divider', borderRadius: 1.5, minWidth: 150 }}>
               <Typography fontSize={9.5} fontWeight={800} letterSpacing={.6} color="text.secondary">SAVED LIH TOTAL</Typography>
@@ -519,8 +563,6 @@ export default function LihCostRegister() {
               <Typography fontSize={12.5} fontWeight={800} mt={.5}>Added to actual</Typography>
               <Typography fontSize={10.5} color="text.secondary">Deducted from the AFE total</Typography>
             </Box>
-            {day && can('daily-cost:delete') && <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlineRounded/>}
-              onClick={() => { setActionError(''); setPending({ kind: 'delete', rows: [day.entry] }) }}>Delete day</Button>}
           </Box>
         </Box>
 
@@ -543,6 +585,7 @@ export default function LihCostRegister() {
           onImport={openImport}
           onExportSheet={setSheetExportAnchor}
           autoFocus={autoFocusSheet}
+          showSaveActions={false}
         />
 
         <Divider sx={{ my: 1.6 }}/>
@@ -557,9 +600,10 @@ export default function LihCostRegister() {
           inputProps={{ maxLength: 1000 }}
           helperText={remarksDirty ? 'Unsaved remarks — they save with the worksheet.' : 'Context for this LIH day, for example the fishing job or failure.'}
         />
-      </Paper>
+      </Box> : <Typography color="text.secondary">No LIH item sheet is available for this selection.</Typography>}
+    </FormDialog>
 
-      {can('daily-cost:import') && <ImportDialog
+    {can('daily-cost:import') && <ImportDialog
         open={importOpen}
         onClose={() => setImportOpen(false)}
         title="Import LIH items"
@@ -570,15 +614,6 @@ export default function LihCostRegister() {
         templateName="lih-cost-items-template.csv"
         onRows={runImport}
       />}
-    </>}
-
-    {!showDeleted && !wellId && <Paper variant="outlined" sx={{ p: 2.4, borderRadius: 2, mb: 1.6, textAlign: 'center' }}>
-      <Typography fontWeight={800} fontSize={14.5}>Open the LIH worksheet to start</Typography>
-      <Typography color="text.secondary" fontSize={12} mt={.5}>
-        Choose a rig, its well and the LIH date above. Every item on the sheet is then saved together in one step,
-        and a file of items can be imported instead.
-      </Typography>
-    </Paper>}
 
     <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 2, mb: 1.8 }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap" mb={1.2}>
@@ -637,7 +672,7 @@ export default function LihCostRegister() {
         onSelectionChange={setSelected}
       />}
     {!registerLoading && !register.length && <Typography color="text.secondary" fontSize={12.5} mt={1.2}>
-      {showDeleted ? 'There are no deleted LIH register entries.' : 'No LIH register entries yet. Choose a rig, well and date above, then add the first items to the worksheet.'}
+      {showDeleted ? 'There are no deleted LIH register entries.' : 'No LIH register entries yet. Choose a rig, well and date above, then use Add items.'}
     </Typography>}
 
     <FormDialog
