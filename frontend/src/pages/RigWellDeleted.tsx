@@ -122,7 +122,7 @@ export default function RigWellDeleted() {
     />
 
     <Alert severity="warning" sx={{ mb: 1.8 }} action={can('master-data:read') ? <Button component={RouterLink} to="/master-data/deleted" size="small">Master Data deleted entries</Button> : undefined}>
-      Permanent deletion is irreversible. Restore parent records first; before purging a rig or well, permanently delete its child wells or sub activities. Configuration sections and phases are removed with their well. Restore an Activity from Master Data before restoring sub activities assigned to it.
+      Permanent deletion is irreversible. Restore parent records first; before purging a rig or well, permanently delete its child wells or sub activities, then its AFEs and daily-cost sheets. Configuration sections, phases, plan revisions and the locked daily-cost rate book are removed with their well once every sheet that priced from it is purged. Restore an Activity from Master Data before restoring sub activities assigned to it.
     </Alert>
     {notice && <Alert severity="success" onClose={() => setNotice('')} sx={{ mb: 1.5 }}>{notice}</Alert>}
     <ErrorMessage message={error}/>

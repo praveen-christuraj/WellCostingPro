@@ -83,6 +83,12 @@ from app.schemas.afe import (
 from app.services import audit
 from app.models.entities import User
 from app.services.catalogue import options_by_id
+from app.services.retention import (
+    assert_purgeable,
+    daily_sheet_counts_by_afe,
+    purge_owned_snapshots,
+    snapshot_summary,
+)
 
 AFE_STATUS_LABELS = {
     "draft": "Draft",
@@ -1459,36 +1465,60 @@ def permanently_delete(db: Session, organization_id: str, afe_ids: Iterable[str]
     active = [afe.afe_code for afe in afes if not afe.is_deleted]
     if active:
         raise HTTPException(status_code=409, detail=f"Move these AFEs to Deleted Entries first: {', '.join(sorted(active)[:10])}")
-    entries_by_afe, baselines_by_afe = _daily_cost_dependency_counts(
-        db, organization_id, [afe.id for afe in afes], active_entries_only=False
-    )
-    blocked = [
-        afe for afe in afes
-        if entries_by_afe.get(afe.id) or baselines_by_afe.get(afe.id)
-    ]
+
+    # Every daily-cost sheet that prices from the AFE must be purged first: those
+    # sheets hold the AFE's locked baseline values, and a sheet in Deleted Entries
+    # can still be restored, so it may not outlive the AFE it belongs to.
+    afe_id_list = [afe.id for afe in afes]
+    deleted_sheets = daily_sheet_counts_by_afe(db, organization_id, afe_id_list)
+    active_sheets = daily_sheet_counts_by_afe(db, organization_id, afe_id_list, active_only=True)
+    blocked = [afe for afe in afes if deleted_sheets.get(afe.id)]
     if blocked:
         afe = blocked[0]
-        dependencies = []
-        if entries_by_afe.get(afe.id):
-            dependencies.append(f"{entries_by_afe[afe.id]} daily-cost sheet(s)")
-        if baselines_by_afe.get(afe.id):
-            dependencies.append("an immutable daily-cost baseline")
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"AFE {afe.afe_code} is retained by {', '.join(dependencies)}. Permanently delete linked daily-cost "
-                "sheets first. Immutable AFE baselines are retained for audit, so an AFE with baseline history "
-                "must remain in Deleted Entries."
+        active_count = active_sheets.get(afe.id, 0)
+        deleted_count = deleted_sheets.get(afe.id, 0) - active_count
+        if active_count:
+            reason = (
+                f"AFE {afe.afe_code} still has {active_count} active daily-cost sheet(s). Move them to "
+                "Deleted Entries in Daily Cost Management, then choose Delete forever on those sheets."
+            )
+        else:
+            reason = (
+                f"AFE {afe.afe_code} is retained by {deleted_count} daily-cost sheet(s) in Deleted Entries. "
+                "Open Daily Cost Management → Deleted entries and choose Delete forever on those sheets."
+            )
+        raise HTTPException(status_code=409, detail=f"{reason} Only then can the AFE and its locked baseline be purged.")
+
+    # Any other module that still holds the AFE is named explicitly, so the user
+    # never has to interpret a database integrity error.
+    for afe in afes:
+        assert_purgeable(
+            db, organization_id, afe,
+            entity_label=f"AFE {afe.afe_code}",
+            next_step=(
+                "Permanently delete those records in their own module first (LIH Cost Register, SOW "
+                "revisions, or the affected daily-cost sheet)."
             ),
         )
+
+    # The AFE's immutable estimate snapshot belongs to this AFE. It is removed in
+    # the same transaction, after the sheets that price from it are gone, so the
+    # audit snapshot never becomes an orphan that blocks this purge forever.
+    removed = purge_owned_snapshots(db, organization_id, afe_ids=afe_id_list)
+    snapshot_note = snapshot_summary(removed)
     for afe in afes:
         _record_audit(
             db, user=user, action="permanent_delete", entity_type="afe", record_id=None, entity_label=afe.afe_code,
-            summary=f"Permanently deleted AFE {afe.afe_code} and its estimate", request=request,
+            summary=(
+                f"Permanently deleted AFE {afe.afe_code} and its estimate"
+                + (f", together with {snapshot_note}" if snapshot_note else "")
+            ),
+            request=request,
         )
         db.delete(afe)
     _commit(db)
     return len(afes)
+
 
 
 def change_status(

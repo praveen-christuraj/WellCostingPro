@@ -1356,3 +1356,188 @@ def test_itemized_service_costs_roundtrip_preview_and_submit():
         assert submitted.status_code == 200, submitted.text
         assert Decimal(submitted.json()["services"][0]["amount"]) == Decimal("143.55")
         assert len(submitted.json()["services"][0]["cost_items"]) == 2
+
+
+def test_deleted_entries_purge_cascades_locked_baselines_afe_well_and_rig():
+    """Purging a daily sheet must not leave an immutable baseline that blocks its AFE.
+
+    Baselines belong to the AFE/well they snapshot: they are retained while the
+    owner is retained and purged with it, so the Deleted Entries flow always
+    terminates (AFE -> well -> rig) after the sheets are purged.
+    """
+    from sqlalchemy import func, select
+    from app.models import (
+        DailyCostBaseline, DailyCostCatalogueRateSnapshot, DailyCostWellRateBaseline,
+        MudCostSectionSetting,
+    )
+
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        afe, well, rig = setup["afe"], setup["well"], setup["rig"]
+        entry_id = setup["entry"]["id"]
+
+        # Baselines exist as soon as the first sheet locks the AFE/well rates.
+        with SessionLocal() as db:
+            before = {
+                "afe": db.scalar(select(func.count()).select_from(DailyCostBaseline)),
+                "rate": db.scalar(select(func.count()).select_from(DailyCostWellRateBaseline)),
+                "snapshots": db.scalar(select(func.count()).select_from(DailyCostCatalogueRateSnapshot)),
+            }
+        assert before["afe"] == 1 and before["rate"] == 1 and before["snapshots"] > 0
+
+        # An active sheet keeps its AFE in the register.
+        blocked = client.delete(f"/api/v1/afe/afes/{afe['id']}", headers=headers)
+        assert blocked.status_code == 409
+        assert "active daily-cost sheet" in blocked.json()["detail"].lower()
+
+        # Soft-deleting the sheet is not enough: it could still be restored, so the
+        # AFE purge asks for the sheet to be permanently deleted first.
+        assert client.delete(f"/api/v1/daily-cost/entries/{entry_id}", headers=headers).status_code == 200
+        assert client.delete(f"/api/v1/afe/afes/{afe['id']}", headers=headers).status_code == 200
+        kept = client.delete(f"/api/v1/afe/afes/{afe['id']}/permanent", headers=headers)
+        assert kept.status_code == 409
+        assert "Deleted entries" in kept.json()["detail"]
+
+        # Purging the sheet clears the sheet, then the AFE can go with its baseline.
+        assert client.delete(f"/api/v1/daily-cost/entries/{entry_id}/permanent", headers=headers).status_code == 204
+        assert client.delete(f"/api/v1/afe/afes/{afe['id']}/permanent", headers=headers).status_code == 204
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count()).select_from(DailyCostBaseline)) == 0
+            assert db.scalar(select(func.count()).select_from(DailyCostWellRateBaseline)) == 1
+
+        # Per-well mud configuration is owned by the well and has no delete path of
+        # its own; without this it would block the well purge forever.
+        with SessionLocal() as db:
+            db.add(MudCostSectionSetting(
+                organization_id=db.scalar(select(Organization.id).where(Organization.slug == "north")),
+                rig_id=rig["id"], well_id=well["id"], section_id="section-1",
+                hole_section_id=setup["hole"]["id"], section_scope="drilling",
+                section_code_snapshot=setup["hole"]["code"], section_name_snapshot=setup["hole"]["name"],
+                mud_type="WBM", remarks="", base_rate=Decimal("12.5"), currency="USD",
+                created_by="Test", updated_by="Test",
+            ))
+            db.commit()
+
+        # The well still owns its rate book; the well purge removes it (and the well).
+        for key in ("sub1", "sub2", "sub3", "sub_upa", "sub_npt"):
+            sub = setup[key]
+            assert client.delete(
+                f"/api/v1/rig-well/sub-activities/{sub['id']}?well_id={well['id']}", headers=headers
+            ).status_code == 200
+            assert client.delete(f"/api/v1/rig-well/sub-activities/{sub['id']}/permanent", headers=headers).status_code == 204
+        assert client.delete(f"/api/v1/rig-well/wells/{well['id']}", headers=headers).status_code == 200
+        well_purge = client.delete(f"/api/v1/rig-well/wells/{well['id']}/permanent", headers=headers)
+        assert well_purge.status_code == 204, well_purge.text
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count()).select_from(DailyCostWellRateBaseline)) == 0
+            assert db.scalar(select(func.count()).select_from(DailyCostCatalogueRateSnapshot)) == 0
+            assert db.scalar(select(func.count()).select_from(MudCostSectionSetting)) == 0
+
+        # Finally the rig is free: no dangling wells, AFEs or sheets.
+        assert client.delete(f"/api/v1/rig-well/rigs/{rig['id']}", headers=headers).status_code == 200
+        assert client.delete(f"/api/v1/rig-well/rigs/{rig['id']}/permanent", headers=headers).status_code == 204
+
+        with SessionLocal() as db:
+            actions = [row.summary for row in db.scalars(
+                select(AuditLog).where(AuditLog.entity_type.in_(("afe", "well", "rig")))
+            )]
+        assert any("locked AFE baseline" in summary for summary in actions)
+        assert any("well rate baseline" in summary for summary in actions)
+
+
+def test_purge_owns_afe_revisions_and_names_other_modules_instead_of_failing_with_500():
+    """AFE-owned snapshots go with the AFE; foreign module records are named in a 409."""
+    from datetime import date
+    from sqlalchemy import func, select
+    from app.models import AfeSowAdjustment, LihCostEntry
+
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers, create_entry=False)
+        afe, well, rig = setup["afe"], setup["well"], setup["rig"]
+        organization_id = select(Organization.id).where(Organization.slug == "north").scalar_subquery()
+        with SessionLocal() as db:
+            organization_id = db.scalar(select(Organization.id).where(Organization.slug == "north"))
+            db.add(AfeSowAdjustment(
+                organization_id=organization_id,
+                afe_id=afe["id"], well_id=well["id"], rig_id=rig["id"],
+                configuration_scope="drilling", revision_number=1, status="draft",
+                reason="Scope change", sow_summary="", standard_currency="USD",
+                adjusted_services_total=Decimal("0"), adjusted_consumables_total=Decimal("0"),
+                adjusted_tangibles_total=Decimal("0"), adjusted_total=Decimal("0"),
+            ))
+            db.add(LihCostEntry(
+                organization_id=organization_id, rig_id=rig["id"], rig_code_snapshot=rig["rig_code"],
+                rig_name_snapshot=rig["rig_name"], well_id=well["id"], well_code_snapshot=well["well_code"],
+                well_name_snapshot=well["well_name"], afe_id=afe["id"], cost_date=date(2026, 10, 11),
+                currency="USD", remarks="", line_count=0, total_cost=Decimal("0"),
+            ))
+            db.commit()
+
+        assert client.delete(f"/api/v1/afe/afes/{afe['id']}", headers=headers).status_code == 200
+        blocked = client.delete(f"/api/v1/afe/afes/{afe['id']}/permanent", headers=headers)
+        assert blocked.status_code == 409
+        assert "LIH cost entry/entries" in blocked.json()["detail"]
+        assert "still referenced by" in blocked.json()["detail"]
+
+        # The LIH entry lives in its own module: purging it clears the way, and the
+        # AFE's own SOW revisions are removed together with the AFE.
+        with SessionLocal() as db:
+            for row in db.scalars(select(LihCostEntry)).all():
+                db.delete(row)
+            db.commit()
+        assert client.delete(f"/api/v1/afe/afes/{afe['id']}/permanent", headers=headers).status_code == 204
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count()).select_from(AfeSowAdjustment)) == 0
+            summary = db.scalar(
+                select(AuditLog.summary).where(
+                    AuditLog.entity_type == "afe", AuditLog.action == "permanent_delete"
+                ).order_by(AuditLog.created_at.desc())
+            )
+        assert "SOW revision(s)" in summary
+
+
+def test_bulk_deleted_entries_purge_clears_owned_baselines_too():
+    """The bulk Deleted Entries purge follows the same ownership rule."""
+    from sqlalchemy import func, select
+    from app.models import DailyCostBaseline, DailyCostWellRateBaseline
+
+    def records(*pairs):
+        return [{"entity_type": entity_type, "id": record_id} for entity_type, record_id in pairs]
+
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        afe, well, rig = setup["afe"], setup["well"], setup["rig"]
+        entry_id = setup["entry"]["id"]
+
+        assert client.post("/api/v1/daily-cost/entries/bulk-delete", headers=headers, json={"ids": [entry_id]}).status_code == 200
+        purged = client.post("/api/v1/daily-cost/entries/bulk-permanent-delete", headers=headers, json={"ids": [entry_id]})
+        assert purged.status_code == 200, purged.text
+        assert client.post("/api/v1/afe/afes/bulk-delete", headers=headers, json={"ids": [afe["id"]]}).status_code == 200
+        purged = client.post("/api/v1/afe/afes/bulk-permanent-delete", headers=headers, json={"ids": [afe["id"]]})
+        assert purged.status_code == 200, purged.text
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count()).select_from(DailyCostBaseline)) == 0
+
+        sub_pairs = []
+        for key in ("sub1", "sub2", "sub3", "sub_upa", "sub_npt"):
+            sub = setup[key]
+            assert client.delete(
+                f"/api/v1/rig-well/sub-activities/{sub['id']}?well_id={well['id']}", headers=headers
+            ).status_code == 200
+            sub_pairs.append(("well_sub_activity", sub["id"]))
+        assert client.delete(f"/api/v1/rig-well/wells/{well['id']}", headers=headers).status_code == 200
+        assert client.delete(f"/api/v1/rig-well/rigs/{rig['id']}", headers=headers).status_code == 200
+
+        # Purge every child in one request, exactly as the Deleted Entries page does.
+        purge = client.post("/api/v1/rig-well/deleted/bulk-permanent-delete", headers=headers, json={
+            "records": records(*sub_pairs, ("well", well["id"]), ("rig", rig["id"])),
+        })
+        assert purge.status_code == 200, purge.text
+        assert purge.json()["affected_count"] == 7
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count()).select_from(DailyCostWellRateBaseline)) == 0
+            assert db.scalar(select(func.count()).select_from(DailyCostBaseline)) == 0
+        assert client.get("/api/v1/rig-well/deleted", headers=headers).json() == []

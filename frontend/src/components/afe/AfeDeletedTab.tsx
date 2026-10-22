@@ -92,7 +92,7 @@ export function AfeDeletedTab() {
         <Box>
           <Typography fontWeight={800} fontSize={15}>Deleted entries</Typography>
           <Typography color="text.secondary" fontSize={12} mt={.35}>
-            {rows.length} deleted AFE{rows.length === 1 ? '' : 's'}. Restore returns them to the register; permanent delete removes the AFE and its estimate for good.
+            {rows.length} deleted AFE{rows.length === 1 ? '' : 's'}. Restore returns them to the register; permanent delete removes the AFE, its estimate and the locked baseline snapshots that belong to it.
           </Typography>
         </Box>
         <Box display="flex" gap={1} flexWrap="wrap">
@@ -124,7 +124,7 @@ export function AfeDeletedTab() {
         ? `Permanently delete ${pendingCount === 1 ? pending.targets[0].afe_code : `${pendingCount} AFEs`}?`
         : `Restore ${pendingCount === 1 ? pending?.targets[0].afe_code : `${pendingCount} AFEs`}?`}
       subtitle={pending?.kind === 'purge'
-        ? 'Permanent delete removes the AFE, its estimate lines and their history from the register. This cannot be undone.'
+        ? 'Permanent delete removes the AFE, its estimate lines, its locked daily-cost baseline and its SOW revisions. Any daily-cost sheet that still references the AFE must be permanently deleted from Daily Cost Management first. This cannot be undone.'
         : 'Restored AFEs return to the register as they were. A restore is refused while the rig or well is inactive or deleted.'}
       onClose={() => { if (!busy) setPending(null) }}
       onSubmit={() => void confirm()}
@@ -132,7 +132,7 @@ export function AfeDeletedTab() {
       submitLabel={pending?.kind === 'purge' ? 'Delete permanently' : 'Restore'}
       danger={pending?.kind === 'purge'}
     >
-      {pending?.kind === 'purge' && <Alert severity="warning" sx={{ mb: 1.5 }}>Only permanently delete AFEs you no longer need for audit.</Alert>}
+      {pending?.kind === 'purge' && <Alert severity="warning" sx={{ mb: 1.5 }}>Only permanently delete AFEs you no longer need for audit. The action is refused, with the blocking records named, while an active or deleted daily-cost sheet or another module still references this AFE.</Alert>}
       {actionError ? <ErrorDetails error={actionError}/> : null}
     </FormDialog>
   </>

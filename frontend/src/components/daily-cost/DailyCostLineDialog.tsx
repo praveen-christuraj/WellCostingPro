@@ -4,22 +4,21 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   Collapse,
   Divider,
   ListSubheader,
   MenuItem,
   Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
   TextField,
   Typography,
 } from '@mui/material'
 import { AddRounded, DeleteOutlineRounded, TuneRounded } from '@mui/icons-material'
 import { FormDialog, Tag } from '../Common'
+import {
+  AdvancedSelectorDialog,
+  type AdvancedSelectorItem,
+  type AdvancedSelectorSelection,
+} from '../AdvancedItemSelector'
 import { groupServiceOptions } from '../../lib/serviceGroups'
 import {
   DAILY_CONSUMABLE_CATEGORIES,
@@ -100,8 +99,6 @@ type ServiceEntryRow = {
   custom_quantity_unit: DailyQuantityUnit
 }
 
-type AdvancedSelection = { item: DailyCostCatalogueOption; quantity: string }
-
 function defaultUsdRateForCurrency(currency: string, baseline: DailyCostBaseline): string {
   const code = (currency || '').trim().toUpperCase()
   if (!code || code === 'USD') return '1'
@@ -147,120 +144,6 @@ function itemSnapshot(
 ): DailyCostCatalogueOption | undefined {
   if (!item) return undefined
   return baseline.catalogue_rates.find(rate => rate.item_kind === item.item_kind && rate.id === item.id) ?? item
-}
-
-function validUsageQuantity(value: string) {
-  return /^\d+(?:\.\d{1,10})?$/.test(value.trim()) && Number(value) > 0
-}
-
-export function AdvancedSelectorDialog({
-  open,
-  kind,
-  items,
-  baseline,
-  onClose,
-  onAdd,
-}: {
-  open: boolean
-  kind: 'consumable' | 'tangible'
-  items: DailyCostCatalogueOption[]
-  baseline: DailyCostBaseline
-  onClose: () => void
-  onAdd: (rows: AdvancedSelection[]) => string | null
-}) {
-  const [selected, setSelected] = useState<Record<string, boolean>>({})
-  const [quantities, setQuantities] = useState<Record<string, string>>({})
-  const [search, setSearch] = useState('')
-  const [submitted, setSubmitted] = useState(false)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (!open) return
-    setSelected({})
-    setQuantities({})
-    setSearch('')
-    setSubmitted(false)
-    setError('')
-  }, [open, kind])
-
-  const filtered = items.filter(item => `${item.item_code} ${item.item_name} ${item.description}`.toLowerCase().includes(search.trim().toLowerCase()))
-  const selectedCount = items.filter(item => selected[item.id]).length
-  const allFilteredSelected = filtered.length > 0 && filtered.every(item => selected[item.id])
-  const someFilteredSelected = filtered.some(item => selected[item.id]) && !allFilteredSelected
-
-  const submit = () => {
-    setSubmitted(true)
-    const rows = items.filter(item => selected[item.id]).map(item => ({ item, quantity: quantities[item.id] ?? '' }))
-    if (!rows.length) {
-      setError(`Select at least one ${kind === 'consumable' ? 'mud chemical' : 'tangible'}.`)
-      return
-    }
-    const missing = rows.find(row => !validUsageQuantity(row.quantity))
-    if (missing) {
-      setError(`Enter the usage quantity for ${missing.item.display_name}.`)
-      return
-    }
-    const addError = onAdd(rows)
-    if (addError) {
-      setError(addError)
-      return
-    }
-    setError('')
-    onClose()
-  }
-
-  return <FormDialog
-    open={open}
-    title={`Advanced selector — ${kind === 'consumable' ? 'Mud chemicals' : 'Tangibles'}`}
-    subtitle="Select several items and enter each usage quantity. Every selected item becomes a separate draft line using the common operational criteria from the entry dialog."
-    onClose={onClose}
-    onSubmit={submit}
-    submitLabel={`Add selected items (${selectedCount})`}
-    maxWidth="lg"
-  >
-    <Box display="grid" gap={1.5}>
-      <TextField size="small" label="Search items" value={search} onChange={event => setSearch(event.target.value)} helperText={`${items.length} available · ${selectedCount} selected`}/>
-      <Box sx={{ overflowX: 'auto', border: '1px solid', borderColor: 'divider' }}>
-        <Table size="small" aria-label={`${kind === 'consumable' ? 'Mud chemical' : 'Tangible'} advanced selector`} sx={{ minWidth: 680 }}>
-          <TableHead><TableRow>
-            <TableCell padding="checkbox"><Checkbox checked={allFilteredSelected} indeterminate={someFilteredSelected} inputProps={{ 'aria-label': 'Select all matching items' }} onChange={event => {
-              const checked = event.target.checked
-              setSelected(current => ({ ...current, ...Object.fromEntries(filtered.map(item => [item.id, checked])) }))
-            }}/></TableCell>
-            <TableCell>Item</TableCell><TableCell>UOM</TableCell><TableCell align="right">Unit price</TableCell><TableCell>Usage quantity</TableCell>
-          </TableRow></TableHead>
-          <TableBody>
-            {filtered.map(item => {
-              const snapshot = itemSnapshot(item, baseline) ?? item
-              const checked = Boolean(selected[item.id])
-              const invalid = submitted && checked && !validUsageQuantity(quantities[item.id] ?? '')
-              return <TableRow key={item.id} selected={checked}>
-                <TableCell padding="checkbox"><Checkbox checked={checked} inputProps={{ 'aria-label': `Select ${item.display_name}` }} onChange={event => {
-                  const next = event.target.checked
-                  setSelected(current => ({ ...current, [item.id]: next }))
-                  if (!next) setQuantities(current => ({ ...current, [item.id]: '' }))
-                  setError('')
-                }}/></TableCell>
-                <TableCell><Typography fontSize={12.5} fontWeight={700}>{item.item_name}</Typography><Typography fontSize={11} color="text.secondary">{item.item_code}</Typography></TableCell>
-                <TableCell>{item.uom || 'unit'}</TableCell>
-                <TableCell align="right" className="tnum">{dailyMoney(snapshot.captured_rate, snapshot.currency || baseline.standard_currency)}</TableCell>
-                <TableCell><TextField
-                  size="small" type="number" label={`Usage for ${item.item_name}`} value={quantities[item.id] ?? ''}
-                  disabled={!checked} required={checked} error={invalid}
-                  onChange={event => { setQuantities(current => ({ ...current, [item.id]: event.target.value })); setError('') }}
-                  inputProps={{ min: 0.0000000001, step: '0.0000000001' }}
-                  helperText={invalid ? 'Usage is required.' : ' '}
-                /></TableCell>
-              </TableRow>
-            })}
-            {!filtered.length && <TableRow><TableCell colSpan={5}><Typography color="text.secondary" textAlign="center" py={2}>No matching items.</Typography></TableCell></TableRow>}
-          </TableBody>
-        </Table>
-      </Box>
-      {error && <Alert severity="error">{error}</Alert>}
-      <Typography color="text.secondary" fontSize={11.5}>Unit prices come from the locked daily-cost catalogue snapshot. Save the daily sheet to commit the added lines.</Typography>
-    </Box>
-  </FormDialog>
 }
 
 export function DailyCostLineDialog({
@@ -543,6 +426,19 @@ export function DailyCostLineDialog({
     : kind === 'tangible'
       ? optionsForKind('tangible', reference, baseline, null)
       : []
+  // The selector works on plain rows so the same component serves the AFE estimate.
+  const advancedSelectorItems: AdvancedSelectorItem[] = advancedItems.map(item => {
+    const snapshot = itemSnapshot(item, baseline) ?? item
+    return {
+      id: item.id,
+      code: item.item_code,
+      name: item.item_name,
+      description: item.description,
+      uom: item.uom,
+      rate: snapshot.captured_rate,
+      currency: snapshot.currency || baseline.standard_currency,
+    }
+  })
 
   if (!open || !kind) return null
 
@@ -783,15 +679,19 @@ export function DailyCostLineDialog({
     setAdvancedOpen(true)
   }
 
-  const addAdvancedItems = (rows: AdvancedSelection[]): string | null => {
+  const addAdvancedItems = (rows: AdvancedSelectorSelection[]): string | null => {
     const parsedDepth = commonActualDepth.trim() === '' ? null : commonActualDepth.trim()
     const prepared: EditableDailyCostLine[] = []
     for (const { item, quantity } of rows) {
-      const snapshot = itemSnapshot(item, baseline) ?? item
-      const currency = (snapshot.currency || item.currency || baseline.standard_currency || 'USD').toUpperCase()
+      const option = advancedItems.find(candidate => candidate.id === item.id)
+      if (!option) {
+        return `${item.name} is no longer available in the locked catalogue. Refresh the sheet and retry.`
+      }
+      const snapshot = itemSnapshot(option, baseline) ?? option
+      const currency = (snapshot.currency || option.currency || baseline.standard_currency || 'USD').toUpperCase()
       const exchangeRate = defaultUsdRateForCurrency(currency, baseline)
       if (currency !== 'USD' && !exchangeRate) {
-        return `No USD conversion rate is available for ${item.display_name}. Add it individually to enter the conversion rate.`
+        return `No USD conversion rate is available for ${option.display_name}. Add it individually to enter the conversion rate.`
       }
       const common = {
         id: null,
@@ -811,8 +711,8 @@ export function DailyCostLineDialog({
         remarks: '',
       }
       prepared.push(kind === 'consumable'
-        ? { ...common, category: 'Mud Chemicals', item_kind: 'mud_chemical', item_id: item.id }
-        : { ...common, tangible_id: item.id })
+        ? { ...common, category: 'Mud Chemicals', item_kind: 'mud_chemical', item_id: option.id }
+        : { ...common, tangible_id: option.id })
     }
     onSave([...queuedLines, ...prepared])
     return null
@@ -1726,9 +1626,12 @@ export function DailyCostLineDialog({
     </FormDialog>
     <AdvancedSelectorDialog
       open={advancedOpen && !initialLine && (kind === 'consumable' || kind === 'tangible')}
-      kind={kind === 'tangible' ? 'tangible' : 'consumable'}
-      items={advancedItems}
-      baseline={baseline}
+      title={`Advanced selector — ${kind === 'consumable' ? 'Mud chemicals' : 'Tangibles'}`}
+      subtitle="Select several items and enter each quantity. Every selected item becomes a separate draft line using the common operational criteria from the entry dialog. Use Show selected only to review your ticks."
+      itemNoun={kind === 'consumable' ? 'mud chemical' : 'tangible'}
+      items={advancedSelectorItems}
+      rateText={item => dailyMoney(item.rate, item.currency || baseline.standard_currency)}
+      footerNote="Unit prices come from the locked daily-cost catalogue snapshot. Save the daily sheet to commit the added lines."
       onClose={() => setAdvancedOpen(false)}
       onAdd={addAdvancedItems}
     />

@@ -146,7 +146,7 @@ for (const text of ['Surface hole', 'OBM', 'Opening Stock', 'Receipt', 'Addition
 }
 const lossMatrix = sheet.querySelector('.dcr-loss-matrix')
 assert.ok(lossMatrix, 'consumption and losses print as a matrix')
-for (const text of ['Surface hole', 'OBM', 'Surface losses', 'Verti-G/Mud on Cuttings', 'Centrifuge', 'By-Pass', 'Evaporation', 'Trips', 'Surface losses total', 'Other losses', 'Mud Cleaner', 'Formation/Seepage', 'Pit Cleaning/Dump', 'Left-In-Hole', 'Others', 'Other losses total', 'Total losses', '55.00']) {
+for (const text of ['Surface hole', 'OBM', 'Surface losses', 'Verti-G/Mud on Cuttings', 'Centrifuge', 'By-Pass', 'Evaporation', 'Trips', 'Surface losses total', 'Other losses', 'Mud Cleaner', 'Formation/Seepage', 'Pit Cleaning/Dump', 'Left-In-Hole', '10.00', 'Other losses total', 'Total losses', '15.00', '40.00', '55.00']) {
   assert.ok(lossMatrix.textContent.includes(text), `loss matrix prints ${text}`)
 }
 assert.equal(lossMatrix.querySelectorAll('thead th').length, 2, 'loss matrix uses sections and mud types as columns')
@@ -177,17 +177,20 @@ await act(async () => window.dispatchEvent(new Event('afterprint')))
 assert.equal(document.querySelector('.afe-print-sheet'), null, 'afterprint removes stale output')
 await act(async () => root.unmount())
 
-// Consumable/tangible advanced selectors collect many priced catalogue items at once and
-// refuse a checked item until it has a positive usage quantity.
+// The shared advanced selector collects many priced items at once, refuses a checked
+// item until it has a usage quantity, and can hide everything that is not ticked.
 const { ThemeProvider } = await import('@mui/material')
 const { buildTheme } = await import('../../frontend/src/theme')
-const { AdvancedSelectorDialog } = await import('../../frontend/src/components/daily-cost/DailyCostLineDialog')
+const { AdvancedSelectorDialog } = await import('../../frontend/src/components/AdvancedItemSelector')
 const catalogueItems = [
-  { id: 'chem-1', item_kind: 'mud_chemical', category: 'Mud Chemicals', item_code: 'BAR', item_name: 'Barite', description: '', display_name: 'BAR · Barite', uom: 'MT', captured_rate: '125', currency: 'USD', revision_number: 1, effective_date: null },
-  { id: 'chem-2', item_kind: 'mud_chemical', category: 'Mud Chemicals', item_code: 'BEN', item_name: 'Bentonite', description: '', display_name: 'BEN · Bentonite', uom: 'Sack', captured_rate: '40', currency: 'USD', revision_number: 1, effective_date: null },
-  { id: 'tangible-1', item_kind: 'tangible', category: 'Tangibles', item_code: 'CSG', item_name: 'Casing', description: '', display_name: 'CSG · Casing', uom: 'Joint', captured_rate: '900', currency: 'USD', revision_number: 1, effective_date: null },
+  { id: 'chem-1', kind: 'consumable', code: 'BAR', name: 'Barite', description: '', uom: 'MT', rate: '125', currency: 'USD' },
+  { id: 'chem-2', kind: 'consumable', code: 'BEN', name: 'Bentonite', description: '', uom: 'Sack', rate: '40', currency: 'USD' },
+  { id: 'tangible-1', kind: 'tangible', code: 'CSG', name: 'Casing', description: '', uom: 'Joint', rate: '900', currency: 'USD' },
 ]
-const selectorBaseline = { standard_currency: 'USD', catalogue_rates: catalogueItems }
+const itemRows = items => items.map(item => ({
+  id: item.id, code: item.code, name: item.name, description: item.description,
+  uom: item.uom, rate: item.rate, currency: item.currency,
+}))
 let selectedRows = null
 let selectorKind = 'consumable'
 let selectorRender = 0
@@ -196,8 +199,18 @@ async function showSelector(kind, items) {
   selectorKind = kind
   selectedRows = null
   selectorRender += 1
+  const rows = itemRows(items)
   await act(async () => selectorRoot.render(<ThemeProvider theme={buildTheme('light')}>
-    <AdvancedSelectorDialog key={selectorRender} open kind={kind} items={items} baseline={selectorBaseline} onClose={() => {}} onAdd={rows => { selectedRows = rows; return null }}/>
+    <AdvancedSelectorDialog
+      key={selectorRender}
+      open
+      title={`Advanced selector — ${kind === 'consumable' ? 'Mud chemicals' : 'Tangibles'}`}
+      itemNoun={kind === 'consumable' ? 'mud chemical' : 'tangible'}
+      items={rows}
+      rateText={item => `${item.currency} ${Number(item.rate).toFixed(2)}`}
+      onClose={() => {}}
+      onAdd={rowsSelected => { selectedRows = rowsSelected; return null }}
+    />
   </ThemeProvider>))
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
 }
@@ -206,9 +219,9 @@ async function click(element, message) {
   await act(async () => element.dispatchEvent(new w.MouseEvent('click', { bubbles: true })))
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
 }
-async function enterUsage(itemName, value) {
-  const input = document.querySelector(`input[aria-label="Usage for ${itemName}"]`) || [...document.querySelectorAll('label')]
-    .find(label => label.textContent?.startsWith(`Usage for ${itemName}`))?.control
+async function enterUsage(itemName, value, prefix = 'Usage quantity') {
+  const label = [...document.querySelectorAll('label')].find(label => label.textContent?.startsWith(`${prefix} for ${itemName}`))
+  const input = label?.control
   assert.ok(input, `usage input exists for ${itemName}`)
   await act(async () => {
     Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, 'value').set.call(input, value)
@@ -216,14 +229,32 @@ async function enterUsage(itemName, value) {
     input.dispatchEvent(new w.Event('change', { bubbles: true }))
   })
 }
+function selectorButton(label) {
+  return [...document.querySelectorAll('button')].find(button => button.textContent?.trim().startsWith(label))
+}
 function selectorSubmit() { return [...document.querySelectorAll('button')].find(button => button.textContent?.startsWith('Add selected items')) }
+const itemNamesShown = () => [...document.querySelectorAll('table tbody tr')].map(row => row.textContent || '').join('|')
 
 await showSelector('consumable', catalogueItems.slice(0, 2))
 assert.ok(document.body.textContent.includes('USD 125.00') && document.body.textContent.includes('USD 40.00'), 'mud chemical selector displays locked unit prices')
+assert.ok(selectorButton('Show selected only'), 'selector offers the show-selected-only button')
+assert.ok(document.body.textContent.includes('2 available') && document.body.textContent.includes('0 selected'), 'selector reports how many items are available and selected')
 await click(document.querySelector('input[aria-label="Select BAR · Barite"]'), 'Barite checkbox exists')
 await click(selectorSubmit(), 'bulk add button exists')
 assert.ok(document.body.textContent.includes('Enter the usage quantity for BAR · Barite.'), 'checked mud chemical prompts for missing usage')
+// A rejected submit switches to the selected-only review so the missing row is visible.
+assert.ok(selectorButton('Show all items'), 'a missing usage switches the selector to selected-only review')
+assert.ok(itemNamesShown().includes('Barite') && !itemNamesShown().includes('Bentonite'), 'show selected only hides unticked items')
+assert.ok(document.body.textContent.includes('1 selected') && document.body.textContent.includes('1 shown'), 'show selected only reports the hidden rows')
 await enterUsage('Barite', '2.5')
+await click(selectorButton('Show all items'), 'show all items restores the list')
+assert.ok(itemNamesShown().includes('Barite') && itemNamesShown().includes('Bentonite'), 'show all items restores the unticked rows')
+
+// The toggle also works manually and keeps selections when it is flipped back.
+await click(selectorButton('Show selected only'), 'show selected only can be turned on')
+assert.ok(!itemNamesShown().includes('Bentonite'), 'show selected only hides unticked items again')
+await click(selectorButton('Show all items'), 'show all items restores the list again')
+
 await click(document.querySelector('input[aria-label="Select BEN · Bentonite"]'), 'Bentonite checkbox exists')
 await enterUsage('Bentonite', '4')
 await click(selectorSubmit(), 'bulk add button remains available')
@@ -239,6 +270,38 @@ await click(selectorSubmit(), 'tangible add button remains available')
 assert.deepEqual(selectedRows?.map(row => [row.item.id, row.quantity]), [['tangible-1', '3']], 'selected tangible is returned as a bulk row')
 assert.equal(selectorKind, 'tangible')
 await act(async () => selectorRoot.unmount())
+
+// The AFE cost estimate reuses the same selector when adding tangibles.
+const { TangibleLineDialog } = await import('../../frontend/src/components/afe/TangibleLineDialog')
+const afeReference = {
+  tangibles: [
+    { id: 'tangible-afe-1', tangible_code: 'CSG', tangible_name: 'Casing', scope: 'Drilling', category_name: 'Tubular', subcategory_name: 'Casing', manufacturer_name: 'Acme', description: '9 5/8 in casing', uom: 'Joint', captured_rate: '900', currency: 'USD', display_name: 'CSG · Casing' },
+    { id: 'tangible-afe-2', tangible_code: 'WHP', tangible_name: 'Wellhead', scope: 'Completion', category_name: 'Wellhead', subcategory_name: '', manufacturer_name: 'Acme', description: 'Surface wellhead', uom: 'unit', captured_rate: '5000', currency: 'USD', display_name: 'WHP · Wellhead' },
+  ],
+}
+let afeSaved = null
+const tangibleRoot = createRoot(document.createElement('div'))
+await act(async () => tangibleRoot.render(<ThemeProvider theme={buildTheme('light')}>
+  <TangibleLineDialog open initial={null} reference={afeReference} onClose={() => {}} onSave={lines => { afeSaved = lines }}/>
+</ThemeProvider>))
+await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+await click(selectorButton('Advanced selector'), 'the AFE tangible dialog offers the advanced selector')
+assert.ok(document.body.textContent.includes('Advanced selector — Tangibles'), 'the AFE selector opens for tangibles')
+await click(document.querySelector('input[aria-label="Select CSG · Casing"]'), 'AFE selector lists the master tangible')
+await click(selectorSubmit(), 'AFE selector add button exists')
+assert.ok(document.body.textContent.includes('Enter the quantity for CSG · Casing.'), 'the AFE selector requires a quantity')
+await enterUsage('Casing', '4', 'Quantity')
+await click(selectorSubmit(), 'the AFE selector accepts the quantity')
+// MUI keeps a closing dialog in the DOM until its exit transition ends.
+await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)) })
+assert.equal(document.querySelectorAll('[role="dialog"]').length, 1, 'the AFE selector closes after adding the items')
+assert.ok(document.body.textContent.includes('1 tangible added'), 'added tangibles are reported in the AFE dialog')
+assert.ok(document.body.textContent.includes('Tangible item #1'), 'the added tangible appears as a line to review')
+const afeSubmit = [...document.querySelectorAll('.MuiDialogActions-root button')]
+  .find(button => button.textContent?.trim() === 'Add tangible')
+await click(afeSubmit, 'the AFE tangible dialog keeps its save action')
+assert.deepEqual(afeSaved?.map(line => [line.tangible_id, line.quantity]), [['tangible-afe-1', '4']], 'the AFE estimate receives the selected tangibles as separate lines')
+await act(async () => tangibleRoot.unmount())
 const register = readFileSync('../frontend/src/pages/DailyCostManagement.tsx', 'utf8')
 for (const forbidden of ['daily-cost/overview', 'StatCard', 'ReactECharts', 'cumulativeById', 'ACTUAL TO DATE']) {
   assert.ok(!register.includes(forbidden), `register does not contain ${forbidden}`)
@@ -268,7 +331,7 @@ assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog
 assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
 assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
-console.log('Daily cost checks passed: advanced consumable/tangible bulk selection with required usage and locked prices, bulk depth/quantity/unit controls, editable milestone and lead/lag title suffix, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud and loss matrices, group-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
+console.log('Daily cost checks passed: advanced consumable/tangible bulk selection with required usage, locked prices and show-selected-only review, the same selector reused by the AFE tangible estimate, bulk depth/quantity/unit controls, editable milestone and lead/lag title suffix, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud and loss matrices, group-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
 
 dom.window.close()
 process.exit(0)

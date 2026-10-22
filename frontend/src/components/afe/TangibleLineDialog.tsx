@@ -8,8 +8,13 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { AddRounded, DeleteOutlineRounded } from '@mui/icons-material'
+import { AddRounded, DeleteOutlineRounded, TuneRounded } from '@mui/icons-material'
 import { FormDialog } from '../Common'
+import {
+  AdvancedSelectorDialog,
+  type AdvancedSelectorItem,
+  type AdvancedSelectorSelection,
+} from '../AdvancedItemSelector'
 import {
   amountText,
   newKey,
@@ -40,6 +45,8 @@ export function TangibleLineDialog({ open, initial, reference, onClose, onSave }
   const [entries, setEntries] = useState<TangibleEntry[]>([])
   const [baselineState, setBaselineState] = useState<string>('')
   const [submitted, setSubmitted] = useState(false)
+  const [selectorOpen, setSelectorOpen] = useState(false)
+  const [selectorNotice, setSelectorNotice] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -61,6 +68,8 @@ export function TangibleLineDialog({ open, initial, reference, onClose, onSave }
       }])
     }
     setSubmitted(false)
+    setSelectorOpen(false)
+    setSelectorNotice('')
   }, [open, initial])
 
   useEffect(() => {
@@ -71,6 +80,56 @@ export function TangibleLineDialog({ open, initial, reference, onClose, onSave }
 
   const currentState = JSON.stringify(entries)
   const dirty = baselineState !== '' && currentState !== baselineState
+
+  // The same advanced selector used by the daily cost register, so a batch of
+  // tangibles is picked once instead of adding them one at a time.
+  const selectorItems: AdvancedSelectorItem[] = reference.tangibles.map(item => ({
+    id: item.id,
+    code: item.tangible_code,
+    name: item.tangible_name,
+    description: item.description,
+    details: [
+      item.manufacturer_name,
+      [item.category_name, item.subcategory_name].filter(Boolean).join(' › '),
+    ].filter(Boolean).join(' · '),
+    uom: item.uom,
+    rate: item.captured_rate,
+    currency: item.currency,
+  }))
+
+  const addSelectedTangibles = (rows: AdvancedSelectorSelection[]): string | null => {
+    const present = new Set(entries.map(entry => entry.tangible_id).filter(Boolean))
+    const additions: TangibleEntry[] = []
+    let skipped = 0
+    for (const row of rows) {
+      if (present.has(row.item.id)) {
+        skipped += 1
+        continue
+      }
+      present.add(row.item.id)
+      additions.push({
+        id: newKey(),
+        tangible_id: row.item.id,
+        quantity: row.quantity,
+        override_rate: null,
+        remarks: '',
+      })
+    }
+    if (!additions.length) {
+      setSelectorNotice(`${rows.length === 1 ? 'That tangible is' : 'Those tangibles are'} already on this estimate.`)
+      return null
+    }
+    setEntries(previous => {
+      // Drop the empty starter row once real tangibles arrive.
+      const base = previous.filter(entry => entry.tangible_id || entry.quantity !== '1' || entry.override_rate !== null || entry.remarks)
+      return [...base, ...additions]
+    })
+    setSelectorNotice(
+      `${additions.length} tangible${additions.length === 1 ? '' : 's'} added`
+      + (skipped ? `; ${skipped} already on this estimate ${skipped === 1 ? 'was' : 'were'} skipped.` : '.'),
+    )
+    return null
+  }
 
   const addEntry = () => {
     setEntries(prev => [
@@ -143,11 +202,24 @@ export function TangibleLineDialog({ open, initial, reference, onClose, onSave }
             Tangible items list ({entries.length})
           </Typography>
           {!initial && (
-            <Button size="small" startIcon={<AddRounded sx={{ fontSize: 16 }} />} onClick={addEntry} variant="outlined">
-              Add tangible
-            </Button>
+            <Box display="flex" gap={1} flexWrap="wrap">
+              <Button size="small" startIcon={<AddRounded sx={{ fontSize: 16 }} />} onClick={addEntry} variant="outlined">
+                Add tangible
+              </Button>
+              <Button
+                size="small"
+                startIcon={<TuneRounded sx={{ fontSize: 16 }} />}
+                onClick={() => setSelectorOpen(true)}
+                variant="outlined"
+                disabled={!selectorItems.length}
+              >
+                Advanced selector
+              </Button>
+            </Box>
           )}
         </Box>
+
+        {selectorNotice && <Alert severity="info" onClose={() => setSelectorNotice('')}>{selectorNotice}</Alert>}
 
         <Box display="grid" gap={1.8}>
           {entries.map((entry, index) => {
@@ -252,6 +324,21 @@ export function TangibleLineDialog({ open, initial, reference, onClose, onSave }
           Each item will be saved as an individual tangible line under this AFE estimate.
         </Typography>
       </Box>
+
+      <AdvancedSelectorDialog
+        open={selectorOpen && !initial}
+        title="Advanced selector — Tangibles"
+        subtitle="Tick every tangible needed, enter its quantity, and use Show selected only to review the ticks. Each selected item becomes its own line with the master rate; set an override rate per line afterwards if the quote differs."
+        itemNoun="tangible"
+        items={selectorItems}
+        existingIds={entries.map(entry => entry.tangible_id).filter(Boolean)}
+        rateText={item => amountText(item.rate, item.currency)}
+        allowZeroQuantity
+        quantityLabel="Quantity"
+        footerNote="Master rates are captured from Master Data. Nothing is committed until the AFE estimate is saved."
+        onClose={() => setSelectorOpen(false)}
+        onAdd={addSelectedTangibles}
+      />
     </FormDialog>
   )
 }

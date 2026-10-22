@@ -23,13 +23,11 @@ from app.models import (
     Activity,
     Afe,
     AuditLog,
-    DailyCostBaseline,
     DailyCostConsumableLine,
     DailyCostEntry,
     DailyCostOtherExpenseLine,
     DailyCostServiceLine,
     DailyCostTangibleLine,
-    DailyCostWellRateBaseline,
     MudCostEntry,
     HoleSection,
     Phase,
@@ -40,6 +38,16 @@ from app.models import (
     WellSubActivity,
 )
 from app.services.daily_cost import classify_activity
+from app.services.retention import (
+    AFE_LABEL,
+    DAILY_SHEET_LABEL,
+    MUD_COST_LABEL,
+    SUB_ACTIVITY_LABEL,
+    WELL_LABEL,
+    assert_purgeable,
+    purge_owned_snapshots,
+    snapshot_summary,
+)
 from app.schemas.rig_well import (
     DeletedRigWellRecord,
     DeletedSelection,
@@ -868,6 +876,15 @@ def permanently_delete_rig(rig_id: str, request: Request, db: Db, user: Current)
                 "wells, AFEs, and daily-cost sheets first in their respective Deleted Entries."
             ),
         )
+    # Fuel, LIH and SOW records also point at the rig. Naming them here keeps the
+    # purge actionable instead of ending in a database integrity error.
+    assert_purgeable(
+        db, user.organization_id, rig,
+        entity_label=f"rig {rig.rig_code}",
+        next_step=(
+            "Permanently delete the dependent fuel, LIH and SOW adjustment records from their own module first."
+        ),
+    )
     _record_audit(
         db, user=user, action="permanent_delete", entity_type="rig", record_id=rig.id,
         entity_label=rig.rig_code,
@@ -1250,9 +1267,7 @@ def permanently_delete_well(well_id: str, request: Request, db: Db, user: Curren
     afes = _count_children(db, Afe, user.organization_id, well_id=well.id)
     daily_sheets = _count_children(db, DailyCostEntry, user.organization_id, well_id=well.id)
     mud_entries = _count_children(db, MudCostEntry, user.organization_id, well_id=well.id)
-    afe_baselines = _count_children(db, DailyCostBaseline, user.organization_id, well_id=well.id)
-    rate_baselines = _count_children(db, DailyCostWellRateBaseline, user.organization_id, well_id=well.id)
-    if sub_activities or afes or daily_sheets or mud_entries or afe_baselines or rate_baselines:
+    if sub_activities or afes or daily_sheets or mud_entries:
         dependencies = []
         if sub_activities:
             dependencies.append(f"{sub_activities} sub activity record(s)")
@@ -1262,20 +1277,36 @@ def permanently_delete_well(well_id: str, request: Request, db: Db, user: Curren
             dependencies.append(f"{daily_sheets} daily-cost sheet(s)")
         if mud_entries:
             dependencies.append(f"{mud_entries} Mud Cost entry/entries")
-        if afe_baselines or rate_baselines:
-            dependencies.append("retained daily-cost baseline history")
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Well {well.well_code} retains {', '.join(dependencies)}. Permanently delete linked "
-                "sub activities, AFEs, and daily-cost sheets first. Immutable daily-cost baselines are kept "
-                "for audit, so a well with baseline history must remain in Deleted Entries."
+                f"Well {well.well_code} retains {', '.join(dependencies)}. Move them to Deleted Entries if they "
+                "are still active, then permanently delete them there. The well's own locked rate snapshots are "
+                "removed with the well once those records are gone."
             ),
         )
+    # LIH entries, SOW/plan revisions and any other RESTRICT reference are named
+    # explicitly; only an actionable 409 leaves this endpoint.
+    assert_purgeable(
+        db, user.organization_id, well,
+        entity_label=f"well {well.well_code}",
+        next_step=(
+            "Permanently delete the dependent LIH cost entries and SOW/well-plan revisions from their own "
+            "module first."
+        ),
+    )
+    # The well's locked rate book and any AFE baselines it still owns are audit
+    # snapshots of this well. They are purged with it, now that every sheet that
+    # priced from them is gone, so the well itself can be permanently removed.
+    removed = purge_owned_snapshots(db, user.organization_id, well_ids=[well.id])
+    snapshot_note = snapshot_summary(removed)
     _record_audit(
         db, user=user, action="permanent_delete", entity_type="well", record_id=well.id,
         entity_label=well.well_code,
-        summary=f"Permanently deleted well {well.well_code}",
+        summary=(
+            f"Permanently deleted well {well.well_code}"
+            + (f", together with {snapshot_note}" if snapshot_note else "")
+        ),
         request=request,
     )
     db.delete(well)
@@ -2283,12 +2314,6 @@ def bulk_permanently_delete(
     well_mud_counts = _counts_by_parent(
         db, MudCostEntry, MudCostEntry.well_id, user.organization_id, selected_well_ids
     )
-    well_baseline_counts = _counts_by_parent(
-        db, DailyCostBaseline, DailyCostBaseline.well_id, user.organization_id, selected_well_ids
-    )
-    well_rate_baseline_counts = _counts_by_parent(
-        db, DailyCostWellRateBaseline, DailyCostWellRateBaseline.well_id, user.organization_id, selected_well_ids
-    )
     sub_activity_line_counts = _daily_cost_line_counts_by_sub_activity(
         db,
         user.organization_id,
@@ -2337,13 +2362,19 @@ def bulk_permanently_delete(
         )
         if any(well_id not in selected_wells for well_id in remaining_wells):
             raise HTTPException(status_code=409, detail=f"Permanently delete every well under rig {rig.rig_code} first")
+        assert_purgeable(
+            db, user.organization_id, rig,
+            entity_label=f"rig {rig.rig_code}",
+            ignore=(WELL_LABEL,),
+            next_step=(
+                "Permanently delete the dependent fuel, LIH and SOW adjustment records from their own module first."
+            ),
+        )
     for well in records.get("well", []):
         if (
             well_afe_counts.get(well.id)
             or well_daily_counts.get(well.id)
             or well_mud_counts.get(well.id)
-            or well_baseline_counts.get(well.id)
-            or well_rate_baseline_counts.get(well.id)
         ):
             dependencies = []
             if well_afe_counts.get(well.id):
@@ -2352,14 +2383,11 @@ def bulk_permanently_delete(
                 dependencies.append(f"{well_daily_counts[well.id]} daily-cost sheet(s)")
             if well_mud_counts.get(well.id):
                 dependencies.append(f"{well_mud_counts[well.id]} Mud Cost entry/entries")
-            if well_baseline_counts.get(well.id) or well_rate_baseline_counts.get(well.id):
-                dependencies.append("retained daily-cost baseline history")
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"Well {well.well_code} retains {', '.join(dependencies)}. Permanently delete linked AFEs "
-                    "and daily-cost sheets first. Immutable daily-cost baselines are retained for audit, so "
-                    "this well must remain in Deleted Entries."
+                    f"Well {well.well_code} retains {', '.join(dependencies)}. Permanently delete the linked "
+                    "AFEs, daily-cost sheets and Mud Cost entries in their own Deleted Entries first."
                 ),
             )
         remaining_sub_activities = list(
@@ -2372,6 +2400,15 @@ def bulk_permanently_delete(
         )
         if any(item_id not in selected_sub_activities for item_id in remaining_sub_activities):
             raise HTTPException(status_code=409, detail=f"Permanently delete every sub activity under well {well.well_code} first")
+        assert_purgeable(
+            db, user.organization_id, well,
+            entity_label=f"well {well.well_code}",
+            ignore=(SUB_ACTIVITY_LABEL, AFE_LABEL, DAILY_SHEET_LABEL, MUD_COST_LABEL),
+            next_step=(
+                "Permanently delete the dependent LIH cost entries and SOW/well-plan revisions from their own "
+                "module first."
+            ),
+        )
 
     purged_count = 0
     # Child rows are flushed before their parents to respect RESTRICT constraints.
@@ -2385,6 +2422,10 @@ def bulk_permanently_delete(
         db.delete(record)
         purged_count += 1
     db.flush()
+    # The immutable snapshots belong to the wells being purged: remove them now
+    # that every sheet (and every AFE) that priced from them is gone.
+    removed_snapshots = purge_owned_snapshots(db, user.organization_id, well_ids=selected_well_ids)
+    snapshot_note = snapshot_summary(removed_snapshots)
     for record in records.get("well", []):
         _record_audit(
             db, user=user, action="permanent_delete", entity_type="well", record_id=record.id,
@@ -2407,7 +2448,10 @@ def bulk_permanently_delete(
     _record_audit(
         db, user=user, action="permanent_delete", entity_type="rig_well_deleted", record_id=None,
         entity_label="Deleted Entries",
-        summary=f"Permanently deleted {purged_count} Rig & Well Management record(s)",
+        summary=(
+            f"Permanently deleted {purged_count} Rig & Well Management record(s)"
+            + (f", together with {snapshot_note}" if snapshot_note else "")
+        ),
         request=request,
     )
     _commit(db)
