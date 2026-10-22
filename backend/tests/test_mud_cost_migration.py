@@ -84,7 +84,13 @@ def test_opening_stock_permission_migration_grants_only_owners(tmp_path):
     with sqlite3.connect(database) as connection:
         permission_ids = dict(connection.execute("SELECT organization_id, id FROM permissions WHERE key = 'mud-cost:opening-stock-update'"))
         assert set(permission_ids) == {"one", "two"}
-        assert set(connection.execute("SELECT role_id, permission_id FROM role_permissions")) == {
+        # Later migrations backfill their own owner capabilities too (for example the
+        # fuel opening-stock permission), so assert on this capability's assignments.
+        mud_assignments = set(connection.execute(
+            "SELECT role_id, permission_id FROM role_permissions WHERE permission_id IN (?, ?)",
+            tuple(permission_ids.values()),
+        ))
+        assert mud_assignments == {
             (f"{org}-owner", permission_ids[org]) for org in ("one", "two")
         }
     migrate("downgrade", "c4a7e1b93d52")
