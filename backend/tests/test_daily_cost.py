@@ -111,9 +111,12 @@ def _setup_daily_sheet(client, headers, *, with_sub_activities=True, create_entr
         "service_group": "Formation Evaluation", "provider_type": "Third Party Services", "vendor_id": vendor["id"], "description": "Wellsite logging crew",
     })
     rig = _post(client, "/api/v1/rig-well/rigs", headers, {"rig_code": "RIG-01", "rig_name": "Rig One", "remarks": ""})
+    block = _post(client, "/api/v1/rig-well/blocks", headers, {
+        "block_code": "BLOCK-A", "block_name": "Block A", "description": "",
+    })
     well = _post(client, "/api/v1/rig-well/wells", headers, {
-        "rig_id": rig["id"], "well_code": "WELL-01", "well_name": "Well One", "well_location": "North field",
-        "block": "A", "objective": "Development", "remarks": "",
+        "rig_id": rig["id"], "block_id": block["id"], "well_code": "WELL-01", "well_name": "Well One",
+        "well_location": "North field", "objective": "Development", "remarks": "",
     })
     config = client.put(f"/api/v1/rig-well/wells/{well['id']}/configuration", headers=headers, json={
         "depth_unit": "m",
@@ -175,6 +178,7 @@ def _setup_daily_sheet(client, headers, *, with_sub_activities=True, create_entr
         "hole": hole,
         "phase": phase,
         "rig": rig,
+        "block": block,
         "well": well,
         "afe": afe,
     }
@@ -877,9 +881,12 @@ def test_well_cost_report_is_complete_scoped_and_respects_dates_status_and_delet
         assert client.delete(f"/api/v1/daily-cost/entries/{draft['entry']['id']}", headers=headers).status_code == 200
         assert len(client.get(path + "?to=2026-10-13", headers=headers).json()) == 1
         assert client.get(path, headers=login(client, "south")).status_code == 404
+        other_block = _post(client, "/api/v1/rig-well/blocks", headers, {
+            "block_code": "BLOCK-B", "block_name": "Block B", "description": "",
+        })
         other = _post(client, "/api/v1/rig-well/wells", headers, {
-            "rig_id": setup["rig"]["id"], "well_code": "WELL-02", "well_name": "Other well",
-            "well_location": "Other field", "block": "B", "objective": "Development",
+            "rig_id": setup["rig"]["id"], "block_id": other_block["id"], "well_code": "WELL-02",
+            "well_name": "Other well", "well_location": "Other field", "objective": "Development",
         })
         assert client.get(f"/api/v1/daily-cost/wells/{other['id']}/cost-report", headers=headers).json() == []
         summary = client.get(f"/api/v1/daily-cost/wells/{well_id}/cost-summary?include_draft=false", headers=headers)

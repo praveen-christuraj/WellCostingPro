@@ -1,8 +1,9 @@
-"""Tenant-scoped rigs, wells, and well configuration.
+"""Tenant-scoped blocks, rigs, wells, and well configuration.
 
-A rig owns wells; each well may carry independent Drilling and Completion plans.  The
-configuration rows are replaced as a single audited draft, while rigs and
-wells use the common soft-delete lifecycle.
+A block groups wells by concession / field area, a rig owns wells, and each well
+may carry independent Drilling and Completion plans.  The configuration rows are
+replaced as a single audited draft, while blocks, rigs and wells use the common
+soft-delete lifecycle.
 """
 
 from datetime import datetime, timezone
@@ -69,8 +70,26 @@ class Rig(RigWellRecord):
     )
 
 
+class Block(RigWellRecord):
+    """A workspace block (concession / field area). Block codes are unique per workspace."""
+
+    __tablename__ = "blocks"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "block_code", name="uq_blocks_org_code"),
+        Index("ix_blocks_org_deleted", "organization_id", "is_deleted"),
+    )
+
+    block_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    block_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), default="", server_default="", nullable=False)
+
+    wells: Mapped[list["Well"]] = relationship(
+        back_populates="block_record", lazy="noload", passive_deletes=True
+    )
+
+
 class Well(RigWellRecord):
-    """A well assigned to exactly one rig."""
+    """A well assigned to exactly one rig and one block."""
 
     __tablename__ = "wells"
     __table_args__ = (
@@ -82,16 +101,19 @@ class Well(RigWellRecord):
         CheckConstraint("completion_depth_unit IN ('m', 'ft')", name="ck_wells_completion_depth_unit"),
         CheckConstraint("depth_unit IN ('m', 'ft')", name="ck_wells_depth_unit"),
         Index("ix_wells_org_rig", "organization_id", "rig_id"),
+        Index("ix_wells_org_block", "organization_id", "block_id"),
         Index("ix_wells_org_deleted", "organization_id", "is_deleted"),
     )
 
     rig_id: Mapped[str] = mapped_column(
         ForeignKey("rigs.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    block_id: Mapped[str] = mapped_column(
+        ForeignKey("blocks.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     well_code: Mapped[str] = mapped_column(String(50), nullable=False)
     well_name: Mapped[str] = mapped_column(String(200), nullable=False)
     well_location: Mapped[str] = mapped_column(String(300), nullable=False)
-    block: Mapped[str] = mapped_column(String(200), nullable=False)
     objective: Mapped[str] = mapped_column(String(500), nullable=False)
     remarks: Mapped[str] = mapped_column(String(1000), default="", server_default="", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="active", server_default="active", nullable=False)
@@ -124,6 +146,13 @@ class Well(RigWellRecord):
         setattr(self, f"completion_{field}" if scope == "completion" else field, value)
 
     rig: Mapped[Rig] = relationship(back_populates="wells", lazy="joined")
+    block_record: Mapped[Block] = relationship(back_populates="wells", lazy="joined")
+
+    @property
+    def block(self) -> str:
+        """Block name, so existing readers keep printing a well without a lookup."""
+        return self.block_record.block_name if self.block_record else ""
+
     sections: Mapped[list["WellSection"]] = relationship(
         primaryjoin="and_(Well.id == WellSection.well_id, WellSection.scope == 'drilling')",
         back_populates="well",

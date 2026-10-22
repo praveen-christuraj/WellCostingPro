@@ -122,13 +122,13 @@ export default function RigWellDeleted() {
     />
 
     <Alert severity="warning" sx={{ mb: 1.8 }} action={can('master-data:read') ? <Button component={RouterLink} to="/master-data/deleted" size="small">Master Data deleted entries</Button> : undefined}>
-      Permanent deletion is irreversible. Restore parent records first; before purging a rig or well, permanently delete its child wells or sub activities, then its AFEs and daily-cost sheets. Configuration sections, phases, plan revisions and the locked daily-cost rate book are removed with their well once every sheet that priced from it is purged. Restore an Activity from Master Data before restoring sub activities assigned to it.
+      Permanent deletion is irreversible. Restore parent records first; a block stays pinned while any well record (including deleted wells) references it, and a rig or well is purged only after its child wells, sub activities, AFEs and daily-cost sheets are deleted. Configuration sections, phases, plan revisions and the locked daily-cost rate book are removed with their well once every sheet that priced from it is purged. Restore an Activity from Master Data before restoring sub activities assigned to it.
     </Alert>
     {notice && <Alert severity="success" onClose={() => setNotice('')} sx={{ mb: 1.5 }}>{notice}</Alert>}
     <ErrorMessage message={error}/>
     <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2.2 }, mb: 1.5, borderRadius: 2 }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
-        <Box><Typography fontWeight={800} fontSize={15}>Deleted Rig & Well records</Typography><Typography color="text.secondary" fontSize={12} mt={.35}>{rows.length} retained {rows.length === 1 ? 'record' : 'records'} across rigs, wells and well sub activities.</Typography></Box>
+        <Box><Typography fontWeight={800} fontSize={15}>Deleted Rig & Well records</Typography><Typography color="text.secondary" fontSize={12} mt={.35}>{rows.length} retained {rows.length === 1 ? 'record' : 'records'} across blocks, rigs, wells and well sub activities.</Typography></Box>
       </Box>
     </Paper>
     {loading ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <DataTable

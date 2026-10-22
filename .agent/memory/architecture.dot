@@ -164,6 +164,7 @@ digraph WellCostingPro {
   "frontend/src/pages/AfeOverview.tsx";
   "frontend/src/pages/Assignments.tsx";
   "frontend/src/pages/AuditLog.tsx";
+  "frontend/src/pages/Blocks.tsx";
   "frontend/src/pages/BusinessDashboard.tsx";
   "frontend/src/pages/CatalogueLists.tsx";
   "frontend/src/pages/Consumables.tsx";
@@ -445,6 +446,7 @@ digraph WellCostingPro {
   "frontend/src/App.tsx" -> "frontend/src/pages/AfeOverview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Assignments.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/AuditLog.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/pages/Blocks.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/BusinessDashboard.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/CatalogueLists.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Consumables.tsx";
@@ -698,6 +700,13 @@ digraph WellCostingPro {
   "frontend/src/pages/AuditLog.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/AuditLog.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/AuditLog.tsx" -> "frontend/src/lib/types.ts";
+  "frontend/src/pages/Blocks.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/pages/Blocks.tsx" -> "frontend/src/components/DataTable.tsx";
+  "frontend/src/pages/Blocks.tsx" -> "frontend/src/components/ImportDialog.tsx";
+  "frontend/src/pages/Blocks.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/Blocks.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/Blocks.tsx" -> "frontend/src/lib/export.ts";
+  "frontend/src/pages/Blocks.tsx" -> "frontend/src/lib/rigWell.ts";
   "frontend/src/pages/BusinessDashboard.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/BusinessDashboard.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/BusinessDashboard.tsx" -> "frontend/src/components/business-dashboard/DrillThroughPanel.tsx";

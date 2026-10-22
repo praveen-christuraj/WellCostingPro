@@ -89,12 +89,81 @@ class RigDropdownOut(BaseModel):
     well_count: int = 0
 
 
+class BlockCreate(BaseModel):
+    block_code: str = Field(min_length=1, max_length=50)
+    block_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("block_code", mode="before")
+    @classmethod
+    def normalise_code(cls, value: Any) -> Any:
+        return _normalise_code(value)
+
+    @field_validator("block_name", mode="before")
+    @classmethod
+    def trim_name(cls, value: Any) -> Any:
+        return _trim_required(value)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def trim_description(cls, value: Any) -> Any:
+        return _trim_optional(value)
+
+
+class BlockUpdate(BaseModel):
+    block_code: str | None = Field(default=None, min_length=1, max_length=50)
+    block_name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("block_code", mode="before")
+    @classmethod
+    def normalise_code(cls, value: Any) -> Any:
+        return _normalise_code(value)
+
+    @field_validator("block_name", mode="before")
+    @classmethod
+    def trim_name(cls, value: Any) -> Any:
+        return _trim_required(value)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def trim_description(cls, value: Any) -> Any:
+        return _trim_optional(value)
+
+
+class BlockOut(BaseModel):
+    id: str
+    block_code: str
+    block_name: str
+    description: str
+    well_count: int = 0
+    is_deleted: bool
+    deleted_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BlockDropdownOut(BaseModel):
+    id: str
+    block_code: str
+    block_name: str
+    description: str = ""
+    display_name: str
+    well_count: int = 0
+
+
 class WellCreate(BaseModel):
     rig_id: str = Field(min_length=1, max_length=36)
+    block_id: str = Field(min_length=1, max_length=36)
     well_code: str = Field(min_length=1, max_length=50)
     well_name: str = Field(min_length=1, max_length=200)
     well_location: str = Field(min_length=1, max_length=300)
-    block: str = Field(min_length=1, max_length=200)
     objective: str = Field(min_length=1, max_length=500)
     remarks: str = Field(default="", max_length=1000)
 
@@ -105,7 +174,7 @@ class WellCreate(BaseModel):
     def normalise_code(cls, value: Any) -> Any:
         return _normalise_code(value)
 
-    @field_validator("rig_id", "well_name", "well_location", "block", "objective", mode="before")
+    @field_validator("rig_id", "block_id", "well_name", "well_location", "objective", mode="before")
     @classmethod
     def trim_required(cls, value: Any) -> Any:
         return _trim_required(value)
@@ -118,10 +187,10 @@ class WellCreate(BaseModel):
 
 class WellUpdate(BaseModel):
     rig_id: str | None = Field(default=None, min_length=1, max_length=36)
+    block_id: str | None = Field(default=None, min_length=1, max_length=36)
     well_code: str | None = Field(default=None, min_length=1, max_length=50)
     well_name: str | None = Field(default=None, min_length=1, max_length=200)
     well_location: str | None = Field(default=None, min_length=1, max_length=300)
-    block: str | None = Field(default=None, min_length=1, max_length=200)
     objective: str | None = Field(default=None, min_length=1, max_length=500)
     remarks: str | None = Field(default=None, max_length=1000)
 
@@ -132,7 +201,7 @@ class WellUpdate(BaseModel):
     def normalise_code(cls, value: Any) -> Any:
         return _normalise_code(value)
 
-    @field_validator("rig_id", "well_name", "well_location", "block", "objective", mode="before")
+    @field_validator("rig_id", "block_id", "well_name", "well_location", "objective", mode="before")
     @classmethod
     def trim_required(cls, value: Any) -> Any:
         return _trim_required(value)
@@ -155,6 +224,9 @@ class WellOut(BaseModel):
     well_code: str
     well_name: str
     well_location: str
+    block_id: str
+    block_code: str
+    block_name: str
     block: str
     objective: str
     remarks: str
@@ -374,7 +446,7 @@ class RigWellIDs(BaseModel):
 
 
 class DeletedSelectionItem(BaseModel):
-    entity_type: Literal["rig", "well", "well_sub_activity"]
+    entity_type: Literal["block", "rig", "well", "well_sub_activity"]
     id: str = Field(min_length=1, max_length=36)
 
 
@@ -389,7 +461,7 @@ class RigWellBulkActionResponse(BaseModel):
 
 
 class RigWellExportAudit(BaseModel):
-    module: Literal["rigs", "wells", "well-sub-activities", "deleted"]
+    module: Literal["blocks", "rigs", "wells", "well-sub-activities", "deleted"]
     format: Literal["csv", "xlsx", "pdf"]
     record_count: int = Field(ge=0, le=1_000_000)
     include_deleted: bool = False
@@ -414,6 +486,13 @@ class RigWellActivityCount(BaseModel):
     count: int
 
 
+class RigWellBlockCount(BaseModel):
+    block_id: str
+    block_code: str
+    block_name: str
+    well_count: int = 0
+
+
 class RigWellRecentActivity(BaseModel):
     id: str
     action: str
@@ -424,6 +503,9 @@ class RigWellRecentActivity(BaseModel):
 
 
 class RigWellOverview(BaseModel):
+    active_blocks: int = 0
+    deleted_blocks: int = 0
+    block_counts: list[RigWellBlockCount] = Field(default_factory=list)
     active_rigs: int
     deleted_rigs: int
     active_wells: int
@@ -439,7 +521,7 @@ class RigWellOverview(BaseModel):
 
 class DeletedRigWellRecord(BaseModel):
     id: str
-    entity_type: Literal["rig", "well", "well_sub_activity"]
+    entity_type: Literal["block", "rig", "well", "well_sub_activity"]
     code: str
     name: str
     parent_label: str = ""

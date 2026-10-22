@@ -145,15 +145,19 @@ def test_mixed_ft_and_m_wells_last_entered_depth_and_usd_conversion_end_to_end()
         ).json()
 
         # Create WELL-FT in feet: 0 -> 3281 ft (1000.00 m), 3281 -> 6562 ft (2000.00 m).
+        block_b1 = client.post(
+            "/api/v1/rig-well/blocks", headers=headers,
+            json={"block_code": "B1", "block_name": "Block B1", "description": ""},
+        ).json()
         well_ft = client.post(
             "/api/v1/rig-well/wells",
             headers=headers,
             json={
                 "rig_id": rig["id"],
+                "block_id": block_b1["id"],
                 "well_code": "WELL-FT",
                 "well_name": "Foot Well",
                 "well_location": "Offshore Block 1",
-                "block": "B1",
                 "objective": "Exploration",
                 "remarks": "",
             },
@@ -207,15 +211,19 @@ def test_mixed_ft_and_m_wells_last_entered_depth_and_usd_conversion_end_to_end()
         ).json()["id"]
 
         # Create WELL-M in metres: 0 -> 500 m.
+        block_b2 = client.post(
+            "/api/v1/rig-well/blocks", headers=headers,
+            json={"block_code": "B2", "block_name": "Block B2", "description": ""},
+        ).json()
         well_m = client.post(
             "/api/v1/rig-well/wells",
             headers=headers,
             json={
                 "rig_id": rig["id"],
+                "block_id": block_b2["id"],
                 "well_code": "WELL-M",
                 "well_name": "Metre Well",
                 "well_location": "Offshore Block 2",
-                "block": "B2",
                 "objective": "Development",
                 "remarks": "",
             },

@@ -91,10 +91,12 @@ def setup_well(client: TestClient, headers: dict[str, str]) -> dict:
     rig = _json(client, "post", "/api/v1/rig-well/rigs", headers, {
         "rig_code": "RIG-01", "rig_name": "Rig One", "remarks": "",
     }, 201)
+    block = _json(client, "post", "/api/v1/rig-well/blocks", headers, {
+        "block_code": "BLOCK-A", "block_name": "Block A", "description": "",
+    }, 201)
     well = _json(client, "post", "/api/v1/rig-well/wells", headers, {
-        "rig_id": rig["id"], "well_code": "WELL-01", "well_name": "Well One",
-        "well_location": "North field", "block": "Block A", "objective": "Development",
-        "remarks": "",
+        "rig_id": rig["id"], "block_id": block["id"], "well_code": "WELL-01", "well_name": "Well One",
+        "well_location": "North field", "objective": "Development", "remarks": "",
     }, 201)
     configured = _json(client, "put", f"/api/v1/rig-well/wells/{well['id']}/configuration", headers, {
         "depth_unit": "m",

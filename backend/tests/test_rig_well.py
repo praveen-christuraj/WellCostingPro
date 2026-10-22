@@ -96,16 +96,32 @@ def create_rig(client: TestClient, headers: dict[str, str], code: str = "RIG-01"
     return response.json()
 
 
+def create_block(
+    client: TestClient, headers: dict[str, str], code: str = "BLOCK-A", name: str = "Block A"
+) -> dict:
+    response = client.post(
+        "/api/v1/rig-well/blocks",
+        headers=headers,
+        json={"block_code": code, "block_name": name, "description": ""},
+    )
+    if response.status_code == 409:
+        existing = client.get("/api/v1/rig-well/blocks", headers=headers).json()
+        return next(block for block in existing if block["block_code"] == code)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
 def create_well(client: TestClient, headers: dict[str, str], rig_id: str, code: str = "WELL-01") -> dict:
+    block = create_block(client, headers)
     response = client.post(
         "/api/v1/rig-well/wells",
         headers=headers,
         json={
             "rig_id": rig_id,
+            "block_id": block["id"],
             "well_code": code,
             "well_name": f"Well {code}",
             "well_location": "North field",
-            "block": "Block A",
             "objective": "Production appraisal",
             "remarks": "",
         },
@@ -172,7 +188,8 @@ def test_rigs_and_rig_scoped_wells_are_tenant_scoped_and_audited():
             headers=south,
             json={
                 "rig_id": rig["id"], "well_code": "FOREIGN", "well_name": "Foreign",
-                "well_location": "Elsewhere", "block": "X", "objective": "Y",
+                "well_location": "Elsewhere", "block_id": "00000000-0000-0000-0000-000000000000",
+                "objective": "Y",
             },
         ).status_code == 404
         assert client.patch(
@@ -360,11 +377,12 @@ def test_import_deleted_entries_bulk_restore_and_permanent_purge_are_atomic():
     with TestClient(app) as client:
         headers = login(client)
         rig = create_rig(client, headers)
+        create_block(client, headers, "BLOCK-A", "Block A")
         imported_wells = client.post(
             "/api/v1/rig-well/wells/import", headers=headers,
             json={"rows": [
-                {"rig_code": rig["rig_code"], "well_code": "IMPORTED-01", "well_name": "Imported well", "well_location": "North", "block": "A", "objective": "Production"},
-                {"rig_code": "MISSING", "well_code": "IMPORTED-02", "well_name": "Bad well", "well_location": "North", "block": "A", "objective": "Production"},
+                {"rig_code": rig["rig_code"], "well_code": "IMPORTED-01", "well_name": "Imported well", "well_location": "North", "block_code": "BLOCK-A", "objective": "Production"},
+                {"rig_code": "MISSING", "well_code": "IMPORTED-02", "well_name": "Bad well", "well_location": "North", "block_code": "BLOCK-A", "objective": "Production"},
             ]},
         )
         assert imported_wells.status_code == 200, imported_wells.text
@@ -448,3 +466,160 @@ def test_rig_well_read_capability_does_not_grant_mutation():
         )
         assert denied.status_code == 403
         assert client.get("/api/v1/rig-well/overview", headers=headers).status_code == 200
+
+
+def test_blocks_are_a_workspace_register_and_wells_are_segregated_by_block():
+    with TestClient(app) as client:
+        headers = login(client)
+        north = login(client, "north")
+        south = login(client, "south")
+        rig = create_rig(client, north, "RIG-BLOCK")
+        south_rig = create_rig(client, south, "RIG-SOUTH")
+
+        created = client.post(
+            "/api/v1/rig-well/blocks", headers=north,
+            json={"block_code": "omb-1", "block_name": "OML Block 1", "description": "Shallow water acreage"},
+        )
+        assert created.status_code == 201, created.text
+        block = created.json()
+        assert block["block_code"] == "OMB-1"
+        assert block["description"] == "Shallow water acreage"
+        second = client.post(
+            "/api/v1/rig-well/blocks", headers=north,
+            json={"block_code": "OMB-2", "block_name": "OML Block 2"},
+        )
+        assert second.status_code == 201, second.text
+        duplicate = client.post(
+            "/api/v1/rig-well/blocks", headers=north,
+            json={"block_code": "OMB-1", "block_name": "Duplicate"},
+        )
+        assert duplicate.status_code == 409
+
+        # Tenant scope: another workspace cannot see, reuse or bind the block.
+        assert client.get("/api/v1/rig-well/blocks", headers=south).json() == []
+        assert client.post(
+            "/api/v1/rig-well/blocks", headers=south,
+            json={"block_code": "OMB-1", "block_name": "Own block"},
+        ).status_code == 201
+        foreign_well = client.post(
+            "/api/v1/rig-well/wells", headers=south,
+            json={
+                "rig_id": south_rig["id"], "block_id": block["id"], "well_code": "FOREIGN-BLOCK",
+                "well_name": "Foreign", "well_location": "Elsewhere", "objective": "Test",
+            },
+        )
+        assert foreign_well.status_code == 404
+        assert client.get("/api/v1/rig-well/blocks", headers=north).json()[0]["well_count"] == 0
+
+        dropdown = client.get("/api/v1/rig-well/blocks/dropdown", headers=north)
+        assert dropdown.status_code == 200
+        assert [item["display_name"] for item in dropdown.json()] == [
+            "OMB-1 — OML Block 1", "OMB-2 — OML Block 2",
+        ]
+
+        def make_well(code: str, block_id: str) -> dict:
+            response = client.post(
+                "/api/v1/rig-well/wells", headers=north,
+                json={
+                    "rig_id": rig["id"], "block_id": block_id, "well_code": code,
+                    "well_name": f"Well {code}", "well_location": "North field",
+                    "objective": "Production appraisal", "remarks": "",
+                },
+            )
+            assert response.status_code == 201, response.text
+            return response.json()
+
+        first = make_well("WELL-B1", block["id"])
+        second_well = make_well("WELL-B1B", block["id"])
+        third = make_well("WELL-B2", second.json()["id"])
+        assert first["block_code"] == "OMB-1" and first["block"] == "OML Block 1"
+        assert third["block_code"] == "OMB-2" and third["block_id"] == second.json()["id"]
+
+        # Segregation: filtering by block returns only that block's wells.
+        one = client.get(f"/api/v1/rig-well/wells?block_id={block['id']}", headers=north).json()
+        assert [well["well_code"] for well in one] == ["WELL-B1", "WELL-B1B"]
+        by_text = client.get("/api/v1/rig-well/wells?block=OMB-2", headers=north).json()
+        assert [well["well_code"] for well in by_text] == ["WELL-B2"]
+        searched = client.get("/api/v1/rig-well/wells?search=OML%20Block%201", headers=north).json()
+        assert [well["well_code"] for well in searched] == ["WELL-B1", "WELL-B1B"]
+
+        counts = {row["block_code"]: row["well_count"] for row in client.get(
+            "/api/v1/rig-well/blocks", headers=north
+        ).json()}
+        assert counts == {"OMB-1": 2, "OMB-2": 1}
+        overview = client.get("/api/v1/rig-well/overview", headers=north).json()
+        assert overview["active_blocks"] == 2
+        assert {row["block_code"]: row["well_count"] for row in overview["block_counts"]} == counts
+
+        # Reassigning a well moves it between blocks.
+        moved = client.patch(
+            f"/api/v1/rig-well/wells/{second_well['id']}", headers=north,
+            json={"block_id": second.json()["id"]},
+        )
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["block_code"] == "OMB-2"
+
+        # A block in use is protected; it is soft-deleted first, then purged.
+        assert client.delete(f"/api/v1/rig-well/blocks/{block['id']}", headers=north).status_code == 409
+        assert client.delete(f"/api/v1/rig-well/blocks/{block['id']}", headers=south).status_code == 404
+        for well in (first, second_well):
+            assert client.delete(f"/api/v1/rig-well/wells/{well['id']}", headers=north).status_code == 200
+        removed = client.delete(f"/api/v1/rig-well/blocks/{block['id']}", headers=north)
+        assert removed.status_code == 200, removed.text
+        assert client.get("/api/v1/rig-well/blocks", headers=north).status_code == 200
+        assert block["id"] not in [row["id"] for row in client.get("/api/v1/rig-well/blocks", headers=north).json()]
+        deleted = client.get("/api/v1/rig-well/deleted", headers=north).json()
+        deleted_block = next(row for row in deleted if row["id"] == block["id"])
+        assert deleted_block["entity_type"] == "block"
+        assert deleted_block["code"] == "OMB-1"
+        assert deleted_block["parent_label"] == "Block register"
+        # Retained (soft-deleted) wells still pin the block, as they do a rig.
+        assert client.delete(f"/api/v1/rig-well/blocks/{block['id']}/permanent", headers=north).status_code == 409
+        for well in (first, second_well):
+            assert client.delete(f"/api/v1/rig-well/wells/{well['id']}/permanent", headers=north).status_code == 204
+        assert client.delete(f"/api/v1/rig-well/blocks/{block['id']}/permanent", headers=north).status_code == 204
+
+        restored_block = create_block(client, north, "OMB-3", "OML Block 3")
+        assert restored_block["block_code"] == "OMB-3"
+        assert client.post(
+            f"/api/v1/rig-well/blocks/{restored_block['id']}/restore", headers=north
+        ).status_code == 409
+
+
+def test_blocks_support_import_update_and_audited_export():
+    with TestClient(app) as client:
+        headers = login(client)
+        imported = client.post(
+            "/api/v1/rig-well/blocks/import", headers=headers,
+            json={"rows": [
+                {"block_code": "omb-9", "block_name": "OML Block 9", "description": "Imported"},
+                {"block_code": "", "block_name": "Missing code"},
+                {"block_code": "OMB-9", "block_name": "Duplicate"},
+            ]},
+        )
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["imported_count"] == 1
+        assert imported.json()["error_count"] == 2
+        rows = client.get("/api/v1/rig-well/blocks", headers=headers).json()
+        assert [(row["block_code"], row["description"]) for row in rows] == [("OMB-9", "Imported")]
+
+        updated = client.patch(
+            f"/api/v1/rig-well/blocks/{rows[0]['id']}", headers=headers,
+            json={"block_name": "OML Block Nine", "description": "Renamed block"},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["block_name"] == "OML Block Nine"
+        assert client.patch(
+            f"/api/v1/rig-well/blocks/{rows[0]['id']}", headers=headers,
+            json={"block_code": "OMB-9", "block_name": ""},
+        ).status_code == 422
+
+        assert client.post(
+            "/api/v1/rig-well/export-audit", headers=headers,
+            json={"module": "blocks", "format": "xlsx", "record_count": 1, "include_deleted": False},
+        ).status_code == 204
+        with SessionLocal() as db:
+            audit = db.query(AuditLog).filter_by(entity_type="block").all()
+            assert {entry.action for entry in audit} >= {"create", "update"}
+            export = db.query(AuditLog).filter_by(entity_type="rig_well_export").one()
+            assert "Blocks" in export.summary
