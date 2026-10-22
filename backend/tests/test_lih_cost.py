@@ -358,3 +358,197 @@ def test_lih_cost_is_added_to_actual_and_deducted_from_the_afe_everywhere():
         assert Decimal(deductions["AFE-01"]["lih_cost"]) == Decimal("2800.97")
         assert Decimal(deductions["AFE-02"]["lih_cost"]) == Decimal("500.00")
         assert Decimal(summary.json()["totals"]["lih_cost"]) == Decimal("3300.97")
+
+
+def _input_from(line: dict, **overrides) -> dict:
+    """Rebuild a worksheet input row from a saved line, as the UI would send it."""
+    payload = {
+        key: line[key]
+        for key in (
+            "item_description", "od_size", "id_size", "fish_neck_od", "fish_neck_length",
+            "serial_number", "connection", "length", "no_of_units", "unit", "unit_cost", "remarks",
+        )
+    }
+    payload["id"] = line["id"]
+    payload.update(overrides)
+    return payload
+
+
+def test_worksheet_save_posts_many_items_at_once_and_only_touches_changed_rows():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = setup_well(client, headers)
+        payload = {
+            "well_id": setup["well"]["id"],
+            "rig_id": setup["rig"]["id"],
+            "cost_date": "2026-10-14",
+            "remarks": "Fishing job after a twist-off",
+            "lines": [
+                _line(item_description="6 5/8 in drill collar", no_of_units="2", unit_cost="1250.50"),
+                _line(item_description="Stabilizer", no_of_units="3", unit_cost="99.99", source="duplicate"),
+                _line(item_description="Bit sub", no_of_units="1", unit_cost="450"),
+            ],
+        }
+        saved = client.put("/api/v1/lih-cost/day", headers=headers, json=payload)
+        assert saved.status_code == 200, saved.text
+        day = saved.json()
+        # Three items, one save, one register day.
+        assert day["entry"]["line_count"] == 3
+        assert Decimal(day["entry"]["total_cost"]) == Decimal("3250.97")
+        assert day["entry"]["revision"] == 1
+        assert day["entry"]["remarks"] == "Fishing job after a twist-off"
+        assert day["entry"]["afe_id"] == setup["afe"]["id"]
+        assert [line["item_description"] for line in day["lines"]] == [
+            "6 5/8 in drill collar", "Stabilizer", "Bit sub",
+        ]
+        assert [line["sort_order"] for line in day["lines"]] == [0, 1, 2]
+        assert [line["source"] for line in day["lines"]] == ["manual", "duplicate", "manual"]
+        with SessionLocal() as db:
+            created = db.scalars(select(AuditLog).where(AuditLog.entity_type == "lih_cost")).all()
+        assert len(created) == 1 and "3 item(s)" in created[0].summary
+
+        # Save again: keep two rows (one edited), drop one, add one, reorder.
+        by_description = {line["item_description"]: line for line in day["lines"]}
+        second = client.put("/api/v1/lih-cost/day", headers=headers, json={
+            "well_id": setup["well"]["id"],
+            "cost_date": "2026-10-14",
+            "expected_revision": 1,
+            "remarks": "Fishing job closed",
+            "lines": [
+                _line(item_description="Jar", no_of_units="1", unit_cost="700", serial_number="JAR-1"),
+                _input_from(by_description["6 5/8 in drill collar"], unit_cost="1300.00"),
+                _input_from(by_description["Bit sub"]),
+            ],
+        })
+        assert second.status_code == 200, second.text
+        updated = second.json()
+        assert updated["entry"]["revision"] == 2
+        assert updated["entry"]["line_count"] == 3
+        assert [line["item_description"] for line in updated["lines"]] == [
+            "Jar", "6 5/8 in drill collar", "Bit sub",
+        ]
+        assert [line["sort_order"] for line in updated["lines"]] == [0, 1, 2]
+        assert Decimal(updated["entry"]["total_cost"]) == Decimal("3750.00")
+        # The edited row keeps its identity and its original capture source.
+        assert updated["lines"][1]["id"] == by_description["6 5/8 in drill collar"]["id"]
+        assert Decimal(updated["lines"][1]["unit_cost"]) == Decimal("1300")
+        assert updated["lines"][0]["source"] == "manual"
+        assert all(line["item_description"] != "Stabilizer" for line in updated["lines"])
+
+        # A stale worksheet cannot overwrite the newer save.
+        stale = client.put("/api/v1/lih-cost/day", headers=headers, json={**payload, "expected_revision": 1})
+        assert stale.status_code == 409 and "saved by someone else" in stale.json()["detail"]
+        # A row that is no longer on the day is refused, not silently re-created.
+        gone = client.put("/api/v1/lih-cost/day", headers=headers, json={
+            "well_id": setup["well"]["id"], "cost_date": "2026-10-14",
+            "lines": [{"id": by_description["Stabilizer"]["id"], **_line()}],
+        })
+        assert gone.status_code == 422 and "no longer on this day" in gone.json()["detail"]
+        # Totals are never client supplied.
+        assert client.put("/api/v1/lih-cost/day", headers=headers, json={
+            "well_id": setup["well"]["id"], "cost_date": "2026-10-14",
+            "lines": [{**_line(), "total_cost": "1"}],
+        }).status_code == 422
+        # A day is never created empty by the worksheet endpoint.
+        assert client.put("/api/v1/lih-cost/day", headers=headers, json={
+            "well_id": setup["well"]["id"], "cost_date": "2026-10-20", "lines": [],
+        }).status_code == 422
+
+        # Bulk removal of selected rows in one call.
+        keep = updated["lines"][0]["id"]
+        others = [line["id"] for line in updated["lines"][1:]]
+        removed = client.post(
+            f"/api/v1/lih-cost/entries/{updated['entry']['id']}/lines/bulk-delete",
+            headers=headers, json={"line_ids": others},
+        )
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["entry"]["line_count"] == 1
+        assert [line["id"] for line in removed.json()["lines"]] == [keep]
+        assert Decimal(removed.json()["entry"]["total_cost"]) == Decimal("700.00")
+        assert removed.json()["entry"]["revision"] == 3
+        assert client.post(
+            f"/api/v1/lih-cost/entries/{updated['entry']['id']}/lines/bulk-delete",
+            headers=headers, json={"line_ids": others},
+        ).status_code == 422
+
+        # Tenant isolation and RBAC.
+        south = login(client, "south")
+        assert client.put("/api/v1/lih-cost/day", headers=south, json=payload).status_code == 404
+        assert client.get("/api/v1/lih-cost/entries", headers=south).json() == []
+        with SessionLocal() as db:
+            north_id = select(Organization.id).where(Organization.slug == "north").scalar_subquery()
+            role = db.scalar(select(Role).where(Role.organization_id == north_id))
+            role.is_owner = False
+            role.permissions = [permission for permission in role.permissions
+                                if permission.key in ("daily-cost:read", "daily-cost:export")]
+            db.commit()
+        assert client.put("/api/v1/lih-cost/day", headers=headers, json=payload).status_code == 403
+        assert client.post("/api/v1/lih-cost/import", headers=headers, json={
+            "well_id": setup["well"]["id"], "rows": [{"item_description": "X", "no_of_units": "1", "unit_cost": "1"}],
+        }).status_code == 403
+        with SessionLocal() as db:
+            role = db.scalar(select(Role).where(Role.organization_id == north_id))
+            role.is_owner = True
+            db.commit()
+
+
+def test_lih_import_saves_rows_per_date_and_reports_row_errors_beside_the_row():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = setup_well(client, headers)
+        response = client.post("/api/v1/lih-cost/import", headers=headers, json={
+            "well_id": setup["well"]["id"],
+            "rows": [
+                {"cost_date": "2026-10-15", "item_description": "Drill pipe", "serial_number": "DP-1",
+                 "od_size": "5", "no_of_units": "10", "unit": "EA", "unit_cost": "100"},
+                {"cost_date": "2026-10-15", "item_description": "Drill pipe joint", "no_of_units": "2",
+                 "unit": "EA", "unit_cost": "250.25", "remarks": "Imported from the rig report"},
+                {"cost_date": "2026-10-16", "item_description": "Completion packer", "no_of_units": "1",
+                 "unit": "EA", "unit_cost": "5000"},
+                {"cost_date": "2026-10-16", "item_description": "Blank units"},
+                {"item_description": "Row without a date", "no_of_units": "1", "unit_cost": "5"},
+            ],
+        })
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["imported_count"] == 3
+        assert result["day_count"] == 2
+        assert result["error_count"] == 2
+        assert result["success"] is False
+        assert any(message.startswith("Row 4") for message in result["errors"])
+        assert any(message.startswith("Row 5") and "date" in message for message in result["errors"])
+        assert all("Row 1" not in message for message in result["errors"])
+
+        register = client.get("/api/v1/lih-cost/entries", headers=headers, params={
+            "well_id": setup["well"]["id"],
+        }).json()
+        assert [row["cost_date"] for row in register] == ["2026-10-16", "2026-10-15"]
+        by_date = {row["cost_date"]: row for row in register}
+        assert by_date["2026-10-15"]["line_count"] == 2
+        assert Decimal(by_date["2026-10-15"]["total_cost"]) == Decimal("1500.50")
+        day = client.get(f"/api/v1/lih-cost/entries/{by_date['2026-10-15']['id']}", headers=headers).json()
+        assert {line["source"] for line in day["lines"]} == {"import"}
+        assert day["lines"][1]["remarks"] == "Imported from the rig report"
+
+        # Importing into an existing date appends instead of replacing the day.
+        appended = client.post("/api/v1/lih-cost/import", headers=headers, json={
+            "well_id": setup["well"]["id"], "cost_date": "2026-10-15",
+            "rows": [{"item_description": "Jar", "no_of_units": "1", "unit_cost": "900"}],
+        }).json()
+        assert appended["imported_count"] == 1 and appended["success"] is True
+        day = client.get(f"/api/v1/lih-cost/entries/{by_date['2026-10-15']['id']}", headers=headers).json()
+        assert [line["item_description"] for line in day["lines"]] == ["Drill pipe", "Drill pipe joint", "Jar"]
+        assert day["entry"]["revision"] == 2
+
+        # Previously used items are offered for quick re-entry, without a serial number.
+        reference = client.get("/api/v1/lih-cost/reference", headers=headers).json()
+        suggestions = {item["item_description"]: item for item in reference["previous_items"]}
+        assert "Drill pipe" in suggestions and "Completion packer" in suggestions
+        assert suggestions["Drill pipe"]["unit_cost"] == "100.0000000000"
+        assert "serial_number" not in suggestions["Drill pipe"]
+        assert len(suggestions) == len(reference["previous_items"])
+
+        with SessionLocal() as db:
+            imported = db.scalars(select(AuditLog).where(AuditLog.entity_type == "lih_cost_import")).all()
+            assert len(imported) == 2
+            assert "3 LIH item(s) into 2 day(s)" in imported[0].summary

@@ -182,6 +182,105 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
 .assignment-option:hover { border-color: var(--wcp-accent-fg); }
 .assignment-option:focus-within { border-color: var(--wcp-accent-fg); box-shadow: 0 0 0 3px var(--wcp-focus-soft); }
 
+/* LIH worksheet — one editable sheet per register day.
+
+   A spreadsheet-style entry surface: compact cells, sticky header, row number
+   and action columns, and per-cell focus/error states. Colours always come from
+   the --wcp-* tokens so light and dark themes stay in step. */
+/* The sheet is mounted inside the page's own card, so it adds no second frame. */
+.lih-worksheet { background: transparent; }
+.lih-worksheet__bar { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.lih-worksheet__tools {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--wcp-line);
+}
+.lih-shortcuts {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px;
+  margin-top: 10px; padding: 10px 12px;
+  background: var(--wcp-muted); border: 1px solid var(--wcp-line); border-radius: var(--wcp-radius-md);
+}
+.lih-shortcut { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--wcp-text-muted); }
+.lih-shortcut__keys {
+  font-family: var(--wcp-font-mono); font-size: 10.5px; color: var(--wcp-accent-fg);
+  background: var(--wcp-paper); border: 1px solid var(--wcp-line-strong);
+  border-radius: 4px; padding: 1px 5px; white-space: nowrap;
+}
+.lih-sheet {
+  margin-top: 10px; overflow: auto; max-height: 58vh;
+  border: 1px solid var(--wcp-line); border-radius: var(--wcp-radius-md);
+  background: var(--wcp-paper);
+}
+.lih-sheet table { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: 100%; min-width: 1560px; font-size: 12px; }
+.lih-sheet th {
+  position: sticky; top: 0; z-index: 3;
+  background: var(--wcp-muted); color: var(--wcp-text-muted);
+  font-size: 9.5px; font-weight: 800; letter-spacing: .7px; text-transform: uppercase;
+  text-align: left; padding: 7px; border-bottom: 1px solid var(--wcp-line-strong); white-space: nowrap;
+}
+.lih-sheet td { padding: 0; border-bottom: 1px solid var(--wcp-line); vertical-align: middle; }
+.lih-sheet tbody tr:hover td { background: var(--wcp-hover); }
+.lih-sheet__cell input, .lih-sheet__cell select {
+  display: block; width: 100%; height: 34px; border: 0; border-radius: 0;
+  background: transparent; color: var(--wcp-text);
+  font: 500 12px var(--wcp-font-ui); padding: 0 7px;
+}
+.lih-sheet__cell select { padding-right: 2px; cursor: pointer; }
+.lih-sheet__cell.is-right input { text-align: right; font-variant-numeric: tabular-nums; }
+.lih-sheet__cell input:focus, .lih-sheet__cell select:focus {
+  outline: 2px solid var(--wcp-focus); outline-offset: -2px; background: var(--wcp-paper);
+}
+.lih-sheet__cell.is-error input, .lih-sheet__cell.is-error select {
+  background: var(--wcp-tone-error-bg); box-shadow: inset 0 0 0 1px var(--wcp-tone-error-border);
+}
+.lih-sheet__select { position: sticky; left: 0; z-index: 2; background: var(--wcp-paper); text-align: center; }
+.lih-sheet__rownum { position: sticky; left: 38px; z-index: 2; background: var(--wcp-paper); text-align: center; }
+.lih-sheet thead .lih-sheet__select, .lih-sheet thead .lih-sheet__rownum { z-index: 4; background: var(--wcp-muted); }
+.lih-sheet__select input { width: 14px; height: 14px; accent-color: var(--wcp-primary); }
+.lih-sheet__index { display: block; font-family: var(--wcp-font-mono); font-size: 11px; color: var(--wcp-text-muted); }
+.lih-sheet__state { display: block; font-size: 8px; font-weight: 800; letter-spacing: .6px; color: var(--wcp-text-disabled); }
+.lih-row--new .lih-sheet__rownum { box-shadow: inset 2px 0 0 var(--wcp-accent-fg); }
+.lih-row--new .lih-sheet__state { color: var(--wcp-accent-fg); }
+.lih-row--edited .lih-sheet__rownum { box-shadow: inset 2px 0 0 var(--wcp-tone-warning-border); }
+.lih-row--edited .lih-sheet__state { color: var(--wcp-tone-warning-fg); }
+.lih-row.is-selected td, .lih-row.is-selected .lih-sheet__select,
+.lih-row.is-selected .lih-sheet__rownum, .lih-row.is-selected .lih-sheet__actions { background: var(--wcp-accent-surface); }
+.lih-sheet__total {
+  text-align: right !important; padding: 0 8px !important;
+  font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.lih-sheet__actions { position: sticky; right: 0; z-index: 2; background: var(--wcp-paper); text-align: center; white-space: nowrap; }
+.lih-sheet thead .lih-sheet__actions { z-index: 4; background: var(--wcp-muted); }
+.lih-sheet tbody tr:hover .lih-sheet__actions,
+.lih-sheet tbody tr:hover .lih-sheet__select,
+.lih-sheet tbody tr:hover .lih-sheet__rownum { background: var(--wcp-hover); }
+.lih-sheet__addrow td { padding: 0; }
+.lih-sheet__addrow button {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 8px 10px;
+  border: 0; background: transparent; color: var(--wcp-accent-fg);
+  font: 700 11.5px var(--wcp-font-ui); cursor: pointer;
+}
+.lih-sheet__addrow button:hover { background: var(--wcp-hover); }
+.lih-sheet__addrow button:focus-visible { outline: 2px solid var(--wcp-focus); outline-offset: -2px; }
+.lih-sheet tfoot td {
+  position: sticky; bottom: 0; background: var(--wcp-muted);
+  border-top: 1px solid var(--wcp-line-strong); padding: 7px 8px;
+  font-size: 11.5px; font-weight: 800; color: var(--wcp-text-muted);
+}
+.lih-problem-link {
+  border: 0; background: none; color: inherit; font: inherit;
+  padding: 0; cursor: pointer; text-align: left; text-decoration: underline;
+}
+.lih-problem-link:focus-visible { outline: 2px solid var(--wcp-focus); outline-offset: 2px; }
+.lih-worksheet__foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+@media (max-width: 900px) {
+  .lih-shortcuts { grid-template-columns: 1fr; }
+  .lih-sheet { max-height: 52vh; }
+}
+/* Touch devices get the 44px hit area the design rules ask for. */
+@media (pointer: coarse) {
+  .lih-sheet__cell input, .lih-sheet__cell select { height: 44px; }
+}
+
 /* Motion is state feedback only. Users who ask the OS for reduced motion get none. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

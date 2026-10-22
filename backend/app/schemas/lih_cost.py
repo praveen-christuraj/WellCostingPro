@@ -12,6 +12,9 @@ MAX_UNITS = Decimal("1000000")
 MAX_UNIT_COST = Decimal("100000000")
 MAX_DIMENSION = Decimal("1000000")
 MAX_LINE_COST = Decimal("100000000000")
+# A worksheet save and an import are bounded so one request cannot exhaust the API.
+MAX_LINES_PER_DAY = 500
+MAX_IMPORT_ROWS = 2000
 
 
 def _trim(value: Any) -> Any:
@@ -31,14 +34,20 @@ class _Strict(BaseModel):
 
 
 class LihCostLineIn(_Strict):
-    """One manually entered LIH item.
+    """One LIH item on a day's worksheet.
 
     ``item_description``, ``no_of_units`` and ``unit_cost`` are mandatory. The
     server always recomputes ``total_cost`` as units × unit cost; a client
     supplied total is not accepted. The equipment dimensions and identity
     fields are optional, typed measurements and text.
+
+    ``id`` is set when the row already exists on the day (editing an item in
+    the worksheet); a row without ``id`` is a new item. ``source`` records how
+    the row was captured so duplicates and imports stay distinguishable.
     """
 
+    id: str | None = Field(default=None, max_length=36)
+    source: Literal["manual", "duplicate", "import"] = "manual"
     item_description: str = Field(min_length=1, max_length=300)
     od_size: Decimal10 | None = Field(default=None, ge=0, le=MAX_DIMENSION)
     id_size: Decimal10 | None = Field(default=None, ge=0, le=MAX_DIMENSION)
@@ -59,7 +68,7 @@ class LihCostLineIn(_Strict):
     def blank_dimensions(cls, value: Any) -> Any:
         return _blank_to_none(value)
 
-    @field_validator("item_description", "serial_number", "connection", "unit", "remarks", mode="before")
+    @field_validator("id", "item_description", "serial_number", "connection", "unit", "remarks", mode="before")
     @classmethod
     def trim_text(cls, value: Any) -> Any:
         return _trim(value)
@@ -89,6 +98,82 @@ class LihCostEntryUpdate(_Strict):
     @classmethod
     def trim_text(cls, value: Any) -> Any:
         return _trim(value)
+
+
+class LihCostDaySave(_Strict):
+    """One worksheet save: the day header plus every item on it.
+
+    The payload is authoritative — items missing from ``lines`` are removed
+    from the day, the array order is the saved item order, rows that carry an
+    ``id`` are updated and rows without one are created. Everything is written
+    in one transaction, so a user can capture many items with a single save.
+    """
+
+    well_id: str = Field(min_length=1, max_length=36)
+    rig_id: str = Field(default="", max_length=36)
+    afe_id: str = Field(default="", max_length=36)
+    cost_date: date
+    remarks: str = Field(default="", max_length=1000)
+    lines: list[LihCostLineIn] = Field(default_factory=list, max_length=MAX_LINES_PER_DAY)
+    # Revision the worksheet was opened at. Omitted by clients that do not
+    # track it; when supplied, a stale value is rejected instead of overwriting.
+    expected_revision: int | None = Field(default=None, ge=0)
+
+    @field_validator("well_id", "rig_id", "afe_id", "remarks", mode="before")
+    @classmethod
+    def trim_text(cls, value: Any) -> Any:
+        return _trim(value)
+
+
+class LihCostLineIDs(_Strict):
+    """Remove selected items from one day's worksheet in a single call."""
+
+    line_ids: list[str] = Field(min_length=1, max_length=MAX_LINES_PER_DAY)
+
+
+class LihCostImportRow(_Strict):
+    """One loose spreadsheet row; the service validates it into a LIH item.
+
+    Fields stay lenient so the import can report a precise, per-row error
+    (for example "Row 7: No of units must be greater than zero") instead of
+    rejecting the whole file with one generic message.
+    """
+
+    cost_date: date | None = None
+    item_description: Any = ""
+    od_size: Any = None
+    id_size: Any = None
+    fish_neck_od: Any = None
+    fish_neck_length: Any = None
+    serial_number: Any = ""
+    connection: Any = ""
+    length: Any = None
+    no_of_units: Any = ""
+    unit: Any = ""
+    unit_cost: Any = ""
+    remarks: Any = ""
+
+
+class LihCostImportRequest(_Strict):
+    """Import LIH items into one well, optionally splitting them by date."""
+
+    well_id: str = Field(min_length=1, max_length=36)
+    afe_id: str = Field(default="", max_length=36)
+    cost_date: date | None = None
+    rows: list[LihCostImportRow] = Field(min_length=1, max_length=MAX_IMPORT_ROWS)
+
+    @field_validator("well_id", "afe_id", mode="before")
+    @classmethod
+    def trim_text(cls, value: Any) -> Any:
+        return _trim(value)
+
+
+class LihCostImportResponse(BaseModel):
+    imported_count: int
+    error_count: int
+    success: bool
+    day_count: int = 0
+    errors: list[str] = Field(default_factory=list)
 
 
 class LihCostIDs(_Strict):
@@ -146,12 +231,32 @@ class LihCostUomOption(BaseModel):
     display_name: str
 
 
+class LihCostItemSuggestion(BaseModel):
+    """A previously entered item, offered while typing so a repeat is one pick.
+
+    The serial number is deliberately omitted: it identifies a specific tool and
+    must not be copied from an earlier item by accident.
+    """
+
+    item_description: str
+    od_size: Decimal | None = None
+    id_size: Decimal | None = None
+    fish_neck_od: Decimal | None = None
+    fish_neck_length: Decimal | None = None
+    connection: str = ""
+    length: Decimal | None = None
+    unit: str = ""
+    unit_cost: Decimal = Decimal("0")
+
+
 class LihCostReference(BaseModel):
     rigs: list[LihCostRigOption]
     wells: list[LihCostWellOption]
     afes: list[LihCostAfeOption]
     uoms: list[LihCostUomOption]
     default_currency: str = ""
+    # Most recently used items in this workspace, newest first, for quick reuse.
+    previous_items: list[LihCostItemSuggestion] = Field(default_factory=list)
 
 
 class LihCostLineOut(BaseModel):
@@ -169,6 +274,7 @@ class LihCostLineOut(BaseModel):
     unit_cost: Decimal
     total_cost: Decimal
     remarks: str = ""
+    source: str = "manual"
     sort_order: int = 0
     created_at: datetime
     updated_at: datetime
@@ -190,6 +296,7 @@ class LihCostEntryOut(BaseModel):
     remarks: str
     line_count: int
     total_cost: Decimal
+    revision: int = 0
     display_name: str
     is_deleted: bool
     deleted_at: datetime | None = None

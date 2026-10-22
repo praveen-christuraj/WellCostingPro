@@ -123,6 +123,7 @@ digraph WellCostingPro {
   "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx";
   "frontend/src/components/daily-cost/WellCostPrintDialog.tsx";
   "frontend/src/components/daily-cost/WellProgressPanel.tsx";
+  "frontend/src/components/lih-cost/LihWorksheet.tsx";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx";
   "frontend/src/components/mud-cost/MudCostOpeningStockDialog.tsx";
   "frontend/src/components/mud-cost/MudCostPrintSheet.tsx";
@@ -599,6 +600,8 @@ digraph WellCostingPro {
   "frontend/src/components/daily-cost/WellProgressPanel.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/daily-cost/WellProgressPanel.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/components/daily-cost/WellProgressPanel.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/components/lih-cost/LihWorksheet.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/components/lih-cost/LihWorksheet.tsx" -> "frontend/src/lib/lihCost.ts";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/designSystem.ts";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/lib/mudCost.ts";
@@ -739,9 +742,12 @@ digraph WellCostingPro {
   "frontend/src/pages/DeletedMasterData.tsx" -> "frontend/src/lib/vendorMaster.ts";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/components/DataTable.tsx";
+  "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/components/ImportDialog.tsx";
+  "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/components/lih-cost/LihWorksheet.tsx";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/lib/lihCost.ts";
   "frontend/src/pages/Login.tsx" -> "frontend/src/components/Brand.tsx";
   "frontend/src/pages/Login.tsx" -> "frontend/src/context/AuthContext.tsx";

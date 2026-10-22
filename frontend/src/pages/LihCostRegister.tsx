@@ -1,65 +1,27 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  AddRounded, DeleteForeverOutlined, DeleteOutlineRounded, EditOutlined, EventNoteOutlined,
-  FilterAltOffOutlined, OpenInNewRounded, RestoreRounded, RefreshRounded, SaveOutlined,
+  DeleteForeverOutlined, DeleteOutlineRounded, EventNoteOutlined, FilterAltOffOutlined,
+  OpenInNewRounded, RefreshRounded, RestoreRounded,
 } from '@mui/icons-material'
 import {
-  Alert, Box, Button, CircularProgress, Divider, IconButton, MenuItem, Paper, TextField, Tooltip, Typography,
+  Alert, Box, Button, CircularProgress, Divider, IconButton, Menu, MenuItem, Paper, TextField, Tooltip, Typography,
 } from '@mui/material'
 import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag, useUnsavedChangesGuard } from '../components/Common'
+import { ImportDialog } from '../components/ImportDialog'
+import { LihWorksheet } from '../components/lih-cost/LihWorksheet'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import { dailyMoney, displayDate, localToday } from '../lib/dailyCost'
+import { exportCsv, exportPdf, exportXlsx, type ExportColumn, type ImportRow } from '../lib/export'
 import {
-  EMPTY_LIH_LINE, lihLinePayload, lihLineTotal, lihMeasure, lihQuery,
-  type LihCostDay, type LihCostEntry, type LihCostLine, type LihCostLineInput,
-  type LihCostReference,
+  LIH_IMPORT_HEADERS, LIH_IMPORT_OPTIONAL_HEADERS, LIH_IMPORT_SAMPLE, blankDraftRow, draftRowFromSavedLine,
+  lihDayPayloadLines, lihImportRow, lihLineTotal, lihQuery, rowHasChanged, rowIsBlank, validateDraft,
+  type LihCostDay, type LihCostEntry, type LihCostImportResponse, type LihCostReference, type LihDraftRow,
 } from '../lib/lihCost'
 
-type PendingAction = { kind: 'delete' | 'restore' | 'purge' | 'delete-line'; rows: LihCostEntry[]; line?: LihCostLine }
-type LineEditor = { mode: 'add' | 'edit'; id?: string; values: LihCostLineInput }
-
-function numberOrBlank(value: string): string {
-  return value
-}
-
-function validateLine(values: LihCostLineInput): string {
-  if (!values.item_description.trim()) return 'Item description is mandatory.'
-  const units = Number(values.no_of_units)
-  if (!values.no_of_units.trim() || !Number.isFinite(units) || units <= 0) return 'No of units must be a number greater than zero.'
-  if (!values.unit_cost.trim() || !Number.isFinite(Number(values.unit_cost)) || Number(values.unit_cost) < 0) {
-    return 'Unit cost is mandatory and cannot be negative.'
-  }
-  for (const [label, raw] of [
-    ['OD size', values.od_size], ['ID size', values.id_size], ['Fish neck OD', values.fish_neck_od],
-    ['Fish neck length', values.fish_neck_length], ['Length', values.length],
-  ]) {
-    const value = raw ?? ''
-    if (value.trim() === '') continue
-    const parsed = Number(value)
-    if (!Number.isFinite(parsed) || parsed < 0) return `${label} must be a number that is zero or more, or left blank.`
-  }
-  return ''
-}
-
-function lineFromSaved(line: LihCostLine): LihCostLineInput {
-  return {
-    item_description: line.item_description,
-    od_size: line.od_size ?? '',
-    id_size: line.id_size ?? '',
-    fish_neck_od: line.fish_neck_od ?? '',
-    fish_neck_length: line.fish_neck_length ?? '',
-    serial_number: line.serial_number,
-    connection: line.connection,
-    length: line.length ?? '',
-    no_of_units: String(Number(line.no_of_units)),
-    unit: line.unit,
-    unit_cost: String(Number(line.unit_cost)),
-    remarks: line.remarks,
-  }
-}
+type PendingAction = { kind: 'delete' | 'restore' | 'purge'; rows: LihCostEntry[] }
 
 export default function LihCostRegister() {
   const { can } = useAuth()
@@ -78,12 +40,14 @@ export default function LihCostRegister() {
   const [day, setDay] = useState<LihCostDay | null>(null)
   const [dayLoading, setDayLoading] = useState(false)
   const [dayError, setDayError] = useState('')
-  const [editor, setEditor] = useState<LineEditor | null>(null)
-  const [savingLine, setSavingLine] = useState(false)
-  const [lineError, setLineError] = useState('')
+
+  const [draft, setDraft] = useState<LihDraftRow[]>([])
   const [remarks, setRemarks] = useState('')
-  const [savingRemarks, setSavingRemarks] = useState(false)
-  const [remarksNotice, setRemarksNotice] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [importOpen, setImportOpen] = useState(false)
+  const [sheetExportAnchor, setSheetExportAnchor] = useState<HTMLElement | null>(null)
+  const [autoFocusSheet, setAutoFocusSheet] = useState(false)
 
   const [filterRig, setFilterRig] = useState('')
   const [filterWell, setFilterWell] = useState('')
@@ -94,6 +58,13 @@ export default function LihCostRegister() {
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
   const [actionError, setActionError] = useState('')
+  // Guards against a second save being fired before React re-renders the busy state.
+  const saveInFlight = useRef(false)
+
+  const canCreate = can('daily-cost:create')
+  const canUpdate = can('daily-cost:update')
+  const canSave = day ? canUpdate : canCreate
+  const canEdit = canSave
 
   const filtersActive = Boolean(filterRig || filterWell || filterAfe || dateFrom || dateTo)
   const registerQuery = lihQuery({
@@ -130,8 +101,9 @@ export default function LihCostRegister() {
     try {
       const result = await api<LihCostDay | null>(`/lih-cost/day?${new URLSearchParams({ well_id: well, date }).toString()}`)
       setDay(result)
-      setRemarks(result?.entry.remarks ?? '')
-      setRemarksNotice('')
+      // An existing day is always edited against the AFE it is filed on. A new
+      // day keeps the AFE chosen for the well (a multi-AFE well must name one).
+      if (result) setAfeId(result.entry.afe_id ?? '')
     } catch (caught) {
       setDay(null)
       setDayError(caught instanceof Error ? caught.message : 'This LIH day could not be loaded')
@@ -144,6 +116,21 @@ export default function LihCostRegister() {
   useEffect(() => { void loadRegister() }, [loadRegister])
   useEffect(() => { void loadDay(wellId, costDate) }, [wellId, costDate, loadDay])
 
+  // Reset the worksheet whenever a different day is loaded, or after any save
+  // (the revision changes), so the sheet always mirrors what is stored.
+  const loadedKey = day ? `${day.entry.id}:${day.entry.revision}:${day.lines.length}` : ''
+  useEffect(() => {
+    if (day) {
+      setDraft(day.lines.length ? day.lines.map(draftRowFromSavedLine) : [blankDraftRow()])
+      setRemarks(day.entry.remarks)
+    } else {
+      setDraft(wellId && costDate ? [blankDraftRow()] : [])
+      setRemarks('')
+    }
+    setSaveError('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedKey, wellId, costDate])
+
   const wellsForRig = useMemo(
     () => reference?.wells.filter(well => !rigId || well.rig_id === rigId) ?? [],
     [reference, rigId],
@@ -155,96 +142,160 @@ export default function LihCostRegister() {
   )
   const selectedAfe = afesForWell.find(afe => afe.id === afeId) ?? afesForWell[0] ?? null
   const dayCurrency = day?.entry.currency || selectedAfe?.standard_currency || reference?.default_currency || ''
-  const remarksDirty = Boolean(day) && remarks !== day?.entry.remarks
 
-  // The rig select narrows the well list; the well select resets an incompatible AFE.
+  const removedCount = useMemo(() => {
+    if (!day) return 0
+    const kept = new Set(draft.filter(row => row.id).map(row => row.id))
+    return day.lines.filter(line => !kept.has(line.id)).length
+  }, [day, draft])
+  const rowsDirty = useMemo(() => draft.some(rowHasChanged), [draft])
+  const remarksDirty = day ? remarks !== day.entry.remarks : remarks.trim() !== ''
+  // Re-filing the day against another AFE is a real change, so it must enable Save.
+  const afeDirty = Boolean(day) && (afeId || '') !== (day?.entry.afe_id ?? '')
+  const dirty = rowsDirty || removedCount > 0 || remarksDirty || afeDirty
+
+  /**
+   * Changing the day while the sheet has unsaved work would throw it away, so
+   * the day selectors are locked until the sheet is saved or deliberately
+   * discarded (the same rule as the navigation guard).
+   */
+  const dayLocked = dirty && !saving
+
   const chooseRig = (value: string) => {
+    if (dayLocked) return
     setRigId(value)
     const nextWells = reference?.wells.filter(well => !value || well.rig_id === value) ?? []
     if (!nextWells.some(well => well.id === wellId)) {
       const first = nextWells[0]
       setWellId(first?.id ?? '')
       setAfeId(reference?.afes.find(afe => afe.well_id === first?.id)?.id ?? '')
+      setAutoFocusSheet(false)
     }
   }
   const chooseWell = (value: string) => {
+    if (dayLocked) return
     setWellId(value)
     setAfeId(reference?.afes.find(afe => afe.well_id === value)?.id ?? '')
+    setAutoFocusSheet(true)
   }
 
-  const saveRemarks = async (): Promise<boolean> => {
-    if (!day) return true
-    setSavingRemarks(true)
-    setRemarksNotice('')
+  const discardDraft = useCallback(() => {
+    if (day) {
+      setDraft(day.lines.length ? day.lines.map(draftRowFromSavedLine) : [blankDraftRow()])
+      setRemarks(day.entry.remarks)
+      setAfeId(day.entry.afe_id ?? '')
+    } else {
+      setDraft([blankDraftRow()])
+      setRemarks('')
+    }
+    setSaveError('')
+  }, [day])
+
+  const saveWorksheet = useCallback(async (): Promise<boolean> => {
+    if (!wellId || !costDate) {
+      setSaveError('Choose a well and a LIH date before saving the sheet.')
+      return false
+    }
+    if (!canSave) {
+      setSaveError('You do not have permission to save this LIH worksheet.')
+      return false
+    }
+    if (saveInFlight.current) return false
+    const problems = validateDraft(draft)
+    if (problems.length) {
+      setSaveError(`Fix ${problems.length} row${problems.length === 1 ? '' : 's'} on the sheet before saving.`)
+      return false
+    }
+    const lines = lihDayPayloadLines(draft)
+    if (!day && !lines.length) {
+      setSaveError('Add at least one LIH item before saving the register day.')
+      return false
+    }
+    saveInFlight.current = true
+    setSaving(true)
+    setSaveError('')
     try {
-      const updated = await api<LihCostDay>(`/lih-cost/entries/${day.entry.id}`, {
-        method: 'PUT', body: body({ remarks }),
+      const updated = await api<LihCostDay>('/lih-cost/day', {
+        method: 'PUT',
+        body: body({
+          well_id: wellId,
+          rig_id: rigId,
+          afe_id: afeId,
+          cost_date: costDate,
+          remarks,
+          expected_revision: day?.entry.revision ?? null,
+          lines,
+        }),
       })
       setDay(updated)
-      setRemarks(updated.entry.remarks)
-      setRemarksNotice('Day remarks saved.')
+      setNotice(day
+        ? `LIH worksheet saved — ${updated.entry.line_count} item(s), ${dailyMoney(updated.entry.total_cost, updated.entry.currency)}.`
+        : `LIH register opened and saved with ${updated.entry.line_count} item(s).`)
       await loadRegister()
       return true
     } catch (caught) {
-      setRemarksNotice(caught instanceof Error ? caught.message : 'The day remarks could not be saved')
+      setSaveError(caught instanceof Error ? caught.message : 'The LIH worksheet could not be saved')
       return false
     } finally {
-      setSavingRemarks(false)
+      saveInFlight.current = false
+      setSaving(false)
     }
-  }
+  }, [afeId, canSave, costDate, day, draft, loadRegister, remarks, rigId, wellId])
+
+  // Ctrl/⌘+S saves from anywhere on the page, not only from a focused cell.
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+      if (!dirty || saving || !canSave || showDeleted || importOpen || pending) return
+      if ((event.target as HTMLElement | null)?.closest('.MuiDialog-root')) return
+      event.preventDefault()
+      void saveWorksheet()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [canSave, dirty, importOpen, pending, saveWorksheet, saving, showDeleted])
+
   const leaveGuard = useUnsavedChangesGuard({
-    when: remarksDirty,
-    onSave: saveRemarks,
-    title: 'Leave with unsaved LIH remarks?',
-    message: 'The remarks on this LIH register day are not saved yet. Save them before leaving, or discard them deliberately.',
+    when: dirty,
+    onSave: saveWorksheet,
+    title: 'Leave with an unsaved LIH worksheet?',
+    message: 'The items and remarks on this LIH worksheet are not saved yet. Save them before leaving, or discard them deliberately.',
   })
 
-  const openAdd = () => {
-    setLineError('')
-    setEditor({ mode: 'add', values: { ...EMPTY_LIH_LINE, unit: reference?.uoms[0]?.code ?? '' } })
-  }
-  const openEdit = (line: LihCostLine) => {
-    setLineError('')
-    setEditor({ mode: 'edit', id: line.id, values: lineFromSaved(line) })
+  /** Import replaces the loaded day from the server, so unsaved work is protected first. */
+  const openImport = () => {
+    if (dayLocked) {
+      setSaveError('Save or discard the worksheet changes before importing items.')
+      return
+    }
+    setImportOpen(true)
   }
 
-  const submitLine = async () => {
-    if (!editor) return
-    const problem = validateLine(editor.values)
-    if (problem) { setLineError(problem); return }
-    setSavingLine(true)
-    setLineError('')
+  const refresh = () => {
+    void loadRegister()
+    if (dayLocked) {
+      setSaveError('Save or discard the worksheet changes before reloading the day.')
+      return
+    }
+    void loadDay(wellId, costDate)
+  }
+
+  const runImport = async (rows: ImportRow[]): Promise<string[]> => {
+    if (!wellId) return ['Choose the well the LIH items belong to before importing.']
+    const payload = rows.map(lihImportRow)
     try {
-      let entryId = day?.entry.id
-      if (!entryId) {
-        const created = await api<LihCostDay>('/lih-cost/entries', {
-          method: 'POST',
-          body: body({
-            well_id: wellId,
-            rig_id: rigId,
-            afe_id: selectedAfe?.id ?? '',
-            cost_date: costDate,
-          }),
-        })
-        entryId = created.entry.id
-        setDay(created)
+      const result = await api<LihCostImportResponse>('/lih-cost/import', {
+        method: 'POST',
+        body: body({ well_id: wellId, afe_id: afeId, cost_date: costDate, rows: payload }),
+      })
+      if (result.imported_count) {
+        setNotice(`Imported ${result.imported_count} LIH item(s) into ${result.day_count} day(s).`)
+        await loadRegister()
+        await loadDay(wellId, costDate)
       }
-      const updated = editor.mode === 'edit' && editor.id
-        ? await api<LihCostDay>(`/lih-cost/entries/${entryId}/lines/${editor.id}`, {
-            method: 'PUT', body: body(lihLinePayload(editor.values)),
-          })
-        : await api<LihCostDay>(`/lih-cost/entries/${entryId}/lines`, {
-            method: 'POST', body: body(lihLinePayload(editor.values)),
-          })
-      setDay(updated)
-      setRemarks(updated.entry.remarks)
-      setNotice(editor.mode === 'edit' ? 'LIH item updated.' : 'LIH item added to the register.')
-      setEditor(null)
-      await loadRegister()
+      return result.errors
     } catch (caught) {
-      setLineError(caught instanceof Error ? caught.message : 'The LIH item could not be saved')
-    } finally {
-      setSavingLine(false)
+      return [caught instanceof Error ? caught.message : 'The LIH items could not be imported']
     }
   }
 
@@ -254,11 +305,7 @@ export default function LihCostRegister() {
     setActionError('')
     try {
       const ids = pending.rows.map(row => row.id)
-      if (pending.kind === 'delete-line' && day && pending.line) {
-        const updated = await api<LihCostDay>(`/lih-cost/entries/${day.entry.id}/lines/${pending.line.id}`, { method: 'DELETE' })
-        setDay(updated)
-        setNotice('LIH item removed from the register.')
-      } else if (pending.kind === 'delete') {
+      if (pending.kind === 'delete') {
         if (ids.length === 1) await api(`/lih-cost/entries/${ids[0]}`, { method: 'DELETE' })
         else await api('/lih-cost/entries/bulk-delete', { method: 'POST', body: body({ ids }) })
         setNotice(`${ids.length} LIH day${ids.length === 1 ? '' : 's'} moved to Deleted Entries.`)
@@ -282,57 +329,66 @@ export default function LihCostRegister() {
   }
 
   const openRegisterDay = (entry: LihCostEntry) => {
+    if (dayLocked) {
+      setNotice('')
+      setSaveError('Save or discard the current worksheet before opening another LIH day.')
+      return
+    }
     setRigId(entry.rig_id)
     setWellId(entry.well_id)
     setAfeId(entry.afe_id ?? '')
     setCostDate(entry.cost_date)
+    setAutoFocusSheet(false)
   }
 
-  const exportAudit = async (format: 'csv' | 'xlsx' | 'pdf', recordCount: number, module: 'register' | 'deleted' | 'day') => {
+  const exportAudit = async (
+    format: 'csv' | 'xlsx' | 'pdf', recordCount: number, module: 'register' | 'deleted' | 'day',
+  ) => {
     if (!can('daily-cost:export')) return
     await api('/lih-cost/export-audit', {
       method: 'POST',
       body: body({
-        module, format, record_count: recordCount, include_deleted: showDeleted,
-        well_id: wellId || filterWell, entry_id: day?.entry.id ?? '',
+        module,
+        format,
+        record_count: recordCount,
+        include_deleted: showDeleted,
+        well_id: module === 'day' ? wellId : filterWell,
+        entry_id: module === 'day' ? day?.entry.id ?? '' : '',
       }),
     })
   }
 
-  const lineColumns = useMemo<ColDef<LihCostLine>[]>(() => [
-    { headerName: 'ITEM DESCRIPTION', field: 'item_description', minWidth: 240, flex: 1.2 },
-    { headerName: 'OD', field: 'od_size', minWidth: 95, valueFormatter: params => lihMeasure(params.value as string | null) },
-    { headerName: 'ID', field: 'id_size', minWidth: 95, valueFormatter: params => lihMeasure(params.value as string | null) },
-    { headerName: 'FISH NECK OD', field: 'fish_neck_od', minWidth: 130, valueFormatter: params => lihMeasure(params.value as string | null) },
-    { headerName: 'FISH NECK LENGTH', field: 'fish_neck_length', minWidth: 150, valueFormatter: params => lihMeasure(params.value as string | null) },
-    { headerName: 'SERIAL NUMBER', field: 'serial_number', minWidth: 140, valueFormatter: params => String(params.value || '—') },
-    { headerName: 'CONNECTION', field: 'connection', minWidth: 130, valueFormatter: params => String(params.value || '—') },
-    { headerName: 'LENGTH', field: 'length', minWidth: 105, valueFormatter: params => lihMeasure(params.value as string | null) },
-    { headerName: 'UNITS', field: 'no_of_units', minWidth: 95, valueFormatter: params => lihMeasure(params.value as string) },
-    { headerName: 'UNIT', field: 'unit', minWidth: 90, valueFormatter: params => String(params.value || '—') },
-    { headerName: 'UNIT COST', field: 'unit_cost', minWidth: 140, valueFormatter: params => dailyMoney(params.value as string, dayCurrency) },
-    {
-      headerName: 'TOTAL COST', field: 'total_cost', minWidth: 150,
-      cellRenderer: (params: ICellRendererParams<LihCostLine>) => <Typography fontSize={12} fontWeight={800}>{dailyMoney(params.data?.total_cost, dayCurrency)}</Typography>,
-    },
-    { headerName: 'REMARKS', field: 'remarks', minWidth: 220, flex: 1, valueFormatter: params => String(params.value || '—') },
-    ...(can('daily-cost:update') || can('daily-cost:delete') ? [{
-      headerName: 'ACTIONS',
-      colId: 'actions',
-      minWidth: 110,
-      sortable: false,
-      filter: false,
-      cellRenderer: (params: ICellRendererParams<LihCostLine>) => {
-        const line = params.data
-        if (!line) return null
-        return <Box display="flex" gap={.4}>
-          {can('daily-cost:update') && <Tooltip title="Edit item"><IconButton size="small" aria-label="Edit LIH item" onClick={() => openEdit(line)}><EditOutlined sx={{ fontSize: 17 }}/></IconButton></Tooltip>}
-          {can('daily-cost:delete') && <Tooltip title="Remove item"><IconButton size="small" color="error" aria-label="Remove LIH item" onClick={() => { setActionError(''); setPending({ kind: 'delete-line', rows: [], line }) }}><DeleteOutlineRounded sx={{ fontSize: 17 }}/></IconButton></Tooltip>}
-        </Box>
-      },
-    } as ColDef<LihCostLine>] : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [can, dayCurrency])
+  /** Export the sheet as shown, including rows that are not saved yet. */
+  const exportSheet = async (format: 'csv' | 'xlsx' | 'pdf') => {
+    setSheetExportAnchor(null)
+    const rows = draft.filter(row => !rowIsBlank(row.values))
+    if (!rows.length) {
+      setSaveError('There are no items on the sheet to export.')
+      return
+    }
+    const heading = (label: string) => `${label} (${dayCurrency || 'currency'})`
+    const columns: ExportColumn<LihDraftRow>[] = [
+      { header: 'ITEM DESCRIPTION', value: row => row.values.item_description.trim() },
+      { header: 'OD', value: row => row.values.od_size.trim() },
+      { header: 'ID', value: row => row.values.id_size.trim() },
+      { header: 'FISH NECK OD', value: row => row.values.fish_neck_od.trim() },
+      { header: 'FISH NECK LENGTH', value: row => row.values.fish_neck_length.trim() },
+      { header: 'SERIAL NUMBER', value: row => row.values.serial_number.trim() },
+      { header: 'CONNECTION', value: row => row.values.connection.trim() },
+      { header: 'LENGTH', value: row => row.values.length.trim() },
+      { header: 'UNITS', value: row => row.values.no_of_units.trim() },
+      { header: 'UNIT', value: row => row.values.unit.trim() },
+      { header: heading('UNIT COST'), value: row => row.values.unit_cost.trim() },
+      { header: heading('TOTAL COST'), value: row => lihLineTotal(row.values).toFixed(2) },
+      { header: 'REMARKS', value: row => row.values.remarks.trim() },
+      { header: 'STATE', value: row => (row.id ? 'saved' : 'not saved') },
+    ]
+    const filename = `lih-sheet-${day?.entry.well_code ?? selectedWell?.well_code ?? 'well'}-${costDate}`
+    if (format === 'csv') exportCsv(`${filename}.csv`, rows, columns)
+    else if (format === 'xlsx') await exportXlsx(`${filename}.xlsx`, rows, columns)
+    else await exportPdf(`${filename}.pdf`, `LIH sheet · ${day?.entry.well_code ?? selectedWell?.well_code ?? ''} · ${costDate}`, rows, columns)
+    await exportAudit(format, rows.length, 'day')
+  }
 
   const registerColumns = useMemo<ColDef<LihCostEntry>[]>(() => [
     { headerName: 'DATE', field: 'cost_date', minWidth: 130, width: 135, valueFormatter: params => displayDate(String(params.value ?? '')) },
@@ -359,33 +415,36 @@ export default function LihCostRegister() {
         const entry = params.data
         if (!entry) return null
         return <Box display="flex" gap={.4}>
-          <Tooltip title="Open this LIH day"><IconButton size="small" aria-label="Open LIH day" onClick={() => openRegisterDay(entry)}><OpenInNewRounded sx={{ fontSize: 17 }}/></IconButton></Tooltip>
-          {!showDeleted && can('daily-cost:delete') && <Tooltip title="Move to Deleted Entries"><IconButton size="small" color="error" aria-label="Delete LIH day" onClick={() => { setActionError(''); setPending({ kind: 'delete', rows: [entry] }) }}><DeleteOutlineRounded sx={{ fontSize: 17 }}/></IconButton></Tooltip>}
-          {showDeleted && can('daily-cost:restore') && <Tooltip title="Restore"><IconButton size="small" aria-label="Restore LIH day" onClick={() => { setActionError(''); setPending({ kind: 'restore', rows: [entry] }) }}><RestoreRounded sx={{ fontSize: 17 }}/></IconButton></Tooltip>}
-          {showDeleted && can('daily-cost:permanent-delete') && <Tooltip title="Delete permanently"><IconButton size="small" color="error" aria-label="Permanently delete LIH day" onClick={() => { setActionError(''); setPending({ kind: 'purge', rows: [entry] }) }}><DeleteForeverOutlined sx={{ fontSize: 17 }}/></IconButton></Tooltip>}
+          <Tooltip title="Open this LIH day"><span><IconButton size="small" aria-label="Open LIH day" onClick={() => openRegisterDay(entry)}><OpenInNewRounded sx={{ fontSize: 17 }}/></IconButton></span></Tooltip>
+          {!showDeleted && can('daily-cost:delete') && <Tooltip title="Move to Deleted Entries"><span><IconButton size="small" color="error" aria-label="Delete LIH day" onClick={() => { setActionError(''); setPending({ kind: 'delete', rows: [entry] }) }}><DeleteOutlineRounded sx={{ fontSize: 17 }}/></IconButton></span></Tooltip>}
+          {showDeleted && can('daily-cost:restore') && <Tooltip title="Restore"><span><IconButton size="small" aria-label="Restore LIH day" onClick={() => { setActionError(''); setPending({ kind: 'restore', rows: [entry] }) }}><RestoreRounded sx={{ fontSize: 17 }}/></IconButton></span></Tooltip>}
+          {showDeleted && can('daily-cost:permanent-delete') && <Tooltip title="Delete permanently"><span><IconButton size="small" color="error" aria-label="Permanently delete LIH day" onClick={() => { setActionError(''); setPending({ kind: 'purge', rows: [entry] }) }}><DeleteForeverOutlined sx={{ fontSize: 17 }}/></IconButton></span></Tooltip>}
         </Box>
       },
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [can, showDeleted])
+  ], [can, dayLocked, showDeleted])
 
   const actionTitle = pending?.kind === 'purge' ? 'Delete this LIH day permanently?'
-    : pending?.kind === 'restore' ? 'Restore this LIH day?'
-    : pending?.kind === 'delete-line' ? 'Remove this LIH item?' : 'Move this LIH day to Deleted Entries?'
-  const actionSubtitle = pending?.kind === 'delete-line'
-    ? pending?.line?.item_description
-    : pending?.rows.length === 1 ? pending.rows[0].display_name : `${pending?.rows.length ?? 0} register days selected`
+    : pending?.kind === 'restore' ? 'Restore this LIH day?' : 'Move this LIH day to Deleted Entries?'
+  const actionSubtitle = pending?.rows.length === 1 ? pending.rows[0].display_name : `${pending?.rows.length ?? 0} register days selected`
+  const worksheetTitle = day
+    ? `${day.entry.well_code} · LIH cost on ${displayDate(day.entry.cost_date)}`
+    : `${selectedWell?.well_code ?? 'Well'} · LIH cost on ${displayDate(costDate)}`
 
   return <>
     <PageHeading
       eyebrow="DAILY COST MANAGEMENT / LIH COST REGISTER"
       title="LIH Cost Register"
-      subtitle="Record Lost In Hole cost item by item against a rig, well and date. LIH is accounted separately, added to the actual cost and deducted explicitly from the AFE total."
+      subtitle="Capture every Lost In Hole item on one worksheet and save them together, or import a whole file. Saved items stay editable, and similar items can be duplicated. LIH is added to the actual cost and deducted explicitly from the AFE total."
       action={<Box display="flex" gap={1} flexWrap="wrap">
-        <Button variant="outlined" startIcon={<RefreshRounded/>} disabled={registerLoading} onClick={() => { void loadRegister(); void loadDay(wellId, costDate) }}>
+        <Button variant="outlined" startIcon={<RefreshRounded/>} disabled={registerLoading} onClick={refresh}>
           {registerLoading ? 'Refreshing…' : 'Refresh'}
         </Button>
-        <Button variant="outlined" startIcon={showDeleted ? <EventNoteOutlined/> : <DeleteOutlineRounded/>} onClick={() => { setShowDeleted(value => !value); setNotice('') }}>
+        <Button variant="outlined" startIcon={showDeleted ? <EventNoteOutlined/> : <DeleteOutlineRounded/>} onClick={() => {
+          if (dayLocked) { setSaveError('Save or discard the worksheet before opening Deleted Entries.'); return }
+          setShowDeleted(value => !value); setNotice('')
+        }}>
           {showDeleted ? 'Active register' : 'Deleted entries'}
         </Button>
       </Box>}
@@ -393,122 +452,132 @@ export default function LihCostRegister() {
     <ErrorMessage message={referenceError}/>
     {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
 
-    <Paper variant="outlined" sx={{ p: 1.8, borderRadius: 2, mb: 1.8 }}>
+    {!showDeleted && <Paper variant="outlined" sx={{ p: 1.8, borderRadius: 2, mb: 1.6 }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap" mb={1.3}>
         <Box>
           <Typography fontWeight={800} fontSize={15}>Select the LIH day</Typography>
           <Typography color="text.secondary" fontSize={11.5} mt={.25}>
-            Choose the rig and its well, then the date the LIH cost belongs to.
+            Choose the rig and its well, then the date the LIH cost belongs to. The worksheet opens for that day.
           </Typography>
         </Box>
-        {day && <Tag tone={day.entry.afe_id ? 'info' : 'warning'}>{day.entry.afe_id ? `Deducted from ${day.entry.afe_code}` : 'No AFE on this well'}</Tag>}
+        <Box display="flex" gap={0.7} flexWrap="wrap">
+          {day && <Tag tone={day.entry.afe_id ? 'info' : 'warning'}>{day.entry.afe_id ? `Deducted from ${day.entry.afe_code}` : 'No AFE on this well'}</Tag>}
+          {day && <Tag>Revision {day.entry.revision}</Tag>}
+          {day && <Tag tone={day.entry.line_count ? 'success' : 'neutral'}>{day.entry.line_count} saved item{day.entry.line_count === 1 ? '' : 's'}</Tag>}
+        </Box>
       </Box>
       <Box display="grid" gap={1.3} sx={{ gridTemplateColumns: { xs: '1fr', md: '1fr 1.3fr .9fr .9fr' } }} alignItems="center">
-        <TextField select label="Rig" value={rigId} onChange={event => chooseRig(event.target.value)} helperText="Rigs in this workspace">
+        <TextField select label="Rig" value={rigId} onChange={event => chooseRig(event.target.value)} helperText="Rigs in this workspace" disabled={dayLocked}>
           <MenuItem value="">All rigs</MenuItem>
           {(reference?.rigs ?? []).map(rig => <MenuItem key={rig.id} value={rig.id}>{rig.display_name}</MenuItem>)}
         </TextField>
-        <TextField select required label="Well" value={wellId} onChange={event => chooseWell(event.target.value)} disabled={!wellsForRig.length}
+        <TextField select required label="Well" value={wellId} onChange={event => chooseWell(event.target.value)} disabled={dayLocked || !wellsForRig.length}
           helperText={selectedWell ? `${selectedWell.well_code} · ${selectedWell.well_name}` : 'Choose the well the LIH cost belongs to'}>
           {wellsForRig.map(well => <MenuItem key={well.id} value={well.id}>{well.display_name}</MenuItem>)}
         </TextField>
-        <TextField required type="date" label="LIH date" value={costDate} onChange={event => setCostDate(event.target.value)} InputLabelProps={{ shrink: true }}/>
+        <TextField required type="date" label="LIH date" value={costDate} onChange={event => { if (!dayLocked) { setCostDate(event.target.value); setAutoFocusSheet(true) } }}
+          InputLabelProps={{ shrink: true }} disabled={dayLocked}/>
         {afesForWell.length > 1
-          ? <TextField select label="AFE" value={afeId || afesForWell[0]?.id || ''} onChange={event => setAfeId(event.target.value)}
-              helperText="Each AFE deducts its own LIH cost">
+          ? <TextField select label="AFE" value={afeId} onChange={event => setAfeId(event.target.value)}
+              helperText="Each AFE deducts its own LIH cost" disabled={dayLocked}>
+              {day && !day.entry.afe_id && <MenuItem value="">No AFE (as saved)</MenuItem>}
               {afesForWell.map(afe => <MenuItem key={afe.id} value={afe.id}>{afe.display_name}</MenuItem>)}
             </TextField>
           : <TextField label="AFE" value={selectedAfe ? `${selectedAfe.afe_code} · ${selectedAfe.afe_name}` : 'No AFE yet'} InputProps={{ readOnly: true }}
               helperText={selectedAfe ? `Standard currency ${selectedAfe.standard_currency}` : 'Recorded in the workspace default currency'}/>}
       </Box>
-      {afesForWell.length > 1 && <Alert severity="info" sx={{ mt: 1.3, py: .4 }}>
+      {dayLocked && <Alert severity="info" sx={{ mt: 1.3, py: .4 }}>
+        The worksheet has unsaved changes. Save all items or discard the changes before switching to another day.
+      </Alert>}
+      {afesForWell.length > 1 && !dayLocked && <Alert severity="info" sx={{ mt: 1.3, py: .4 }}>
         This well has {afesForWell.length} AFEs. The LIH cost is deducted from the AFE selected above only.
       </Alert>}
-      {!wellId && <Alert severity="info" sx={{ mt: 1.3, py: .4 }}>Choose a rig and well to open its LIH register.</Alert>}
-    </Paper>
+      {!wellId && <Alert severity="info" sx={{ mt: 1.3, py: .4 }}>Choose a rig and well to open its LIH worksheet.</Alert>}
+    </Paper>}
 
     <ErrorMessage message={dayError}/>
-    {wellId && dayLoading && <Box py={4} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={24}/></Box>}
+    {!showDeleted && wellId && dayLoading && <Box py={4} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={24}/></Box>}
 
-    {wellId && !dayLoading && day && <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, mb: 1.8 }}>
-      <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={1} flexWrap="wrap" mb={1.4}>
-        <Box>
-          <Typography fontWeight={800} fontSize={15}>{day.entry.well_code} · LIH cost on {displayDate(day.entry.cost_date)}</Typography>
-          <Typography color="text.secondary" fontSize={11.5} mt={.25}>
-            {day.entry.rig_code} · {day.entry.rig_name} · {day.entry.afe_code || 'No AFE'} · recorded in {day.entry.currency}
-          </Typography>
+    {!showDeleted && wellId && !dayLoading && !dayError && draft.length > 0 && <>
+      <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 2, mb: 1.4 }}>
+        <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={1} flexWrap="wrap" mb={1.2}>
+          <Box>
+            <Typography fontWeight={800} fontSize={15}>{worksheetTitle}</Typography>
+            <Typography color="text.secondary" fontSize={11.5} mt={.25}>
+              {day
+                ? `${day.entry.rig_code} · ${day.entry.rig_name} · ${day.entry.afe_code || 'No AFE'} · recorded in ${day.entry.currency}`
+                : `${selectedWell?.well_code ?? ''} · ${selectedAfe?.afe_code ?? 'No AFE'} · ${dayCurrency || 'currency from the AFE'}. The day is created when the first items are saved.`}
+            </Typography>
+          </Box>
+          <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
+            <Box sx={{ px: 1.4, py: .7, border: '1px solid', borderColor: 'divider', borderRadius: 1.5, minWidth: 150 }}>
+              <Typography fontSize={9.5} fontWeight={800} letterSpacing={.6} color="text.secondary">SAVED LIH TOTAL</Typography>
+              <Typography fontSize={17} fontWeight={800} mt={.2}>{dailyMoney(day?.entry.total_cost ?? '0', dayCurrency)}</Typography>
+            </Box>
+            <Box sx={{ px: 1.4, py: .7, border: '1px solid', borderColor: 'divider', borderRadius: 1.5, minWidth: 150 }}>
+              <Typography fontSize={9.5} fontWeight={800} letterSpacing={.6} color="text.secondary">ACCOUNTING TREATMENT</Typography>
+              <Typography fontSize={12.5} fontWeight={800} mt={.5}>Added to actual</Typography>
+              <Typography fontSize={10.5} color="text.secondary">Deducted from the AFE total</Typography>
+            </Box>
+            {day && can('daily-cost:delete') && <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlineRounded/>}
+              onClick={() => { setActionError(''); setPending({ kind: 'delete', rows: [day.entry] }) }}>Delete day</Button>}
+          </Box>
         </Box>
-        <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
-          {can('daily-cost:create') && <Button variant="contained" size="small" startIcon={<AddRounded/>} onClick={openAdd}>Add item</Button>}
-          {can('daily-cost:delete') && <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlineRounded/>} onClick={() => { setActionError(''); setPending({ kind: 'delete', rows: [day.entry] }) }}>Delete day</Button>}
-        </Box>
-      </Box>
-      <Box display="grid" gap={1.1} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' } }}>
-        <Box sx={{ p: 1.2, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
-          <Typography fontSize={10.5} fontWeight={800} letterSpacing={.6} color="text.secondary">TOTAL LIH COST</Typography>
-          <Typography fontSize={21} fontWeight={800} mt={.4}>{dailyMoney(day.entry.total_cost, day.entry.currency)}</Typography>
-          <Typography fontSize={11} color="text.secondary">{day.entry.line_count} item{day.entry.line_count === 1 ? '' : 's'} on this day</Typography>
-        </Box>
-        <Box sx={{ p: 1.2, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
-          <Typography fontSize={10.5} fontWeight={800} letterSpacing={.6} color="text.secondary">AFE THE COST IS FILED AGAINST</Typography>
-          <Typography fontSize={13.5} fontWeight={800} mt={.6}>{day.entry.afe_code || 'No AFE'}</Typography>
-          <Typography fontSize={11} color="text.secondary">{day.entry.afe_name || 'Reported at well level'}</Typography>
-        </Box>
-        <Box sx={{ p: 1.2, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
-          <Typography fontSize={10.5} fontWeight={800} letterSpacing={.6} color="text.secondary">ACCOUNTING TREATMENT</Typography>
-          <Typography fontSize={13.5} fontWeight={800} mt={.6}>Added to actual</Typography>
-          <Typography fontSize={11} color="text.secondary">Deducted from the AFE total, never budgeted</Typography>
-        </Box>
-        <Box sx={{ p: 1.2, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
-          <Typography fontSize={10.5} fontWeight={800} letterSpacing={.6} color="text.secondary">LAST UPDATED</Typography>
-          <Typography fontSize={13.5} fontWeight={800} mt={.6}>{day.entry.updated_by || '—'}</Typography>
-          <Typography fontSize={11} color="text.secondary">{day.entry.updated_at ? new Date(day.entry.updated_at).toLocaleString() : '—'}</Typography>
-        </Box>
-      </Box>
 
-      <DataTable
-        rows={day.lines}
-        columns={lineColumns}
-        rowKey="id"
-        searchPlaceholder="Search LIH items by description, serial number, connection or remarks…"
-        exportName={`lih-items-${day.entry.well_code}-${day.entry.cost_date}`}
-        canExport={can('daily-cost:export')}
-        onExport={(format, count) => exportAudit(format, count, 'day')}
-      />
-      {!day.lines.length && <Typography color="text.secondary" fontSize={12.5} mt={1.3}>
-        No LIH items yet. Use <strong>Add item</strong> to record the first item under {displayDate(day.entry.cost_date)}.
-      </Typography>}
+        <LihWorksheet
+          rows={draft}
+          onRowsChange={setDraft}
+          currency={dayCurrency}
+          uoms={reference?.uoms ?? []}
+          suggestions={reference?.previous_items ?? []}
+          removedCount={removedCount}
+          savedCount={day?.lines.length ?? 0}
+          canEdit={canEdit}
+          canImport={can('daily-cost:import') && Boolean(wellId)}
+          canExport={can('daily-cost:export')}
+          saving={saving}
+          dirty={dirty}
+          saveError={saveError}
+          onSave={() => void saveWorksheet()}
+          onDiscard={discardDraft}
+          onImport={openImport}
+          onExportSheet={setSheetExportAnchor}
+          autoFocus={autoFocusSheet}
+        />
 
-      <Divider sx={{ my: 1.6 }}/>
-      <Box display="flex" alignItems="flex-start" gap={1} flexWrap="wrap">
+        <Divider sx={{ my: 1.6 }}/>
         <TextField
           fullWidth
           label="Day remarks"
           value={remarks}
-          onChange={event => { setRemarks(event.target.value); setRemarksNotice('') }}
-          disabled={!can('daily-cost:update')}
+          onChange={event => setRemarks(event.target.value)}
+          disabled={!canEdit}
           multiline
           minRows={2}
           inputProps={{ maxLength: 1000 }}
-          helperText={remarksDirty ? 'Unsaved remarks — save them or discard your change.' : 'Context for this LIH day, for example the fishing job or failure.'}
-          sx={{ flex: '1 1 420px' }}
+          helperText={remarksDirty ? 'Unsaved remarks — they save with the worksheet.' : 'Context for this LIH day, for example the fishing job or failure.'}
         />
-        {can('daily-cost:update') && <Box display="flex" gap={1} mt={.4}>
-          <Button variant="contained" startIcon={<SaveOutlined/>} disabled={!remarksDirty || savingRemarks} onClick={() => void saveRemarks()}>
-            {savingRemarks ? 'Saving…' : 'Save remarks'}
-          </Button>
-          <Button variant="outlined" disabled={!remarksDirty || savingRemarks} onClick={() => { setRemarks(day.entry.remarks); setRemarksNotice('') }}>Discard</Button>
-        </Box>}
-      </Box>
-      {remarksNotice && <Alert severity={remarksNotice === 'Day remarks saved.' ? 'success' : 'error'} sx={{ mt: 1.2, py: .4 }} onClose={() => setRemarksNotice('')}>{remarksNotice}</Alert>}
-    </Paper>}
+      </Paper>
 
-    {wellId && !dayLoading && !day && !dayError && <Paper variant="outlined" sx={{ p: 2.4, borderRadius: 2, mb: 1.8, textAlign: 'center' }}>
-      <Typography fontWeight={800} fontSize={14.5}>No LIH register for {selectedWell?.well_code ?? 'this well'} on {displayDate(costDate)}</Typography>
-      <Typography color="text.secondary" fontSize={12} mt={.5} mb={1.6}>
-        Add the first item and the day is created automatically under {selectedAfe?.afe_code ? `AFE ${selectedAfe.afe_code}` : 'the well'}.
+      {can('daily-cost:import') && <ImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        title="Import LIH items"
+        subtitle={`Add many LIH items to ${selectedWell?.display_name ?? 'the selected well'} from an Excel or CSV file. Each row may carry its own Date; rows without a date use ${displayDate(costDate)}. Rows are added to the day they belong to, and any existing day is appended to, not replaced.`}
+        headers={LIH_IMPORT_HEADERS}
+        optionalHeaders={LIH_IMPORT_OPTIONAL_HEADERS}
+        sample={LIH_IMPORT_SAMPLE}
+        templateName="lih-cost-items-template.csv"
+        onRows={runImport}
+      />}
+    </>}
+
+    {!showDeleted && !wellId && <Paper variant="outlined" sx={{ p: 2.4, borderRadius: 2, mb: 1.6, textAlign: 'center' }}>
+      <Typography fontWeight={800} fontSize={14.5}>Open the LIH worksheet to start</Typography>
+      <Typography color="text.secondary" fontSize={12} mt={.5}>
+        Choose a rig, its well and the LIH date above. Every item on the sheet is then saved together in one step,
+        and a file of items can be imported instead.
       </Typography>
-      {can('daily-cost:create') && <Button variant="contained" startIcon={<AddRounded/>} onClick={openAdd} disabled={!costDate}>Add LIH item</Button>}
     </Paper>}
 
     <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 2, mb: 1.8 }}>
@@ -568,81 +637,8 @@ export default function LihCostRegister() {
         onSelectionChange={setSelected}
       />}
     {!registerLoading && !register.length && <Typography color="text.secondary" fontSize={12.5} mt={1.2}>
-      {showDeleted ? 'There are no deleted LIH register entries.' : 'No LIH register entries yet. Choose a rig, well and date above, then add the first item.'}
+      {showDeleted ? 'There are no deleted LIH register entries.' : 'No LIH register entries yet. Choose a rig, well and date above, then add the first items to the worksheet.'}
     </Typography>}
-
-    <FormDialog
-      open={Boolean(editor)}
-      title={editor?.mode === 'edit' ? 'Edit LIH item' : 'Add LIH item'}
-      subtitle={day
-        ? `${day.entry.well_code} · ${displayDate(day.entry.cost_date)} · amounts in ${day.entry.currency}. Total cost is calculated as No of units × Unit cost.`
-        : `${selectedWell?.well_code ?? 'Well'} · ${displayDate(costDate)}. The LIH day is created when the first item is saved.`}
-      onClose={() => { setEditor(null); setLineError('') }}
-      onSubmit={() => void submitLine()}
-      busy={savingLine}
-      submitLabel={editor?.mode === 'edit' ? 'Save item' : 'Add item'}
-      maxWidth="lg"
-      submitDisabled={Boolean(editor && validateLine(editor.values))}
-    >
-      {editor && <Box display="grid" gap={1.5}>
-        <TextField
-          required
-          label="Item description"
-          value={editor.values.item_description}
-          onChange={event => setEditor(current => current && ({ ...current, values: { ...current.values, item_description: event.target.value } }))}
-          inputProps={{ maxLength: 300 }}
-          helperText="What was lost in hole (for example the tool or drill-string component and its size)."
-        />
-        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(4, 1fr)' } }}>
-          {([
-            ['od_size', 'OD size'],
-            ['id_size', 'ID size'],
-            ['fish_neck_od', 'Fish neck OD'],
-            ['fish_neck_length', 'Fish neck length'],
-          ] as const).map(([key, label]) => <TextField
-            key={key}
-            type="number"
-            label={label}
-            value={editor.values[key]}
-            onChange={event => setEditor(current => current && ({ ...current, values: { ...current.values, [key]: numberOrBlank(event.target.value) } }))}
-            inputProps={{ min: 0, step: 'any' }}
-          />)}
-        </Box>
-        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' } }}>
-          <TextField label="Serial number" value={editor.values.serial_number} onChange={event => setEditor(current => current && ({ ...current, values: { ...current.values, serial_number: event.target.value } }))} inputProps={{ maxLength: 100 }}/>
-          <TextField label="Connection" value={editor.values.connection} onChange={event => setEditor(current => current && ({ ...current, values: { ...current.values, connection: event.target.value } }))} inputProps={{ maxLength: 100 }}/>
-          <TextField type="number" label="Length" value={editor.values.length} onChange={event => setEditor(current => current && ({ ...current, values: { ...current.values, length: event.target.value } }))} inputProps={{ min: 0, step: 'any' }}/>
-        </Box>
-        <Box display="grid" gap={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(4, 1fr)' } }}>
-          <TextField
-            required type="number" label="No of units" value={editor.values.no_of_units}
-            onChange={event => setEditor(current => current && ({ ...current, values: { ...current.values, no_of_units: event.target.value } }))}
-            inputProps={{ min: 0.0000000001, step: 'any' }}
-            error={Boolean(editor.values.no_of_units) && !(Number(editor.values.no_of_units) > 0)}
-          />
-          <TextField select label="Unit (UOM)" value={editor.values.unit} onChange={event => setEditor(current => current && ({ ...current, values: { ...current.values, unit: event.target.value } }))}
-            helperText={reference?.uoms.length ? 'From Master Data UOM' : 'Add UOM entries in Master Data'}>
-            <MenuItem value="">Not specified</MenuItem>
-            {(reference?.uoms ?? []).map(uom => <MenuItem key={uom.code} value={uom.code}>{uom.display_name}</MenuItem>)}
-          </TextField>
-          <TextField
-            required type="number" label="Unit cost" value={editor.values.unit_cost}
-            onChange={event => setEditor(current => current && ({ ...current, values: { ...current.values, unit_cost: event.target.value } }))}
-            inputProps={{ min: 0, step: 'any' }}
-            error={editor.values.unit_cost !== '' && !(Number(editor.values.unit_cost) >= 0)}
-            helperText={`Currency ${dayCurrency || 'from the AFE'}`}
-          />
-          <TextField label="Total cost (calculated)" value={dailyMoney(lihLineTotal(editor.values), dayCurrency)} InputProps={{ readOnly: true }}
-            helperText="No of units × Unit cost" sx={{ '& input': { fontWeight: 800 } }}/>
-        </Box>
-        <TextField
-          label="Remarks" multiline minRows={2} value={editor.values.remarks}
-          onChange={event => setEditor(current => current && ({ ...current, values: { ...current.values, remarks: event.target.value } }))}
-          inputProps={{ maxLength: 500 }}
-        />
-        <ErrorMessage message={lineError}/>
-      </Box>}
-    </FormDialog>
 
     <FormDialog
       open={Boolean(pending)}
@@ -651,16 +647,25 @@ export default function LihCostRegister() {
       onClose={() => { if (!actionBusy) setPending(null) }}
       onSubmit={() => void act()}
       busy={actionBusy}
-      submitLabel={pending?.kind === 'purge' ? 'Delete permanently' : pending?.kind === 'restore' ? 'Restore' : pending?.kind === 'delete-line' ? 'Remove item' : 'Move to Deleted Entries'}
-      danger={pending?.kind === 'purge' || pending?.kind === 'delete-line'}
+      submitLabel={pending?.kind === 'purge' ? 'Delete permanently' : pending?.kind === 'restore' ? 'Restore' : 'Move to Deleted Entries'}
+      danger={pending?.kind === 'purge'}
     >
       <Box display="grid" gap={1.2}>
         {pending?.kind === 'purge' && <Alert severity="warning">Permanent deletion cannot be undone.</Alert>}
-        {pending?.kind === 'delete-line' && <Alert severity="info">The item total is removed from this day's LIH cost immediately.</Alert>}
         {pending?.kind === 'delete' && <Alert severity="info">The register day moves to Deleted Entries and no longer counts towards the AFE deduction.</Alert>}
         <ErrorMessage message={actionError}/>
       </Box>
     </FormDialog>
+
+    <Menu
+      anchorEl={sheetExportAnchor}
+      open={Boolean(sheetExportAnchor)}
+      onClose={() => setSheetExportAnchor(null)}
+    >
+      <MenuItem onClick={() => void exportSheet('csv')}>Export sheet as CSV</MenuItem>
+      <MenuItem onClick={() => void exportSheet('xlsx')}>Export sheet as Excel (.xlsx)</MenuItem>
+      <MenuItem onClick={() => void exportSheet('pdf')}>Export sheet as PDF</MenuItem>
+    </Menu>
 
     {leaveGuard}
   </>
