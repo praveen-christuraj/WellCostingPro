@@ -376,9 +376,11 @@ def test_skipped_days_locked_openings_and_recalculation_after_changes():
             line("opening_stock", "100"), line("extra_obm_received", "25"),
         ])
         # No entry on the 16th: both its opening and closing are implicitly 125.
-        later = create_entry(client, headers, scope, "2026-10-17", lines=[
+        rejected_later = create_entry(client, headers, scope, "2026-10-17", lines=[
             line("opening_stock", "999"), line("shakers", "5", "x"),
-        ])
+        ], status=409)
+        assert "already been entered" in rejected_later["detail"]
+        later = create_entry(client, headers, scope, "2026-10-17", lines=[line("shakers", "5", "x")])
         assert Decimal(later["opening_stock"]) == Decimal("125")
         assert Decimal(later["closing_stock"]) == Decimal("120")
 
@@ -390,8 +392,13 @@ def test_skipped_days_locked_openings_and_recalculation_after_changes():
                 "entry_date": entry_date, "lines": lines,
             })
 
-        # The original opening cannot be overwritten through the API either.
-        changed = update(first, "2026-10-15", [line("opening_stock", "999"), line("extra_obm_received", "30")])
+        # The ordinary daily editor rejects opening-stock changes instead of silently ignoring them.
+        rejected_update = client.put(f"/api/v1/mud-cost/entries/{first['id']}", headers=headers, json={
+            "entry_date": "2026-10-15", "lines": [line("opening_stock", "999"), line("extra_obm_received", "30")],
+        })
+        assert rejected_update.status_code == 409
+        assert "Edit opening stock" in rejected_update.json()["detail"]
+        changed = update(first, "2026-10-15", [line("extra_obm_received", "30")])
         assert Decimal(changed["opening_stock"]) == Decimal("100")
         assert Decimal(get_later()["opening_stock"]) == Decimal("130")
 
@@ -421,11 +428,35 @@ def test_skipped_days_locked_openings_and_recalculation_after_changes():
         update(inserted, "2026-10-18", [line("barite", "2")])
         assert Decimal(get_later()["opening_stock"]) == Decimal("130")
         # A new earlier date also reuses the initial stock instead of accepting another seed.
-        earlier = create_entry(client, headers, scope, "2026-10-14", lines=[
+        rejected_earlier = create_entry(client, headers, scope, "2026-10-14", lines=[
             line("opening_stock", "999"), line("base_oil", "3"),
-        ])
+        ], status=409)
+        assert "already been entered" in rejected_earlier["detail"]
+        earlier = create_entry(client, headers, scope, "2026-10-14", lines=[line("base_oil", "3")])
         assert Decimal(earlier["opening_stock"]) == Decimal("100")
         assert Decimal(get_later()["opening_stock"]) == Decimal("133")
+
+
+def test_initial_opening_stock_correction_recalculates_every_following_balance():
+    with TestClient(app) as client:
+        headers = login(client)
+        scope = setup_well(client, headers)
+        first = create_entry(client, headers, scope, "2026-10-10", lines=[
+            line("opening_stock", "1000", "Initial tank survey"), line("other_receipts", "10"),
+        ])
+        second = create_entry(client, headers, scope, "2026-10-11", lines=[line("shakers", "2")])
+        assert Decimal(first["closing_stock"]) == 1010
+        assert Decimal(second["opening_stock"]) == 1010
+        assert Decimal(second["closing_stock"]) == 1008
+
+        corrected = _json(client, "put", f"/api/v1/mud-cost/entries/{first['id']}/opening-stock", headers, {
+            "amount": "998", "remarks": "Corrected tank survey",
+        })
+        second_after = _json(client, "get", f"/api/v1/mud-cost/entries/{second['id']}", headers, {})
+        assert Decimal(corrected["opening_stock"]) == 998
+        assert Decimal(corrected["closing_stock"]) == 1008
+        assert Decimal(second_after["opening_stock"]) == 1008
+        assert Decimal(second_after["closing_stock"]) == 1006
 
 
 def test_all_remarks_optional_and_legacy_closing_never_drives_balance():

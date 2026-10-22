@@ -563,11 +563,13 @@ def test_opening_stock_correction_permission_recalculates_balances_and_well_cost
                                                            "password": "correct-password-123"})
         editor = {"Authorization": f"Bearer {signed_in.json()['access_token']}"}
         assert client.put(endpoint, headers=editor, json={"amount": "200"}).status_code == 403
-        # Ordinary entry updates still cannot override a saved opening.
-        _json(client, "put", f"/api/v1/mud-cost/entries/{first['id']}", editor, {
+        # Ordinary entry updates reject a saved opening instead of silently ignoring it.
+        ordinary_update = client.put(f"/api/v1/mud-cost/entries/{first['id']}", headers=editor, json={
             "entry_date": "2026-10-11", "lines": [line("opening_stock", "999"),
             line("extra_obm_received", "50"), line("drill_water", "100"), line("shakers", "10")],
         })
+        assert ordinary_update.status_code == 409
+        assert "Edit opening stock" in ordinary_update.json()["detail"]
         assert Decimal(_json(client, "get", f"/api/v1/mud-cost/entries/{first['id']}", headers)["opening_stock"]) == 100
         with SessionLocal() as db:
             role = db.scalar(select(Role).where(Role.name == "Mud editor"))

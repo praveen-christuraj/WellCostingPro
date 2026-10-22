@@ -306,12 +306,25 @@ def _ensure_line_rows(
     incoming = {item.line_code: item for item in rows}
     existing = _line_map(entry)
     initial_opening = None
+    supplied_opening = incoming.get("opening_stock")
+    if "opening_stock" in existing and supplied_opening is not None and supplied_opening.amount is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=("Opening stock can only be corrected on the first active entry of the section "
+                    "using Edit opening stock. Daily entry edits use the calculated carry-forward."),
+        )
     if "opening_stock" not in existing:
         # Once this scope has an opening, even a back-dated insert must reuse it.
         peers = [row for row in _entries_for_section(db, entry.organization_id, entry.section_id)
                  if row.id != entry.id and row.rig_id == entry.rig_id and row.well_id == entry.well_id]
         if peers:
             initial_opening = _line_map(peers[0]).get("opening_stock")
+            if supplied_opening is not None and supplied_opening.amount is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=("Opening stock has already been entered for this section. Leave it blank; "
+                            "this day's opening is calculated from the preceding closing stock."),
+                )
     for sort_order, spec in enumerate(MUD_COST_LINE_SPECS):
         if spec.code == "opening_stock" and spec.code in existing:
             continue  # Saved openings are owned by the carry-forward calculation.

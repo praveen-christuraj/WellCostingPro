@@ -124,7 +124,7 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
   const sectionRows = useMemo(() => entries
     .filter(row => row.rig_id === (entry?.rig_id ?? rig?.id) && row.well_id === (entry?.well_id ?? well?.id) && row.section_id === (entry?.section_id ?? section?.id) && row.id !== entry?.id && !row.is_deleted)
     .sort((a, b) => b.entry_date.localeCompare(a.entry_date)), [entries, entry?.id, entry?.rig_id, entry?.well_id, entry?.section_id, rig?.id, well?.id, section?.id])
-  const openingLocked = sectionRows.length > 0 || entry !== null
+  const openingEditable = entry === null && sectionRows.length === 0
   const previousEntry = sectionRows.find(row => row.entry_date < form.entry_date)
   const initialEntry = sectionRows[sectionRows.length - 1]
   const openingLine = form.lines.opening_stock ?? { amount: '', remarks: '' }
@@ -152,7 +152,7 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
   const lineErrors = useMemo(() => {
     const errors: Record<string, string> = {}
     for (const spec of MUD_COST_LINE_SPECS) {
-      if (spec.code === 'opening_stock' && openingLocked) continue
+      if (spec.code === 'opening_stock' && !openingEditable) continue
       const value = form.lines[spec.code] ?? { amount: '', remarks: '' }
       const text = value.amount.trim()
       if (text) {
@@ -167,7 +167,7 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
       }
     }
     return errors
-  }, [form.lines, openingLocked])
+  }, [form.lines, openingEditable])
 
   const updateDate = (entry_date: string) => setForm(current => ({ ...current, entry_date }))
   const updateLine = (code: string, field: 'amount' | 'remarks', value: string) => {
@@ -186,34 +186,29 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
     setFormError('')
     const lines: MudCostLineInput[] = MUD_COST_LINE_SPECS.map(spec => {
       const row = form.lines[spec.code] ?? { amount: '', remarks: '' }
-      const amount = spec.code === 'opening_stock' && openingLocked ? null : (row.amount.trim() || null)
-      const remarks = spec.code === 'opening_stock' && openingLocked ? '' : row.remarks.trim()
+      const amount = spec.code === 'opening_stock' && !openingEditable ? null : (row.amount.trim() || null)
+      const remarks = spec.code === 'opening_stock' && !openingEditable ? '' : row.remarks.trim()
       return { line_code: spec.code, amount, remarks }
     })
     await onSave({ entry_date: form.entry_date, lines })
   }
 
-  const stockSection = (spec: MudCostLineSpec, derived: boolean) => {
+  const stockSection = (spec: MudCostLineSpec) => {
     const value = openingAmount
     const remarks = openingRemarks
-    const errorText = spec.code === 'opening_stock' && openingLocked ? '' : lineErrors[spec.code]
+    const errorText = spec.code === 'opening_stock' && !openingEditable ? '' : lineErrors[spec.code]
     return <Paper key={spec.code} variant="outlined" sx={{ p: 1.5, borderRadius: `${radius.md}px`, minWidth: 0 }}>
       <Typography fontWeight={800} fontSize={13} mb={1}>{spec.label}</Typography>
-      {derived && <Typography color="text.secondary" fontSize={11.5} mb={1}>
-        {previousEntry ? `Carried forward from closing stock on ${previousEntry.entry_date}. Days without transactions leave stock unchanged.` : 'The initial opening stock has already been recorded and is locked.'}
-      </Typography>}
       <Box display="grid" gap={1.2} sx={{ gridTemplateColumns: { xs: '1fr', md: 'minmax(140px, .55fr) minmax(220px, 1fr)' } }}>
         <NumberCell
           line={spec}
           value={value}
-          disabled={derived}
           onChange={next => updateLine(spec.code, 'amount', next)}
           error={errorText}
         />
         <RemarksCell
           line={spec}
           value={remarks}
-          disabled={derived}
           onChange={next => updateLine(spec.code, 'remarks', next)}
           error={errorText}
         />
@@ -252,10 +247,14 @@ export function MudCostEntryDialog({ open, onClose, onSave, entry, rig, section,
       </Paper>
 
       <Alert severity="info">
-        Keep quantities in one consistent volume unit for this well section. Opening stock after the first entry is calculated from the previous calculated closing stock. Days without transactions carry the same balance forward.
+        {openingEditable
+          ? 'Enter opening stock once for this section. Every later day will calculate its opening from the preceding closing stock.'
+          : previousEntry
+            ? `Opening stock is carried forward from the calculated closing stock on ${previousEntry.entry_date}. It cannot be entered again on this date.`
+            : `This section already has its initial opening stock. It cannot be entered again; use Edit opening stock on the first active entry to make an authorized correction.`}
       </Alert>
 
-      {stockSection(MUD_COST_STOCK_LINES[0], openingLocked)}
+      {openingEditable && stockSection(MUD_COST_STOCK_LINES[0])}
 
       <Paper variant="outlined" sx={{ p: 1.5, borderRadius: `${radius.md}px` }}>
         <Box display="flex" alignItems="baseline" justifyContent="space-between" gap={1} flexWrap="wrap" mb={1.2}>

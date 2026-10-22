@@ -279,6 +279,16 @@ export default function MudCostAnalysis() {
   const activeEntries = useMemo(() => entries
     .filter(entry => entry.rig_id === rigId && entry.well_id === wellId && !entry.is_deleted)
     .sort((a, b) => b.entry_date.localeCompare(a.entry_date)), [entries, rigId, wellId])
+  const initialEntryIds = useMemo(() => {
+    const firstBySection = new Map<string, MudCostEntry>()
+    for (const entry of activeEntries) {
+      const current = firstBySection.get(entry.section_id)
+      if (!current || entry.entry_date < current.entry_date || (entry.entry_date === current.entry_date && entry.id < current.id)) {
+        firstBySection.set(entry.section_id, entry)
+      }
+    }
+    return new Set([...firstBySection.values()].map(entry => entry.id))
+  }, [activeEntries])
   const tableRows = useMemo(() => entries
     .filter(entry => entry.rig_id === rigId && entry.well_id === wellId
       && (entrySectionId === ALL_SECTIONS || !entrySectionId || entry.section_id === entrySectionId))
@@ -329,14 +339,14 @@ export default function MudCostAnalysis() {
             {can('daily-cost:restore') && <Button size="small" onClick={() => { setActionError(''); setPendingAction({ kind: 'restore', rows: [record] }) }}>Restore</Button>}
             {can('daily-cost:permanent-delete') && <Button size="small" color="error" aria-label={`Permanently delete Mud Cost entry ${record.entry_date}`} onClick={() => { setActionError(''); setPendingAction({ kind: 'purge', rows: [record] }) }}><DeleteForeverOutlined sx={{ fontSize: 17 }}/></Button>}
           </> : <>
-            {can('mud-cost:opening-stock-update') && !existingRows.some(row => !row.is_deleted && row.section_id === record.section_id && row.entry_date < record.entry_date) && <Button size="small" onClick={() => setOpeningStockEntry(record)}>Opening stock</Button>}
+            {can('mud-cost:opening-stock-update') && initialEntryIds.has(record.id) && <Button size="small" onClick={() => setOpeningStockEntry(record)}>Edit opening stock</Button>}
             {can('daily-cost:update') && <Button size="small" onClick={() => { setEditingEntry(record); setEntryError(''); setEntryDialogOpen(true) }}>Edit</Button>}
             {can('daily-cost:delete') && <Button size="small" color="error" aria-label={`Move Mud Cost entry ${record.entry_date} to Deleted Entries`} onClick={() => { setActionError(''); setPendingAction({ kind: 'delete', rows: [record] }) }}><DeleteOutlineRounded sx={{ fontSize: 17 }}/></Button>}
           </>}
         </Box>
       },
     },
-  ], [can, deletedView, existingRows])
+  ], [can, deletedView, initialEntryIds])
 
   const detailedExportColumns = useMemo<ExportColumn<MudCostEntry>[]>(() => [
     { header: 'entry_date', value: row => row.entry_date },
