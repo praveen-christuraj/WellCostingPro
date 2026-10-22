@@ -622,6 +622,12 @@ class DailyCostComparison(BaseModel):
     against a budget line. ``tracked_actual_to_date`` and ``other_expenses_to_date``
     keep the two halves visible.
 
+    The manual LIH Cost Register adds a second explicit deduction. ``lih_cost_to_date``
+    is the LIH cost filed against this AFE (cumulative through the sheet date), so
+    ``actual_including_lih`` is the actual cost including LIH, ``afe_available`` is
+    the AFE amount left after deducting LIH, and ``balance`` is that available
+    amount less the daily actuals.
+
     When an approved SOW adjustment exists, ``adjusted_planned_total`` carries
     the revised AFE amount and ``adjusted_balance`` is that amount less actuals.
     ``planned_total`` always stays the locked (original) AFE total.
@@ -633,6 +639,10 @@ class DailyCostComparison(BaseModel):
     actual_to_date: Decimal
     tracked_actual_to_date: Decimal
     other_expenses_to_date: Decimal
+    # LIH register cost deducted from this AFE, kept separate from the daily groups.
+    lih_cost_to_date: Decimal = Decimal("0")
+    actual_including_lih: Decimal = Decimal("0")
+    afe_available: Decimal = Decimal("0")
     balance: Decimal
     over_budget: bool
     includes_draft_entries: bool
@@ -831,6 +841,10 @@ class DailyCostOverview(BaseModel):
     total_planned_by_currency: dict[str, Decimal]
     actual_to_date_by_currency: dict[str, Decimal]
     remaining_by_currency: dict[str, Decimal]
+    # LIH Cost Register totals stay separate from the AFE/daily figures above.
+    lih_cost_by_currency: dict[str, Decimal] = Field(default_factory=dict)
+    lih_entries: int = 0
+    lih_lines: int = 0
     groups: list[DailyCostGroupSummary]
     trend: list[DailyCostTrendPoint]
     recent_activity: list[DailyCostRecentActivity]
@@ -874,7 +888,12 @@ class DailyCostAfePosition(BaseModel):
     planned_total: Decimal
     actual: Decimal
     other_expenses: Decimal
+    # LIH register cost filed against this AFE, deducted explicitly from its total.
+    lih_cost: Decimal = Decimal("0")
+    actual_including_lih: Decimal = Decimal("0")
+    afe_available: Decimal = Decimal("0")
     balance: Decimal
+    balance_including_lih: Decimal = Decimal("0")
     over_budget: bool
     sheets: int
     days_recorded: int
@@ -898,6 +917,10 @@ class DailyCostDailyRow(BaseModel):
     npt: Decimal
     cumulative: Decimal
     budget_balance: Decimal
+    # LIH register cost for the day, its running total and the AFE balance after it.
+    lih: Decimal = Decimal("0")
+    cumulative_including_lih: Decimal = Decimal("0")
+    budget_balance_including_lih: Decimal = Decimal("0")
     sheets: int
     status: Literal["draft", "submitted", "mixed"]
     adjusted_budget_balance: Decimal | None = None
@@ -1028,12 +1051,62 @@ class DailyCostWellTotals(BaseModel):
     reconciled_mud_cost: Decimal = Decimal("0")
     comparison_mud_cost: Decimal = Decimal("0")
     mud_cost_adjustment: Decimal = Decimal("0")
+    # LIH Cost Register: recorded separately, added to the actual cost and
+    # deducted explicitly from the AFE amount in every comparison.
+    lih_cost: Decimal = Decimal("0")
+    lih_line_count: int = 0
+    lih_entries: int = 0
+    afe_available: Decimal = Decimal("0")
+    actual_including_lih: Decimal = Decimal("0")
+    comparison_actual_including_lih: Decimal = Decimal("0")
+    comparison_balance_including_lih: Decimal = Decimal("0")
+    comparison_used_percent_including_lih: Decimal = Decimal("0")
+    comparison_adjusted_balance_including_lih: Decimal | None = None
     comparison_actual: Decimal | None = None
     comparison_consumables: Decimal | None = None
     comparison_balance: Decimal | None = None
     comparison_used_percent: Decimal | None = None
     comparison_adjusted_balance: Decimal | None = None
     has_mud_reconciliation: bool = False
+
+
+class DailyCostLihDeduction(BaseModel):
+    """LIH cost filed against one AFE, deducted from that AFE's total."""
+
+    afe_id: str
+    afe_code: str
+    afe_name: str
+    currency: str
+    lih_cost: Decimal
+    afes_total: Decimal = Decimal("0")
+
+
+class DailyCostLihDay(BaseModel):
+    """One LIH register day inside the well cost analysis."""
+
+    entry_id: str
+    cost_date: date
+    afe_id: str | None = None
+    afe_code: str = ""
+    currency: str
+    line_count: int
+    total_cost: Decimal
+
+
+class DailyCostLihSummary(BaseModel):
+    """The well's LIH Cost Register, accounted apart from the daily cost groups.
+
+    ``total`` is added to the actual cost and deducted from the AFE amount. The
+    register is never folded into a service, consumable or tangible budget line.
+    """
+
+    available: bool
+    currency: str
+    total: Decimal = Decimal("0")
+    line_count: int = 0
+    entry_count: int = 0
+    deductions_by_afe: list[DailyCostLihDeduction] = Field(default_factory=list)
+    days: list[DailyCostLihDay] = Field(default_factory=list)
 
 
 class DailyCostWellSummary(BaseModel):
@@ -1060,6 +1133,8 @@ class DailyCostWellSummary(BaseModel):
     # Present when the well has daily cost sheets: the section-by-section
     # actual vs reconciled mud cost used by the final comparison.
     mud_cost: DailyCostMudReconciliation | None = None
+    # Present whenever the well has LIH register entries in the reported window.
+    lih_cost: DailyCostLihSummary | None = None
 
 
 DailyCostDayOut.model_rebuild()

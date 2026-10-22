@@ -35,6 +35,7 @@ const AfeEstimate = lazy(() => import('./pages/AfeEstimate'))
 const DailyCostManagement = lazy(() => import('./pages/DailyCostManagement'))
 const DailyCostSheet = lazy(() => import('./pages/DailyCostSheet'))
 const DailyCostAnalysis = lazy(() => import('./pages/DailyCostAnalysis'))
+const LihCostRegister = lazy(() => import('./pages/LihCostRegister'))
 const MudCostAnalysis = lazy(() => import('./pages/MudCostAnalysis'))
 const CostingSets = lazy(() => import('./pages/CostingSets'))
 const Reports = lazy(() => import('./pages/Reports'))
@@ -107,6 +108,7 @@ export default function App() {
           <Route path="afe/estimate/:afeId" element={<Guard permission="afe:read"><AfeEstimate/></Guard>}/>
           <Route path="daily-cost" element={<Guard permission="daily-cost:read"><DailyCostManagement/></Guard>}/>
           <Route path="daily-cost/entries/:entryId" element={<Guard permission="daily-cost:read"><DailyCostSheet/></Guard>}/>
+          <Route path="daily-cost/lih-register" element={<Guard permission="daily-cost:read"><LihCostRegister/></Guard>}/>
           <Route path="daily-cost/analysis" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
           <Route path="daily-cost/analysis/:wellId" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
           <Route path="daily-cost/mud-cost-analysis" element={<Guard permission="daily-cost:read"><MudCostAnalysis/></Guard>}/>

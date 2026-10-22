@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useParams } from 'react-router-dom'
 import {
-  PrintOutlined, AddRounded, ArrowBackRounded, CloudUploadOutlined, ContentCopyOutlined, DeleteOutlineRounded,
+  PrintOutlined, AddRounded, ArrowBackRounded, ArrowForwardRounded, CloudUploadOutlined, ContentCopyOutlined, DeleteOutlineRounded,
   DownloadOutlined, EditOutlined, LockOutlined, PlaylistAddRounded, RefreshRounded, SaveOutlined, SendRounded, UndoRounded,
 } from '@mui/icons-material'
 import {
@@ -30,6 +30,7 @@ import {
   type ConsumableCategory, type ConsumableKind, type DailyCostWellSummary,
 } from '../lib/dailyCost'
 import type { MudCostMaterialBalance, MudCostReconciliation } from '../lib/mudCost'
+import type { LihCostReport } from '../lib/lihCost'
 import { formatDepthMeters } from '../lib/units'
 import type { CostingSet, CostingSetGroup } from '../lib/costingSets'
 
@@ -603,7 +604,11 @@ export default function DailyCostSheet() {
   const savedAmount = Number(entry.total_cost)
   const workingAmount = hasPreviewForEdits ? Number(preview?.total_cost ?? savedAmount) : savedAmount
   const actualToDate = Number(day.comparison.actual_to_date) + (hasPreviewForEdits ? workingAmount - savedAmount : 0)
-  const remaining = Number(day.comparison.planned_total) - actualToDate
+  // LIH Cost Register cost is never part of the sheet's lines: it is added to the
+  // actual cost and subtracted from the AFE amount, so it reduces what is left.
+  const lihToDate = Number(day.comparison.lih_cost_to_date ?? 0)
+  const actualIncludingLih = Number(day.comparison.actual_including_lih ?? actualToDate)
+  const remaining = Number(day.comparison.planned_total) - lihToDate - actualToDate
   const upaToDate = Number(day.comparison.upa_to_date) + (hasPreviewForEdits
     ? Number(preview?.upa_total ?? 0) - Number(entry.upa_total) : 0)
   const nptToDate = Number(day.comparison.npt_to_date) + (hasPreviewForEdits
@@ -886,11 +891,15 @@ export default function DailyCostSheet() {
       const mudBalanceParams = new URLSearchParams({
         rig_id: entry.rig_id, well_id: entry.well_id, view: 'section', to: entry.cost_date,
       })
-      const [overviewDays, summary, mudReconciliation, mudBalance] = await Promise.all([
+      const lihParams = new URLSearchParams({ well_id: entry.well_id, to: entry.cost_date, from: entry.cost_date })
+      const [overviewDays, summary, mudReconciliation, mudBalance, lihReport] = await Promise.all([
         api<DailyCostDay[]>(`/daily-cost/wells/${entry.well_id}/cost-report?${params}`).catch(() => [saved]),
         api<DailyCostWellSummary>(`/daily-cost/wells/${entry.well_id}/cost-summary?${params}`).catch(() => null),
         api<MudCostReconciliation>(`/mud-cost/reconciliation?${mudParams}`).catch(() => null),
         api<MudCostMaterialBalance>(`/mud-cost/material-balance?${mudBalanceParams}`).catch(() => null),
+        // LIH cost lives in its own register, so the printed day panel reads it
+        // directly instead of deriving it from the daily sheet lines.
+        api<LihCostReport>(`/lih-cost/wells/${entry.well_id}/report?${lihParams}`).catch(() => null),
       ])
       await api('/daily-cost/export-audit', { method: 'POST', body: body({
         module: 'day-sheet', format: 'pdf', record_count: 1, entry_id: entry.id,
@@ -901,7 +910,7 @@ export default function DailyCostSheet() {
         // The report title names the well scope the sheet costs.
         title: costReportTitle('daily', [saved.progress?.scope ?? progress?.scope], entry.well_name),
         period: displayDate(entry.cost_date), days: [saved],
-        overviewDays, summary, mudReconciliation, mudBalance, sections: well?.sections ?? baseline?.sections,
+        overviewDays, summary, mudReconciliation, mudBalance, lihReport, sections: well?.sections ?? baseline?.sections,
         reportKind: 'daily', milestoneLabel: milestoneLabel.trim() || 'Spud date & time',
         leadLagKind, leadLagDays,
       })
@@ -999,15 +1008,15 @@ export default function DailyCostSheet() {
       </Paper>
     )}
 
-    <Box display="grid" gap={1.2} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: day.comparison.has_adjustment ? 'repeat(9, 1fr)' : 'repeat(7, 1fr)' } }}>
+    <Box display="grid" gap={1.2} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: day.comparison.has_adjustment ? 'repeat(10, 1fr)' : 'repeat(8, 1fr)' } }}>
       <StatCard label="AFE planned" value={dailyMoney(day.comparison.planned_total, standard)} hint="Locked standard-currency budget"/>
       {day.comparison.has_adjustment && day.comparison.adjusted_planned_total != null && <>
         <StatCard label="Adjusted AFE" value={dailyMoney(day.comparison.adjusted_planned_total, standard)} hint="Latest approved SOW revision"/>
         <StatCard
           label="Adjusted balance"
-          value={dailyMoney(Number(day.comparison.adjusted_planned_total) - actualToDate, standard)}
-          hint={Number(day.comparison.adjusted_planned_total) - actualToDate < 0 ? 'Adjusted budget is exceeded' : 'Adjusted less actual to date'}
-          tone={Number(day.comparison.adjusted_planned_total) - actualToDate < 0 ? 'bad' : 'good'}
+          value={dailyMoney(Number(day.comparison.adjusted_planned_total) - lihToDate - actualToDate, standard)}
+          hint={Number(day.comparison.adjusted_planned_total) - lihToDate - actualToDate < 0 ? 'Adjusted budget is exceeded' : 'Adjusted less LIH and actual to date'}
+          tone={Number(day.comparison.adjusted_planned_total) - lihToDate - actualToDate < 0 ? 'bad' : 'good'}
         />
       </>}
       <StatCard label="Actual to date" value={dailyMoney(actualToDate, standard)} hint={hasPreviewForEdits ? 'Includes the current unsaved preview' : 'All four cost groups through this day'}/>
@@ -1017,7 +1026,13 @@ export default function DailyCostSheet() {
         hint="Last entered depth (ft ÷ 3.281 → m)"
       />
       <StatCard label="Other expenses deducted" value={dailyMoney(otherToDate, standard)} hint={otherItemSummary || 'LIH, hole problems and similar charges'} tone={otherToDate ? 'bad' : undefined}/>
-      <StatCard label="Remaining balance" value={dailyMoney(remaining, standard)} hint={remaining < 0 ? 'AFE budget is exceeded' : 'Planned less actual, other expenses included'} tone={remaining < 0 ? 'bad' : 'good'}/>
+      <StatCard
+        label="LIH cost (register)"
+        value={dailyMoney(lihToDate, standard)}
+        hint={lihToDate ? 'Deducted from the AFE, added to actual' : 'No LIH recorded against this AFE up to this day'}
+        tone={lihToDate ? 'bad' : undefined}
+      />
+      <StatCard label="Remaining balance" value={dailyMoney(remaining, standard)} hint={remaining < 0 ? 'AFE budget is exceeded' : 'Planned less LIH and actual, other expenses included'} tone={remaining < 0 ? 'bad' : 'good'}/>
       <StatCard label="UPA to date" value={dailyMoney(upaToDate, standard)} hint="Unplanned Activity charges" tone={upaToDate ? 'bad' : undefined}/>
       <StatCard label="NPT to date" value={dailyMoney(nptToDate, standard)} hint="Non-Productive Time charges" tone={nptToDate ? 'bad' : undefined}/>
     </Box>
@@ -1094,10 +1109,11 @@ export default function DailyCostSheet() {
         <Box><Typography fontWeight={800} fontSize={15}>AFE budget reconciliation</Typography><Typography color="text.secondary" fontSize={11.5} mt={.3}>Category-level bulk allowances are intentionally matched against itemized actuals; balances update as the cost date advances.</Typography></Box>
         {editable && <Button size="small" startIcon={<DownloadOutlined/>} onClick={exportTemplate}>Import template</Button>}
       </Box>
-      <Box display="grid" gap={1} mb={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(4, auto)' }, justifyContent: { sm: 'flex-end' }, alignItems: 'center' }}>
+      <Box display="grid" gap={1} mb={1.5} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(5, auto)' }, justifyContent: { sm: 'flex-end' }, alignItems: 'center' }}>
         <Typography fontSize={11.5} color="text.secondary">Total AFE {dailyMoney(day.comparison.planned_total, standard)}</Typography>
         <Typography fontSize={11.5} color="text.secondary">Less services, consumables &amp; tangibles {dailyMoney(trackedActualToDate, standard)}</Typography>
         <Typography fontSize={11.5} fontWeight={700} color={otherToDate ? 'error.main' : 'text.secondary'}>Less other expenses {dailyMoney(otherToDate, standard)}</Typography>
+        <Typography fontSize={11.5} fontWeight={700} color={lihToDate ? 'error.main' : 'text.secondary'}>Less LIH cost {dailyMoney(lihToDate, standard)}</Typography>
         <Typography fontSize={12} fontWeight={800} color={remaining < 0 ? 'error.main' : 'success.main'}>AFE available {dailyMoney(remaining, standard)}</Typography>
       </Box>
       {Boolean(otherLineCount || day.other_expenses.length) && <Alert severity="warning" sx={{ mb: 1.4 }}>
@@ -1125,6 +1141,28 @@ export default function DailyCostSheet() {
         onChange={event => setPayload(current => ({ ...current, remarks: event.target.value }))}
         multiline minRows={2} inputProps={{ maxLength: 1000 }} sx={{ mt: 1.7 }}
       />
+    </Paper>
+
+    <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, mt: 1.8 }}>
+      <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={1.5} flexWrap="wrap">
+        <Box>
+          <Typography fontWeight={800} fontSize={15}>LIH cost against this AFE</Typography>
+          <Typography color="text.secondary" fontSize={11.5} mt={.3}>
+            Lost In Hole cost is recorded in its own register, outside this sheet. It is added to the actual cost and
+            subtracted from the AFE total, so it never needs an Other Expenses line here.
+          </Typography>
+        </Box>
+        <Box display="flex" gap={1.2} alignItems="center" flexWrap="wrap">
+          <Box textAlign="right">
+            <Typography fontSize={10.5} fontWeight={800} letterSpacing={.6} color="text.secondary">LIH TO THIS DATE</Typography>
+            <Typography fontSize={17} fontWeight={800} color={lihToDate ? 'warning.main' : 'text.primary'}>{dailyMoney(lihToDate, standard)}</Typography>
+            <Typography fontSize={10.5} color="text.secondary">Actual incl. LIH {dailyMoney(actualIncludingLih + (hasPreviewForEdits ? workingAmount - savedAmount : 0), standard)}</Typography>
+          </Box>
+          <Button component={RouterLink} to="/daily-cost/lih-register" size="small" variant="outlined" endIcon={<ArrowForwardRounded fontSize="small"/>}>
+            Open LIH register
+          </Button>
+        </Box>
+      </Box>
     </Paper>
 
     {editable && <Box display="flex" justifyContent="flex-end" gap={1} mt={1.6}>

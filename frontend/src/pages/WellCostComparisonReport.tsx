@@ -9,6 +9,7 @@ import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import type { Afe } from '../lib/afe'
 import type { DailyCostEntry } from '../lib/dailyCost'
+import type { LihCostEntry } from '../lib/lihCost'
 import { formatDepth, type Well } from '../lib/rigWell'
 import { formatDepthMeters } from '../lib/units'
 
@@ -21,6 +22,8 @@ type CostRow = {
   afe_amount: string
   sow_adjustment: string
   actual_cost: string
+  lih_cost: string
+  actual_including_lih: string
   actual_usd: string
   afe_balance: string
   costs_incurred: string
@@ -33,7 +36,7 @@ type CostRow = {
 }
 
 type CurrencyAmounts = Map<string, number>
-type Sources = { wells: Well[]; afes: Afe[]; entries: DailyCostEntry[] }
+type Sources = { wells: Well[]; afes: Afe[]; entries: DailyCostEntry[]; lih: LihCostEntry[] }
 
 function addAmount(amounts: CurrencyAmounts, currency: string, value: string | number | null | undefined) {
   if (value == null || value === '') return
@@ -70,7 +73,7 @@ function StatCard({ label, value, note, icon }: { label: string; value: string; 
 
 export default function WellCostComparisonReport() {
   const { can } = useAuth()
-  const [sources, setSources] = useState<Sources>({ wells: [], afes: [], entries: [] })
+  const [sources, setSources] = useState<Sources>({ wells: [], afes: [], entries: [], lih: [] })
   const [loading, setLoading] = useState(true)
   const [loadErrors, setLoadErrors] = useState<string[]>([])
   const [refreshKey, setRefreshKey] = useState(0)
@@ -84,10 +87,13 @@ export default function WellCostComparisonReport() {
   const load = useCallback(async () => {
     setLoading(true)
     setLoadErrors([])
-    const [wellsResult, afesResult, entriesResult] = await Promise.allSettled([
+    const [wellsResult, afesResult, entriesResult, lihResult] = await Promise.allSettled([
       api<Well[]>('/rig-well/wells'),
       canReadAfe ? api<Afe[]>('/afe/afes') : Promise.resolve([] as Afe[]),
       canReadDaily ? api<DailyCostEntry[]>('/daily-cost/entries') : Promise.resolve([] as DailyCostEntry[]),
+      // LIH is a separate register, so it is read alongside the daily actuals
+      // and deducted from the AFE in this comparison too.
+      canReadDaily ? api<LihCostEntry[]>('/lih-cost/entries') : Promise.resolve([] as LihCostEntry[]),
     ])
     const errors: string[] = []
     const wells = wellsResult.status === 'fulfilled' ? wellsResult.value : []
@@ -96,7 +102,9 @@ export default function WellCostComparisonReport() {
     if (afesResult.status === 'rejected') errors.push(`AFE totals: ${afesResult.reason instanceof Error ? afesResult.reason.message : 'could not be loaded'}`)
     const entries = entriesResult.status === 'fulfilled' ? entriesResult.value : []
     if (entriesResult.status === 'rejected') errors.push(`Daily actuals: ${entriesResult.reason instanceof Error ? entriesResult.reason.message : 'could not be loaded'}`)
-    setSources({ wells, afes, entries })
+    const lih = lihResult.status === 'fulfilled' ? lihResult.value : []
+    if (lihResult.status === 'rejected') errors.push(`LIH cost register: ${lihResult.reason instanceof Error ? lihResult.reason.message : 'could not be loaded'}`)
+    setSources({ wells, afes, entries, lih })
     setLoadErrors(errors)
     setLoading(false)
   }, [canReadAfe, canReadDaily, refreshKey])
@@ -110,6 +118,13 @@ export default function WellCostComparisonReport() {
       const group = afesByWell.get(afe.well_id) ?? []
       group.push(afe)
       afesByWell.set(afe.well_id, group)
+    }
+    const lihByWell = new Map<string, LihCostEntry[]>()
+    for (const entry of sources.lih) {
+      if (entry.is_deleted) continue
+      const group = lihByWell.get(entry.well_id) ?? []
+      group.push(entry)
+      lihByWell.set(entry.well_id, group)
     }
     const actualByWell = new Map<string, DailyCostEntry[]>()
     for (const entry of sources.entries) {
@@ -142,6 +157,8 @@ export default function WellCostComparisonReport() {
         }
       }
       for (const entry of entries) addAmount(actualAmounts, entry.standard_currency, entry.total_cost)
+      const lihAmounts: CurrencyAmounts = new Map()
+      for (const entry of lihByWell.get(well.id) ?? []) addAmount(lihAmounts, entry.currency, entry.total_cost)
 
       const afeAmount = amountText(afeAmounts, afes.length > 0, pendingConversion)
       const sowAdjustment = adjustmentAmounts.size
@@ -154,6 +171,11 @@ export default function WellCostComparisonReport() {
           .join(' · ')
         : '—'
       const actualCost = amountText(actualAmounts, entries.length > 0)
+      const lihCost = amountText(lihAmounts, lihAmounts.size > 0)
+      // Actual including LIH, per currency, for the comparison column.
+      const combinedAmounts: CurrencyAmounts = new Map(actualAmounts)
+      for (const [currency, value] of lihAmounts) combinedAmounts.set(currency, (combinedAmounts.get(currency) ?? 0) + value)
+      const actualIncludingLih = amountText(combinedAmounts, combinedAmounts.size > 0)
       const matchingCurrency = effectiveAmounts.size === 1 && actualAmounts.size <= 1
         && (actualAmounts.size === 0 || [...effectiveAmounts.keys()][0] === [...actualAmounts.keys()][0])
       let balance = '—'
@@ -161,9 +183,12 @@ export default function WellCostComparisonReport() {
       if (afes.length && !pendingConversion && matchingCurrency) {
         const currency = [...effectiveAmounts.keys()][0]
         const planned = effectiveAmounts.get(currency) ?? 0
+        // LIH reduces the AFE available before the actual cost is measured, and
+        // is itself part of the actual spend.
         const actual = actualAmounts.get(currency) ?? 0
-        balance = `${currency} ${(planned - actual).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        incurred = planned > 0 ? `${(actual / planned * 100).toFixed(1)}%` : '—'
+        const lihInCurrency = lihAmounts.get(currency) ?? 0
+        balance = `${currency} ${(planned - lihInCurrency - actual).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        incurred = planned > 0 ? `${((actual + lihInCurrency) / planned * 100).toFixed(1)}%` : '—'
       }
 
       const dates = entries.map(entry => String(entry.cost_date)).sort()
@@ -183,6 +208,8 @@ export default function WellCostComparisonReport() {
         afe_amount: canReadAfe ? afeAmount : 'Not available',
         sow_adjustment: canReadAfe ? sowAdjustment : 'Not available',
         actual_cost: canReadDaily ? actualCost : 'Not available',
+        lih_cost: canReadDaily ? lihCost : 'Not available',
+        actual_including_lih: canReadDaily ? actualIncludingLih : 'Not available',
         actual_usd: canReadDaily
           ? entries.length > 0
             ? `USD ${totalUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -234,9 +261,17 @@ export default function WellCostComparisonReport() {
       headerTooltip: 'Approved SOW adjustment (Adjusted AFE − Original AFE). A plus means scope was added.',
     },
     { headerName: 'ACTUAL COST', field: 'actual_cost', minWidth: 190 },
+    {
+      headerName: 'LIH COST', field: 'lih_cost', minWidth: 165,
+      headerTooltip: 'LIH Cost Register cost: deducted from the AFE and added to the actual cost',
+    },
+    {
+      headerName: 'ACTUAL INCL. LIH', field: 'actual_including_lih', minWidth: 185,
+      headerTooltip: 'Daily actual cost plus the LIH Cost Register cost',
+    },
     { headerName: 'ACTUAL USD (STD)', field: 'actual_usd', minWidth: 175, headerTooltip: 'Standardized USD actual cost across all wells' },
-    { headerName: 'AFE BALANCE', field: 'afe_balance', minWidth: 190, headerTooltip: 'Adjusted AFE amount less actual cost' },
-    { headerName: '% COSTS INCURRED', field: 'costs_incurred', minWidth: 155, headerTooltip: 'Actual cost as a share of the adjusted AFE amount' },
+    { headerName: 'AFE BALANCE', field: 'afe_balance', minWidth: 190, headerTooltip: 'Adjusted AFE amount less the LIH cost and the actual cost' },
+    { headerName: '% COSTS INCURRED', field: 'costs_incurred', minWidth: 155, headerTooltip: 'Actual cost plus LIH as a share of the adjusted AFE amount' },
     { headerName: 'PLANNED DEPTH (m)', field: 'planned_depth_m', minWidth: 160 },
     { headerName: 'ACTUAL DEPTH (m)', field: 'actual_depth_m', minWidth: 155 },
     { headerName: 'PLANNED DAYS', field: 'planned_days', minWidth: 135, headerTooltip: 'Original planned days', valueFormatter: params => Number(params.value ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) },
@@ -275,6 +310,7 @@ export default function WellCostComparisonReport() {
     <Alert severity="info" sx={{ mb: 2 }}>
       AFE and actual amounts are grouped by currency. Balance and cost-incurred percentage are calculated only when the well has a single AFE currency that matches its actual-cost currency.
       Where an approved SOW adjustment exists, the balance is the adjusted AFE amount less actual cost.
+      LIH Cost Register cost is added to the actual cost and deducted from the AFE before the balance and the percentage are calculated.
     </Alert>
     {loading
       ? <Paper variant="outlined" sx={{ minHeight: 220, display: 'grid', placeItems: 'center', borderRadius: 2 }}><CircularProgress size={28}/></Paper>

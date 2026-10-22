@@ -45,6 +45,7 @@ const modules: NavModule[] = [
   ] },
   { label: 'Daily Cost Management', icon: RequestQuoteOutlined, items: [
     { label: 'Daily cost register', path: '/daily-cost', icon: RequestQuoteOutlined, permission: 'daily-cost:read' },
+    { label: 'LIH Cost Register', path: '/daily-cost/lih-register', icon: PlaylistAddCheckRounded, permission: 'daily-cost:read' },
     { label: 'Mud Cost Analysis', path: '/daily-cost/mud-cost-analysis', icon: WaterDropOutlined, permission: 'daily-cost:read' },
     { label: 'Well cost analysis', path: '/daily-cost/analysis', icon: InsightsOutlined, permission: 'daily-cost:read' },
   ] },

@@ -5,6 +5,7 @@ import {
   type DailyCostWellSummary,
 } from '../../lib/dailyCost'
 import { MUD_COST_LOSS_METRICS, type MudCostMaterialBalance, type MudCostReconciliation } from '../../lib/mudCost'
+import { lihMeasure, type LihCostReport } from '../../lib/lihCost'
 import { compareServiceCodes, compareServiceGroups, serviceGroupLabel } from '../../lib/serviceGroups'
 import { depthToMeters } from '../../lib/units'
 
@@ -17,6 +18,8 @@ export type CostPrintReport = {
   summary?: DailyCostWellSummary | null
   mudReconciliation?: MudCostReconciliation | null
   mudBalance?: MudCostMaterialBalance | null
+  /** Manual LIH Cost Register for the printed well/period. */
+  lihReport?: LihCostReport | null
   sections?: DailyCostSectionOption[]
   reportKind?: 'daily' | 'well'
   milestoneLabel?: string
@@ -237,7 +240,18 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   const totalPlanned = asNumber(summary?.totals.planned ?? latestComparison.planned_total)
   const totalActual = asNumber(summary?.totals.comparison_actual ?? latestComparison.actual_to_date)
   const otherExpenses = asNumber(summary?.totals.other_expenses ?? latestComparison.other_expenses_to_date)
-  const balance = asNumber(summary?.totals.comparison_balance ?? latestComparison.balance)
+  // LIH Cost Register: separate from every budgeted group, added to the actual
+  // cost and deducted explicitly from the AFE amount.
+  const lihBucket = (report.lihReport?.totals ?? []).find(row => row.currency === currency)
+  const lihTotal = asNumber(summary?.totals.lih_cost ?? lihBucket?.total ?? 0)
+  const lihLineCount = summary?.totals.lih_line_count ?? lihBucket?.line_count ?? 0
+  const lihEntryCount = summary?.totals.lih_entries ?? lihBucket?.entry_count ?? 0
+  const actualIncludingLih = totalActual + lihTotal
+  const afeAvailable = totalPlanned - lihTotal
+  const balance = asNumber(
+    summary?.totals.comparison_balance_including_lih
+      ?? (summary ? totalPlanned - lihTotal - totalActual : latestComparison.balance),
+  )
   const progressRows = report.reportKind === 'daily' && latest.progress ? [latest.progress] : (summary?.progress ?? (latest.progress ? [latest.progress] : []))
   const spud = progressRows.find(row => row.spud_at)?.spud_at
   const actualDays = progressRows.reduce((total, row) => total + asNumber(row.actual_days), 0)
@@ -343,7 +357,12 @@ function ReportCover({ report }: { report: CostPrintReport }) {
         <CostTable title="Consumables cost · AFE vs cumulative actual" rows={consumables} position={consumablePosition}/>
         <section className="dcr-panel dcr-tangibles"><h2>Tangibles cost · AFE vs actual</h2><div><span>AFE <strong>{dailyMoney(tangiblePosition.planned, currency)}</strong></span><span>Actual <strong>{dailyMoney(tangiblePosition.actual, currency)}</strong></span><span>Balance <strong>{dailyMoney(tangiblePosition.planned - tangiblePosition.actual, currency)}</strong></span><span>Used <strong>{percent(tangiblePosition.actual, tangiblePosition.planned)}</strong></span></div></section>
         <div className="dcr-bottomline">
-          <section className="dcr-panel dcr-overall"><h2>AFE vs actual summary</h2><table><tbody><tr><th>Services</th><td>{dailyMoney(servicePosition.planned, currency)}</td><td>{dailyMoney(servicePosition.actual, currency)}</td></tr><tr><th>Consumables</th><td>{dailyMoney(consumablePosition.planned, currency)}</td><td>{dailyMoney(consumablePosition.actual, currency)}</td></tr><tr><th>Tangibles</th><td>{dailyMoney(tangiblePosition.planned, currency)}</td><td>{dailyMoney(tangiblePosition.actual, currency)}</td></tr><tr><th>Other expenses</th><td>—</td><td>{dailyMoney(otherExpenses, currency)}</td></tr><tr className="dcr-total"><th>Total</th><td>{dailyMoney(totalPlanned, currency)}</td><td>{dailyMoney(totalActual, currency)}</td></tr></tbody></table><p>Balance {dailyMoney(balance, currency)} · {percent(totalActual, totalPlanned)} used</p></section>
+          {/* The LIH register panel owns the bottom-left slot directly under
+              Tangibles; the AFE vs actual summary follows it downward. */}
+          <div className="dcr-stack">
+            <section className="dcr-panel dcr-lih"><h2>LIH cost · manual register deduction from the AFE</h2><div><span>LIH cost <strong>{dailyMoney(lihTotal, currency)}</strong></span><span className="dcr-lih-deduct">Deducted from AFE <strong>{dailyMoney(lihTotal, currency)}</strong></span><span>Actual incl. LIH <strong>{dailyMoney(actualIncludingLih, currency)}</strong></span><span>AFE available after LIH <strong>{dailyMoney(afeAvailable, currency)}</strong></span></div><p className="dcr-lih-note">{lihEntryCount ? `${lihLineCount} item${lihLineCount === 1 ? '' : 's'} across ${lihEntryCount} LIH register day${lihEntryCount === 1 ? '' : 's'} · item detail prints on the cumulative pages.` : 'No LIH cost recorded for this report.'}</p></section>
+            <section className="dcr-panel dcr-overall"><h2>AFE vs actual summary</h2><table><tbody><tr><th>Services</th><td>{dailyMoney(servicePosition.planned, currency)}</td><td>{dailyMoney(servicePosition.actual, currency)}</td></tr><tr><th>Consumables</th><td>{dailyMoney(consumablePosition.planned, currency)}</td><td>{dailyMoney(consumablePosition.actual, currency)}</td></tr><tr><th>Tangibles</th><td>{dailyMoney(tangiblePosition.planned, currency)}</td><td>{dailyMoney(tangiblePosition.actual, currency)}</td></tr><tr><th>Other expenses</th><td>—</td><td>{dailyMoney(otherExpenses, currency)}</td></tr><tr><th>LIH cost · register</th><td>—</td><td>{dailyMoney(lihTotal, currency)}</td></tr><tr className="dcr-total"><th>Total</th><td>{dailyMoney(totalPlanned, currency)}</td><td>{dailyMoney(actualIncludingLih, currency)}</td></tr></tbody></table><p>AFE available after LIH {dailyMoney(afeAvailable, currency)} · Balance {dailyMoney(balance, currency)} · {percent(actualIncludingLih, totalPlanned)} used</p></section>
+          </div>
           <section className="dcr-panel dcr-mud-cost"><h2>Mud chemical cost · section-wise</h2><table><thead><tr><th>Section / mud</th><th>Planned</th><th>Actual</th><th>Reconciled</th></tr></thead><tbody>{mudSections.slice(0, 5).map(row => {
             const sectionFactor = summary?.factors.find(item => item.dimension === 'section')?.rows.find(item => item.code === ('section_code' in row ? row.section_code : ''))
             return <tr key={row.section_id}><td>{nameOnly(row.section_label)} · {row.mud_type ?? 'Not configured'}</td><td className="num">{dailyMoney(sectionFactor?.planned ?? 0, currency)}</td><td className="num">{dailyMoney(row.actual_cost, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : dailyMoney(row.reconciled_cost, currency)}</td></tr>
@@ -381,6 +400,49 @@ function CumulativeSchedule({ title, rows, currency }: { title: string; rows: Da
   </section>
 }
 
+/**
+ * Item-level LIH Cost Register schedule. The cover panel shows the day totals in
+ * the bottom-left slot; this page carries every recorded item so the printed
+ * report can be audited line by line.
+ */
+function LihSchedule({ report }: { report: CostPrintReport }) {
+  const days = report.lihReport?.days ?? []
+  if (!days.length) return null
+  const currencies = [...new Set(days.map(day => day.entry.currency))].sort()
+  return <>
+    {currencies.map(currency => {
+      const rows = days.filter(day => day.entry.currency === currency)
+      const total = rows.reduce((sum, day) => sum + asNumber(day.entry.total_cost), 0)
+      return <section className="dcr-cumulative-scope" key={`lih-${currency}`}>
+        <h1>LIH Cost Register · {currency}</h1>
+        <section className="dcr-cumulative-section">
+          <h2>Lost In Hole items · deduct from the AFE, add to actual</h2>
+          <table>
+            <thead><tr><th>Date</th><th>AFE</th><th>Item description</th><th>OD / ID</th><th>Fish neck</th><th>Serial number</th><th>Connection</th><th>Units</th><th>Unit cost</th><th>Total cost</th><th>Remarks</th></tr></thead>
+            <tbody>
+              {rows.flatMap(day => day.lines.map(line => <tr key={line.id}>
+                <td>{displayDate(day.entry.cost_date)}</td>
+                <td>{day.entry.afe_code || '—'}</td>
+                <td>{line.item_description}</td>
+                <td>{lihMeasure(line.od_size)} / {lihMeasure(line.id_size)}</td>
+                <td>{lihMeasure(line.fish_neck_od)} × {lihMeasure(line.fish_neck_length)}</td>
+                <td>{line.serial_number || '—'}</td>
+                <td>{line.connection || '—'}</td>
+                <td className="num">{lihMeasure(line.no_of_units)} {line.unit}</td>
+                <td className="num">{dailyMoney(line.unit_cost, currency)}</td>
+                <td className="num">{dailyMoney(line.total_cost, currency)}</td>
+                <td>{line.remarks || '—'}</td>
+              </tr>))}
+              {!rows.some(day => day.lines.length) && <tr><td colSpan={11} className="dcr-none">No LIH items recorded in this period.</td></tr>}
+            </tbody>
+            <tfoot><tr><th colSpan={9}>Total LIH cost · deducted from the AFE</th><td className="num">{dailyMoney(total, currency)}</td><td/></tr></tfoot>
+          </table>
+        </section>
+      </section>
+    })}
+  </>
+}
+
 function CumulativeReportDetails({ report }: { report: CostPrintReport }) {
   const groups = new Map<string, DailyCostDay[]>()
   for (const day of report.overviewDays?.length ? report.overviewDays : report.days) {
@@ -409,6 +471,7 @@ function CumulativeReportDetails({ report }: { report: CostPrintReport }) {
         <CumulativeSchedule title="Tangibles cumulative cost · item-wise" rows={rows.tangibles.filter(row => asNumber(row.actual_to_date) !== 0)} currency={scope.currency}/>
       </section>
     })}
+    <LihSchedule report={report}/>
   </div>
 }
 

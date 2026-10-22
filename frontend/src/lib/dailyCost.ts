@@ -200,6 +200,8 @@ export type DailyCostComparisonLine = {
 export type DailyCostComparison = {
   effective_on: string; currency: string; planned_total: string; actual_to_date: string
   tracked_actual_to_date: string; other_expenses_to_date: string; balance: string
+  /** LIH Cost Register cost filed against this AFE, added to actual and deducted from the AFE. */
+  lih_cost_to_date?: string; actual_including_lih?: string; afe_available?: string
   over_budget: boolean; includes_draft_entries: boolean; upa_to_date: string; npt_to_date: string
   groups: DailyCostComparisonGroup[]; budget_lines: DailyCostComparisonLine[]
   // Revised AFE amount when an approved SOW adjustment exists. planned_total
@@ -240,6 +242,7 @@ export type DailyCostOverview = {
   wells_tracked: number; active_baselines: number; over_budget_afes: number
   total_planned_by_currency: Record<string, string>; actual_to_date_by_currency: Record<string, string>
   remaining_by_currency: Record<string, string>
+  lih_cost_by_currency?: Record<string, string>; lih_entries?: number; lih_lines?: number
   groups: { currency: string; cost_group: DailyCostGroup; planned: string; actual: string; balance: string }[]
   trend: { cost_date: string; currency: string; actual: string; upa: string; npt: string }[]
   recent_activity: { id: string; action: string; entity_type: string; entity_label: string; summary: string; created_at: string }[]
@@ -383,12 +386,16 @@ export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
 export type DailyCostAfePosition = {
   afe_id: string; afe_code: string; afe_name: string; afe_status: string; currency: string
   planned_total: string; actual: string; other_expenses: string; balance: string; over_budget: boolean
+  /** LIH register cost deducted explicitly from this AFE's total. */
+  lih_cost?: string; actual_including_lih?: string; afe_available?: string; balance_including_lih?: string
   sheets: number; days_recorded: number; first_day: string | null; last_day: string | null
   adjusted_planned_total: string | null; adjusted_balance: string | null; has_adjustment: boolean
 }
 export type DailyCostDailyRow = {
   cost_date: string; services: string; consumables: string; tangibles: string; other_expenses: string
   total: string; upa: string; npt: string; cumulative: string; budget_balance: string; sheets: number
+  /** LIH register cost for the day and the AFE balance after deducting it. */
+  lih?: string; cumulative_including_lih?: string; budget_balance_including_lih?: string
   status: 'draft' | 'submitted' | 'mixed'
   adjusted_budget_balance: string | null
   actual_depth?: string | null
@@ -427,6 +434,12 @@ export type DailyCostWellTotals = {
   comparison_actual: string | null; comparison_consumables: string | null
   comparison_balance: string | null; comparison_used_percent: string | null
   comparison_adjusted_balance: string | null; has_mud_reconciliation: boolean
+  // LIH Cost Register: recorded separately, added to the actual cost and
+  // deducted from the AFE amount in every comparison.
+  lih_cost?: string; lih_line_count?: number; lih_entries?: number
+  afe_available?: string; actual_including_lih?: string
+  comparison_actual_including_lih?: string; comparison_balance_including_lih?: string
+  comparison_used_percent_including_lih?: string; comparison_adjusted_balance_including_lih?: string | null
 }
 export type DailyCostMudSectionReconciliation = {
   section_id: string; section_label: string
@@ -445,6 +458,22 @@ export type DailyCostMudReconciliation = {
   configured_section_count: number; unconfigured_section_count: number
   sections: DailyCostMudSectionReconciliation[]; note: string
 }
+/** One LIH register day inside the well cost analysis. */
+export type DailyCostLihDay = {
+  entry_id: string; cost_date: string; afe_id: string | null; afe_code: string
+  currency: string; line_count: number; total_cost: string
+}
+/** LIH cost filed against one AFE, deducted from that AFE's total. */
+export type DailyCostLihDeduction = {
+  afe_id: string; afe_code: string; afe_name: string; currency: string
+  lih_cost: string; afes_total: string
+}
+/** The well's LIH Cost Register, accounted apart from the daily cost groups. */
+export type DailyCostLihSummary = {
+  available: boolean; currency: string; total: string; line_count: number; entry_count: number
+  deductions_by_afe: DailyCostLihDeduction[]; days: DailyCostLihDay[]
+}
+
 export type DailyCostWellSummary = {
   well: {
     id: string; well_code: string; well_name: string; rig_code: string; rig_name: string
@@ -459,6 +488,7 @@ export type DailyCostWellSummary = {
   warnings: DailyCostWarning[]
   progress: WellProgressScope[]
   mud_cost: DailyCostMudReconciliation | null
+  lih_cost: DailyCostLihSummary | null
 }
 
 /** Server-side register filters, so the daily basis stays quick on a long well. */

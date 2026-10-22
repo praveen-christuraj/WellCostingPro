@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from app.api import afe, auth, audit, business_dashboard, costing_sets, daily_cost, database_browser, master_data, mud_cost, rbac, rig_well, service_master, sow_adjustment, vendor_master
+from app.api import afe, auth, audit, business_dashboard, costing_sets, daily_cost, database_browser, lih_cost, master_data, mud_cost, rbac, rig_well, service_master, sow_adjustment, vendor_master
 from app.api.catalogue_items import ITEM_ROUTERS, catalogue_error_handler
 from app.api.catalogue_options import router as catalogue_options_router
 from app.services.catalogue import CatalogueError
@@ -44,6 +44,7 @@ app.include_router(afe.router, prefix="/api/v1")
 app.include_router(sow_adjustment.router, prefix="/api/v1")
 app.include_router(daily_cost.router, prefix="/api/v1")
 app.include_router(mud_cost.router, prefix="/api/v1")
+app.include_router(lih_cost.router, prefix="/api/v1")
 # Tangibles, consumables and catalogue lists are registered before the generic routes too.
 app.include_router(catalogue_options_router, prefix="/api/v1")
 for catalogue_router in ITEM_ROUTERS.values():
