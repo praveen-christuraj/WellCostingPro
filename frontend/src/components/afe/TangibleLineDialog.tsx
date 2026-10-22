@@ -189,7 +189,7 @@ export function TangibleLineDialog({ open, initial, reference, onClose, onSave }
     <FormDialog
       open={open}
       title={dialogTitle}
-      subtitle="Search Master Data by code, name, manufacturer, description or category. Multiple items can be added and saved as separate lines."
+      subtitle="Search Master Data by code, name, manufacturer, description or category, or use the advanced selector to add several tangibles with their quantities at once. Each item is saved as its own line."
       onClose={onClose}
       onSubmit={handleSave}
       dirty={dirty}
