@@ -14,6 +14,7 @@ from app.api.deps import Current, Db, require
 from app.schemas.sow_adjustment import (
     AfeSowAdjustmentCreate,
     AfeSowAdjustmentOut,
+    AfeSowAdjustmentPreviewOut,
     AfeSowAdjustmentUpdate,
     DailyCostAmendmentOut,
     SowApprovalIn,
@@ -39,6 +40,18 @@ router = APIRouter(tags=["SOW Adjustments"])
 )
 def list_afe_adjustments(afe_id: str, db: Db, user: Current) -> list[AfeSowAdjustmentOut]:
     return service.list_afe_adjustments(db, user.organization_id, afe_id)
+
+
+@router.post(
+    "/afe/afes/{afe_id}/sow-adjustments/preview",
+    response_model=AfeSowAdjustmentPreviewOut,
+    dependencies=[Depends(require("afe:sow-adjust"))],
+)
+def preview_afe_adjustment(
+    afe_id: str, data: AfeSowAdjustmentCreate, db: Db, user: Current
+) -> AfeSowAdjustmentPreviewOut:
+    """Price a revised estimate without saving it — same derivation as the save."""
+    return service.preview_afe_adjustment(db, user.organization_id, afe_id, data)
 
 
 @router.post(

@@ -142,13 +142,35 @@ def _approve_afe(client, headers, afe_id):
     return response.json()
 
 
-def _adjustment_payload(**overrides):
+def _service_line(service_id, *, pair_key="sv0", unit_rate="200", quantity="10"):
+    """One Day Rate service line — the same entry shape as the AFE estimate."""
+    return {
+        "pair_key": pair_key,
+        "client_key": pair_key,
+        "service_id": service_id,
+        "charging_basis": "Day Rate",
+        "hole_section_id": None,
+        "phase_id": None,
+        "currency": "USD",
+        "service_amount": "0",
+        "remarks": "",
+        "rates": [{"category": "Operation", "unit_rate": unit_rate}],
+        "charges": [{"category": "Operation", "quantity": quantity, "quantity_unit": "days"}],
+        "section_rates": [],
+    }
+
+
+def _adjustment_payload(setup, **overrides):
+    # The revised entry reworks the entered estimate line: 200/day x 10 days
+    # against the entered 100/day x 10 days. Totals derive from these lines.
     payload = {
         "reason": "Extra logging unit added to the scope",
         "sow_summary": "Added one mud logging unit for the intermediate hole",
-        "adjusted_services_total": "2000",
-        "adjusted_consumables_total": "0",
-        "adjusted_tangibles_total": "0",
+        "standard_currency": "",
+        "exchange_rates": [],
+        "services": [_service_line(setup["service"]["id"])],
+        "consumables": [],
+        "tangibles": [],
     }
     payload.update(overrides)
     return payload
@@ -159,7 +181,7 @@ def test_draft_afe_rejects_sow_adjustment():
     headers = login(client)
     setup = _setup(client, headers)
     response = client.post(
-        f"/api/v1/afe/afes/{setup['afe']['id']}/sow-adjustments", headers=headers, json=_adjustment_payload(),
+        f"/api/v1/afe/afes/{setup['afe']['id']}/sow-adjustments", headers=headers, json=_adjustment_payload(setup),
     )
     assert response.status_code == 409, response.text
     assert "Draft" in response.json()["detail"]
@@ -172,15 +194,26 @@ def test_sow_adjustment_lifecycle_and_effective_totals():
     afe_id = setup["afe"]["id"]
     _approve_afe(client, headers, afe_id)
 
-    created = _post(client, f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers, _adjustment_payload(), status=201)
+    created = _post(client, f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers, _adjustment_payload(setup), status=201)
     assert created["revision_number"] == 1
     assert created["status"] == "draft"
     assert Decimal(created["original_services_total"]) == Decimal("1000.00")
+    # The adjusted totals derive from the revised lines: 200/day x 10 days.
+    assert Decimal(created["adjusted_services_total"]) == Decimal("2000.00")
     assert Decimal(created["adjusted_total"]) == Decimal("2000.00")
     assert Decimal(created["delta_total"]) == Decimal("1000.00")
 
+    # The revision stores both sides of the entry: the entered line is snapshotted
+    # on the before side, the revised line on the after side, linked by pair key.
+    before = created["before"]
+    after = created["after"]
+    assert [line["client_key"] for line in before["services"]] == ["sv0"]
+    assert [line["client_key"] for line in after["services"]] == ["sv0"]
+    assert Decimal(before["services"][0]["amount"]) == Decimal("1000.00")
+    assert Decimal(after["services"][0]["amount"]) == Decimal("2000.00")
+
     # A second draft is blocked while the first is still open.
-    blocked = client.post(f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers=headers, json=_adjustment_payload())
+    blocked = client.post(f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers=headers, json=_adjustment_payload(setup))
     assert blocked.status_code == 409, blocked.text
 
     # Drafts do not affect the register totals.
@@ -189,10 +222,19 @@ def test_sow_adjustment_lifecycle_and_effective_totals():
     assert register[0]["adjusted_total"] is None
 
     updated = client.patch(f"/api/v1/afe/sow-adjustments/{created['id']}", headers=headers, json={
-        "adjusted_services_total": "2500", "reason": "Extra logging unit and standby cover",
+        "services": [_service_line(setup["service"]["id"], unit_rate="250")],
+        "consumables": [],
+        "tangibles": [],
+        "reason": "Extra logging unit and standby cover",
     })
     assert updated.status_code == 200, updated.text
     assert Decimal(updated.json()["adjusted_total"]) == Decimal("2500.00")
+
+    # A partial module update is rejected: all three modules travel together.
+    partial = client.patch(f"/api/v1/afe/sow-adjustments/{created['id']}", headers=headers, json={
+        "services": [_service_line(setup["service"]["id"], unit_rate="300")],
+    })
+    assert partial.status_code == 422, partial.text
 
     approved = client.post(
         f"/api/v1/afe/sow-adjustments/{created['id']}/approve", headers=headers, json={"remarks": "Scope change verified"},
@@ -208,12 +250,14 @@ def test_sow_adjustment_lifecycle_and_effective_totals():
     assert Decimal(register[0]["total_cost"]) == Decimal("1000.00")
 
     # A newer approved revision supersedes the older one.
-    second = _post(client, f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers, _adjustment_payload(
-        reason="Standby cover removed again", adjusted_services_total="1800",
+    second = _post(client, f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers, _adjustment_payload(setup,
+        reason="Standby cover removed again",
+        services=[_service_line(setup["service"]["id"], unit_rate="180")],
     ), status=201)
     assert second["revision_number"] == 2
     # The original snapshot is carried forward from the first revision, not re-taken.
     assert Decimal(second["original_services_total"]) == Decimal("1000.00")
+    assert Decimal(second["adjusted_total"]) == Decimal("1800.00")
     approve_second = client.post(
         f"/api/v1/afe/sow-adjustments/{second['id']}/approve", headers=headers, json={"remarks": "Revised scope agreed"},
     )
@@ -236,6 +280,73 @@ def test_sow_adjustment_lifecycle_and_effective_totals():
     assert [row["status"] for row in history] == ["void", "approved"]
 
 
+def test_sow_adjustment_add_and_remove_estimate_lines():
+    client = TestClient(app)
+    headers = login(client)
+    setup = _setup(client, headers)
+    afe_id = setup["afe"]["id"]
+    _approve_afe(client, headers, afe_id)
+
+    # The revised entry keeps the entered line, adds a second one and lets the
+    # user work every value against what was entered — same as the estimate.
+    created = _post(client, f"/api/v1/afe/afes/{afe_id}/sow-adjustments", headers, _adjustment_payload(setup,
+        services=[
+            _service_line(setup["service"]["id"], pair_key="sv0", unit_rate="150", quantity="10"),
+            _service_line(setup["service"]["id"], pair_key="new-1", unit_rate="50", quantity="6"),
+        ],
+    ), status=201)
+    assert Decimal(created["adjusted_services_total"]) == Decimal("1800.00")
+
+    after_keys = [line["client_key"] for line in created["after"]["services"]]
+    assert after_keys == ["sv0", "new-1"]
+    before_keys = [line["client_key"] for line in created["before"]["services"]]
+    assert before_keys == ["sv0"]
+
+    # Dropping the added line in a draft edit leaves the paired line working.
+    updated = client.patch(f"/api/v1/afe/sow-adjustments/{created['id']}", headers=headers, json={
+        "services": [_service_line(setup["service"]["id"], pair_key="sv0", unit_rate="120", quantity="10")],
+        "consumables": [],
+        "tangibles": [],
+        "reason": "Second logging unit dropped from the revision",
+    })
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert Decimal(body["adjusted_services_total"]) == Decimal("1200.00")
+    assert [line["client_key"] for line in body["after"]["services"]] == ["sv0"]
+
+    # A revision may also drop an entered line entirely: before-only rows are removals.
+    emptied = client.patch(f"/api/v1/afe/sow-adjustments/{created['id']}", headers=headers, json={
+        "services": [],
+        "consumables": [],
+        "tangibles": [],
+        "reason": "Logging service removed from the revised scope",
+    })
+    assert emptied.status_code == 200, emptied.text
+    body = emptied.json()
+    assert body["after"]["services"] == []
+    assert [line["client_key"] for line in body["before"]["services"]] == ["sv0"]
+    assert Decimal(body["adjusted_total"]) == Decimal("0.00")
+
+
+def test_sow_adjustment_preview_prices_without_saving():
+    client = TestClient(app)
+    headers = login(client)
+    setup = _setup(client, headers)
+    _approve_afe(client, headers, setup["afe"]["id"])
+
+    preview = client.post(
+        f"/api/v1/afe/afes/{setup['afe']['id']}/sow-adjustments/preview",
+        headers=headers, json=_adjustment_payload(setup),
+    )
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert Decimal(body["adjusted_total"]) == Decimal("2000.00")
+    assert body["standard_currency"] == "USD"
+
+    history = client.get(f"/api/v1/afe/afes/{setup['afe']['id']}/sow-adjustments", headers=headers).json()
+    assert history == []
+
+
 def test_plan_adjustment_revises_planned_days_without_touching_the_plan():
     client = TestClient(app)
     headers = login(client)
@@ -245,12 +356,30 @@ def test_plan_adjustment_revises_planned_days_without_touching_the_plan():
     created = _post(client, f"/api/v1/rig-well/wells/{well_id}/plan-adjustments", headers, {
         "reason": "Hole problems added two rig days",
         "sow_summary": "Intermediate hole reamed an extra two days",
-        "planned_days_after": "12",
-        "section_count_after": 1,
+        "sections": [{
+            "pair_key": "s0",
+            "hole_section_id": setup["hole"]["id"],
+            "from_depth": "0", "to_depth": "1000", "remarks": "",
+            "phases": [{"pair_key": "p0-0", "phase_id": setup["phase"]["id"], "days": "12", "remarks": ""}],
+        }],
     }, status=201)
     assert created["revision_number"] == 1
+    # Days and section count derive from the revised grid — nothing is typed in.
     assert Decimal(created["planned_days_before"]) == Decimal("10.00")
+    assert Decimal(created["planned_days_after"]) == Decimal("12.00")
     assert Decimal(created["delta_days"]) == Decimal("2.00")
+    assert created["section_count_before"] == 1
+    assert created["section_count_after"] == 1
+
+    # The two-sided grid reads every revised value against the entered one.
+    before = created["sections_before"][0]
+    after = created["sections_after"][0]
+    assert before["pair_key"] == "s0" and after["pair_key"] == "s0"
+    assert before["change"] == "modified" and after["change"] == "modified"
+    assert Decimal(before["phases"][0]["days"]) == Decimal("10.00")
+    assert Decimal(after["phases"][0]["days"]) == Decimal("12.00")
+    assert before["phases"][0]["change"] == "modified"
+    assert after["phases"][0]["change"] == "modified"
 
     wells = client.get("/api/v1/rig-well/wells", headers=headers).json()
     assert wells[0]["has_plan_adjustment"] is False
@@ -272,6 +401,73 @@ def test_plan_adjustment_revises_planned_days_without_touching_the_plan():
     assert Decimal(summary["planned_days_after"]) == Decimal("12.00")
     assert summary["has_plan_adjustment"] is True
     assert summary["plan_revision"] == 1
+
+
+def test_plan_adjustment_adds_sections_and_phases_like_the_configuration():
+    client = TestClient(app)
+    headers = login(client)
+    setup = _setup(client, headers)
+    well_id = setup["well"]["id"]
+
+    second_hole = _post(client, "/api/v1/master-data/hole-sections", headers, {"code": "8-1/2", "name": "Production hole"})
+    second_phase = _post(client, "/api/v1/master-data/phases", headers, {"code": "COMP", "name": "Completion"})
+
+    created = _post(client, f"/api/v1/rig-well/wells/{well_id}/plan-adjustments", headers, {
+        "reason": "Production hole added to the revised scope",
+        "sow_summary": "Added the 8-1/2 section with a completion phase and extended the surface phase",
+        "sections": [
+            {
+                "pair_key": "s0",
+                "hole_section_id": setup["hole"]["id"],
+                "from_depth": "0", "to_depth": "1200", "remarks": "",
+                "phases": [
+                    {"pair_key": "p0-0", "phase_id": setup["phase"]["id"], "days": "14", "remarks": ""},
+                    {"pair_key": "p0-1", "phase_id": second_phase["id"], "days": "3", "remarks": ""},
+                ],
+            },
+            {
+                "pair_key": "s1",
+                "hole_section_id": second_hole["id"],
+                "from_depth": "1200", "to_depth": "2500", "remarks": "",
+                "phases": [{"pair_key": "p1-0", "phase_id": second_phase["id"], "days": "5", "remarks": ""}],
+            },
+        ],
+    }, status=201)
+    assert created["section_count_before"] == 1
+    assert created["section_count_after"] == 2
+    assert Decimal(created["planned_days_before"]) == Decimal("10.00")
+    assert Decimal(created["planned_days_after"]) == Decimal("22.00")
+
+    after = {row["pair_key"]: row for row in created["sections_after"]}
+    before = {row["pair_key"]: row for row in created["sections_before"]}
+    assert after["s0"]["change"] == "modified"
+    assert after["s1"]["change"] == "added"
+    assert "s1" not in before
+    phase_changes = [(row["pair_key"], row["change"]) for row in after["s0"]["phases"]]
+    assert phase_changes == [("p0-0", "modified"), ("p0-1", "added")]
+
+    # The configured plan itself never changes.
+    wells = client.get("/api/v1/rig-well/wells", headers=headers).json()
+    assert Decimal(wells[0]["total_days"]) == Decimal("10.00")
+    assert wells[0]["section_count"] == 1
+
+    # Dropping a whole section in a draft edit records it as a removal.
+    updated = client.patch(f"/api/v1/rig-well/plan-adjustments/{created['id']}", headers=headers, json={
+        "sections": [{
+            "pair_key": "s0",
+            "hole_section_id": setup["hole"]["id"],
+            "from_depth": "0", "to_depth": "1200", "remarks": "",
+            "phases": [{"pair_key": "p0-0", "phase_id": setup["phase"]["id"], "days": "14", "remarks": ""}],
+        }],
+        "reason": "Production hole dropped again from the revised scope",
+    })
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["section_count_after"] == 1
+    assert Decimal(body["planned_days_after"]) == Decimal("14.00")
+    assert body["sections_before"][0]["pair_key"] == "s0"
+    assert all(row["change"] == "removed" for row in body["sections_before"] if row["pair_key"] == "s1")
+    assert [row["pair_key"] for row in body["sections_after"]] == ["s0"]
 
 
 def _make_entry(client, headers, setup, cost_date):
