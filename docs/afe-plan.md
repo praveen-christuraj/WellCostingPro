@@ -82,11 +82,12 @@ app itself hidden while printing.
 
 **Page 1 — the AFE.**
 
-1. Title block: "AFE Cost Estimate" with the AFE code, AFE name and the print timestamp.
-2. Metadata: rig, well, AFE number, AFE name, objective of the well, location / block, well plan
-   status, total depth, planned days, AFE type and plan scope, AFE status, and who saved the
-   estimate when.
-3. Services and cost: rows print in the fixed Master Data reporting order — Rig Operations,
+1. Title block: "AFE Cost Estimate" with the AFE name only. It has no long-form authorization
+   wording or print timestamp.
+2. Compact metadata: rig, well, AFE name, AFE type, objective of the well, location / block,
+   total depth and planned days. Configuration, well-plan status, AFE status and estimate-save
+   details are intentionally omitted.
+3. Unified cost schedule: service rows print in the fixed Master Data reporting order — Rig Operations,
    Formation Evaluation, Well Services, Land Facilities and Preparation, Miscellaneous Services,
    Supervisions — with the group captioned once at the start of its block and service-code order
    inside each block. One row per service line: name, provider / vendor, charging basis with
@@ -94,10 +95,13 @@ app itself hidden while printing.
    and phase with its entered section rate), amount in the entered currency and **remarks**.
    Scoped day-rate and per-service lines include their section / phase in the Basis cell;
    there are no separate Scope or Currency columns. The services subtotal uses the standard currency.
-4. Consumables and tangibles: one lump sum for each group, then the **total AFE amount**.
+   The same table then shows Consumables as four categorized lump sums (**Mud Chemicals, Cement
+   Additives, Fuel and Drill Bits**) plus a Consumables total, followed by the Tangibles lump sum and
+   total. The **total AFE amount** closes the table.
+4. The section/depth/phase plan follows the unified cost schedule on page 1.
 
-**Page 2 — supporting detail.** The section/depth/phase plan, every consumable line (lump sums
-show their section and phase; drill bits show the bit, make, type, size and description), and every
+**Page 2 — supporting detail.** Every consumable line (lump sums show their section and phase;
+drill bits show the bit, make, type, size and description), and every
 tangible line (manufacturer, UOM, quantity, rate, amount, remarks). Each table closes with its
 standard-currency total. Warnings and the authorisation table (**Submitted by / Reviewed by /
 Approved by**, each with name, email, date and an empty signature row) follow the line details.
