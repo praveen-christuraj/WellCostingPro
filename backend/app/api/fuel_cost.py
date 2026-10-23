@@ -28,7 +28,9 @@ from app.schemas.fuel_cost import (
     FuelCostImportRequest,
     FuelCostImportResponse,
     FuelCostOpeningStockUpdate,
+    FuelCostPaginatedLinesOut,
     FuelCostReference,
+    FuelCostRigSummaryOut,
 )
 from app.services import fuel_cost as service
 
@@ -42,7 +44,7 @@ def _can_override_opening(user: User) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Reference data and the register
+# Reference data, summaries and the register
 # ---------------------------------------------------------------------------
 
 
@@ -60,6 +62,24 @@ def day_for_date(
 ) -> FuelCostDayOut:
     """One rig day, existing or previewed before the first save."""
     return service.day_for_rig_date(db, user.organization_id, rig_id, cost_date)
+
+
+@router.get(
+    "/rigs/{rig_id}/summary",
+    response_model=FuelCostRigSummaryOut,
+    dependencies=[Depends(require("daily-cost:read"))],
+)
+def rig_summary(
+    rig_id: str,
+    db: Db,
+    user: Current,
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+) -> FuelCostRigSummaryOut:
+    """Fast period and inception summary for one rig without returning every row."""
+    return service.rig_summary(
+        db, user.organization_id, rig_id, date_from=date_from, date_to=date_to
+    )
 
 
 @router.get(
@@ -81,6 +101,40 @@ def company_consumption(
 
 
 @router.get(
+    "/rigs/{rig_id}/lines",
+    response_model=FuelCostPaginatedLinesOut,
+    dependencies=[Depends(require("daily-cost:read"))],
+)
+def list_company_lines(
+    rig_id: str,
+    db: Db,
+    user: Current,
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+    company_id: str = Query(default="", max_length=36),
+    category_id: str = Query(default="", max_length=36),
+    category_name: str = Query(default="", max_length=120),
+    search: str = Query(default="", max_length=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=5000),
+) -> FuelCostPaginatedLinesOut:
+    """Server-filtered, server-paginated ledger of company/category fuel lines."""
+    return service.list_company_lines(
+        db,
+        user.organization_id,
+        rig_id,
+        date_from=date_from,
+        date_to=date_to,
+        company_id=company_id,
+        category_id=category_id,
+        category_name=category_name,
+        search=search,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get(
     "/entries/deleted",
     response_model=list[FuelCostEntryOut],
     dependencies=[Depends(require("daily-cost:read"))],
@@ -91,9 +145,18 @@ def deleted_entries(
     rig_id: str = Query(default="", max_length=36),
     date_from: date | None = Query(default=None, alias="from"),
     date_to: date | None = Query(default=None, alias="to"),
+    limit: int | None = Query(default=None, ge=1, le=10000),
+    offset: int = Query(default=0, ge=0),
 ) -> list[FuelCostEntryOut]:
     return service.list_entries(
-        db, user.organization_id, rig_id=rig_id, date_from=date_from, date_to=date_to, deleted=True
+        db,
+        user.organization_id,
+        rig_id=rig_id,
+        date_from=date_from,
+        date_to=date_to,
+        deleted=True,
+        limit=limit,
+        offset=offset,
     )
 
 
@@ -104,9 +167,17 @@ def list_entries(
     rig_id: str = Query(default="", max_length=36),
     date_from: date | None = Query(default=None, alias="from"),
     date_to: date | None = Query(default=None, alias="to"),
+    limit: int | None = Query(default=None, ge=1, le=10000),
+    offset: int = Query(default=0, ge=0),
 ) -> list[FuelCostEntryOut]:
     return service.list_entries(
-        db, user.organization_id, rig_id=rig_id, date_from=date_from, date_to=date_to
+        db,
+        user.organization_id,
+        rig_id=rig_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=offset,
     )
 
 

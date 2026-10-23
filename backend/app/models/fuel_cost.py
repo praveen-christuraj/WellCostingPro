@@ -8,7 +8,8 @@ serve several wells over its life.
 A *fuel day* is one rig and one date (unique per workspace). It records:
 
 * the rig engines' AGO consumption,
-* gas consumption — recorded in litres for information and never mixed into AGO,
+* Rig Saving (litres) (`gas_consumption`) — AGO saved through gas usage,
+  recorded in litres and never mixed into AGO consumption or stock deduction,
 * the physical opening and actual closing stock,
 * daily receipts,
 * the company-wise AGO consumption lines. Every line belongs to a registered
@@ -210,7 +211,7 @@ class FuelCostEntry(Base):
     rig_engine_remarks: Mapped[str] = mapped_column(
         String(FUEL_MAX_REMARKS), default="", server_default="", nullable=False
     )
-    # Gas is recorded in litres for information; it never joins the AGO balance.
+    # Rig Saving (litres): AGO saved through usage of gas; never joins the AGO balance.
     gas_consumption: Mapped[Decimal] = mapped_column(
         Numeric(28, 10), default=Decimal("0"), server_default="0", nullable=False
     )

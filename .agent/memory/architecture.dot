@@ -128,6 +128,7 @@ digraph WellCostingPro {
   "frontend/src/components/catalogue/PriceHistoryDialog.tsx";
   "frontend/src/components/catalogue/PricedItemFormDialog.tsx";
   "frontend/src/components/catalogue/ReviseRateDialog.tsx";
+  "frontend/src/components/daily-cost/BulkDailyCostPrintDialog.tsx";
   "frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx";
   "frontend/src/components/daily-cost/DailyCostLineDialog.tsx";
   "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx";
@@ -135,6 +136,7 @@ digraph WellCostingPro {
   "frontend/src/components/daily-cost/WellProgressPanel.tsx";
   "frontend/src/components/fuel-cost/FuelCompanyDialog.tsx";
   "frontend/src/components/fuel-cost/FuelConsumptionDialog.tsx";
+  "frontend/src/components/fuel-cost/FuelLinesLedger.tsx";
   "frontend/src/components/lih-cost/LihWorksheet.tsx";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx";
   "frontend/src/components/mud-cost/MudCostOpeningStockDialog.tsx";
@@ -654,6 +656,12 @@ digraph WellCostingPro {
   "frontend/src/components/catalogue/ReviseRateDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/catalogue/ReviseRateDialog.tsx" -> "frontend/src/components/catalogue/MasterSelect.tsx";
   "frontend/src/components/catalogue/ReviseRateDialog.tsx" -> "frontend/src/lib/catalogue.ts";
+  "frontend/src/components/daily-cost/BulkDailyCostPrintDialog.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/components/daily-cost/BulkDailyCostPrintDialog.tsx" -> "frontend/src/components/daily-cost/DailyCostPrintSheet.tsx";
+  "frontend/src/components/daily-cost/BulkDailyCostPrintDialog.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/components/daily-cost/BulkDailyCostPrintDialog.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/components/daily-cost/BulkDailyCostPrintDialog.tsx" -> "frontend/src/lib/lihCost.ts";
+  "frontend/src/components/daily-cost/BulkDailyCostPrintDialog.tsx" -> "frontend/src/lib/mudCost.ts";
   "frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx" -> "frontend/src/lib/units.ts";
@@ -683,6 +691,11 @@ digraph WellCostingPro {
   "frontend/src/components/fuel-cost/FuelConsumptionDialog.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/components/fuel-cost/FuelConsumptionDialog.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/components/fuel-cost/FuelConsumptionDialog.tsx" -> "frontend/src/lib/fuelCost.ts";
+  "frontend/src/components/fuel-cost/FuelLinesLedger.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/components/fuel-cost/FuelLinesLedger.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/components/fuel-cost/FuelLinesLedger.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/components/fuel-cost/FuelLinesLedger.tsx" -> "frontend/src/lib/export.ts";
+  "frontend/src/components/fuel-cost/FuelLinesLedger.tsx" -> "frontend/src/lib/fuelCost.ts";
   "frontend/src/components/lih-cost/LihWorksheet.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/components/lih-cost/LihWorksheet.tsx" -> "frontend/src/lib/lihCost.ts";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/components/Common.tsx";
@@ -806,6 +819,7 @@ digraph WellCostingPro {
   "frontend/src/pages/DailyCostAnalysis.tsx" -> "frontend/src/lib/units.ts";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/components/DataTable.tsx";
+  "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/components/daily-cost/BulkDailyCostPrintDialog.tsx";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/components/daily-cost/WellCostPrintDialog.tsx";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/lib/api.ts";
@@ -853,6 +867,7 @@ digraph WellCostingPro {
   "frontend/src/pages/FuelCostRegister.tsx" -> "frontend/src/components/ImportDialog.tsx";
   "frontend/src/pages/FuelCostRegister.tsx" -> "frontend/src/components/fuel-cost/FuelCompanyDialog.tsx";
   "frontend/src/pages/FuelCostRegister.tsx" -> "frontend/src/components/fuel-cost/FuelConsumptionDialog.tsx";
+  "frontend/src/pages/FuelCostRegister.tsx" -> "frontend/src/components/fuel-cost/FuelLinesLedger.tsx";
   "frontend/src/pages/FuelCostRegister.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/FuelCostRegister.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/FuelCostRegister.tsx" -> "frontend/src/lib/dailyCost.ts";

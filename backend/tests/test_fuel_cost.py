@@ -610,3 +610,142 @@ def test_fuel_first_day_removal_keeps_the_carry_forward_and_import_revives_compa
         gamma = next(item for item in reference["companies"] if item["company_name"] == "Gamma Haulage")
         assert [category["category_name"] for category in gamma["categories"]] == ["Night shift"]
         assert client.get("/api/v1/fuel-cost/companies/deleted", headers=headers).json() == []
+
+
+def test_fuel_recent_five_days_rig_saving_summary_rollups_and_large_ledger():
+    from datetime import date, timedelta
+
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = setup_register(client, headers)
+        rig_id = setup["rig"]["id"]
+
+        # Bulk-import 30 days x 12 companies = 360 company lines using Rig Saving litres.
+        start_day = date(2026, 9, 1)
+        import_rows = []
+        for day_offset in range(30):
+            day_iso = (start_day + timedelta(days=day_offset)).isoformat()
+            for comp_index in range(12):
+                row = {
+                    "cost_date": day_iso,
+                    "company_name": f"Contractor {comp_index + 1:02d}",
+                    "category_name": "Crew" if comp_index % 2 == 0 else ("Camp" if comp_index % 3 == 0 else ""),
+                    "litres": "10",
+                    "line_remarks": f"Batch {day_offset}-{comp_index}",
+                }
+                if comp_index == 0:
+                    row["rig_engine_consumption"] = "100"
+                    row["rig_saving_litres"] = "35"
+                    row["rig_saving_remarks"] = "AGO saved via gas"
+                    row["receipt_quantity"] = "300" if day_offset % 5 == 0 else "0"
+                    if day_offset == 0:
+                        row["opening_stock"] = "10000"
+                import_rows.append(row)
+
+        imported = client.post("/api/v1/fuel-cost/import", headers=headers, json={
+            "rig_id": rig_id,
+            "rows": import_rows,
+        })
+        assert imported.status_code == 200, imported.text
+        body = imported.json()
+        assert body["success"] is True, body["errors"]
+        assert body["imported_count"] == 30
+        assert body["line_count"] == 360
+
+        # Add day 31 directly via rig_saving_litres alias, and verify previous_lines preview first.
+        day_31_iso = (start_day + timedelta(days=30)).isoformat()
+        preview = client.get("/api/v1/fuel-cost/day", headers=headers, params={
+            "rig_id": rig_id, "date": day_31_iso,
+        }).json()
+        assert len(preview["previous_lines"]) == 12
+        assert preview["balance"]["is_first_entry"] is False
+
+        # Daily total consumption per imported day = 100 engine + 12*10 company = 220 L.
+        # Over 30 days: 10000 opening + 6*300 receipts (1800) - 30*220 AGO (6600) = 5200 L closing!
+        assert Decimal(preview["balance"]["carried_opening"]) == Decimal("5200")
+
+        saved_31 = _post(client, "/api/v1/fuel-cost/entries", headers, {
+            "rig_id": rig_id,
+            "cost_date": day_31_iso,
+            "rig_engine_consumption": "80",
+            "rig_saving_litres": "45",
+            "rig_saving_remarks": "Dual fuel generator",
+            "receipt_quantity": "0",
+            "closing_stock": "5090",
+            "lines": [
+                {"company_id": setup["acme"]["id"], "category_id": setup["acme_categories"]["Rig crew"], "litres": "15"},
+                {"company_id": setup["acme"]["id"], "category_id": setup["acme_categories"]["Camp"], "litres": "10"},
+            ],
+        })
+        assert Decimal(saved_31["entry"]["rig_saving_litres"]) == Decimal("45")
+        assert Decimal(saved_31["entry"]["gas_consumption"]) == Decimal("45")
+        assert saved_31["entry"]["rig_saving_remarks"] == "Dual fuel generator"
+        assert Decimal(saved_31["balance"]["rig_saving_litres"]) == Decimal("45")
+        # Book closing on day 31 = 5200 - (80 + 25) = 5095; actual = 5090 -> closing adjustment = -5.
+        assert Decimal(saved_31["balance"]["book_closing_stock"]) == Decimal("5095")
+        assert Decimal(saved_31["balance"]["closing_adjustment"]) == Decimal("-5")
+
+        # Main landing view requests limit=5 and receives ONLY the latest 5 days with exact carry-forward!
+        recent_five = client.get("/api/v1/fuel-cost/entries", headers=headers, params={
+            "rig_id": rig_id, "limit": 5,
+        }).json()
+        assert len(recent_five) == 5
+        assert recent_five[0]["cost_date"] == day_31_iso
+        assert Decimal(recent_five[0]["balance"]["opening_stock"]) == Decimal("5200")
+        assert Decimal(recent_five[0]["balance"]["actual_closing_stock"]) == Decimal("5090")
+
+        # Rig summary reconciles inception and filtered windows without fetching all rows.
+        summary = client.get(f"/api/v1/fuel-cost/rigs/{rig_id}/summary", headers=headers).json()
+        assert summary["total_active_days"] == 31
+        assert summary["period_days"] == 31
+        assert Decimal(summary["opening_stock"]) == Decimal("10000")
+        assert Decimal(summary["receipt"]) == Decimal("1800")
+        assert Decimal(summary["total_consumption"]) == Decimal("6705")  # 6600 + 105
+        assert Decimal(summary["expected_closing_stock"]) == Decimal("5095")
+        assert Decimal(summary["actual_closing_stock"]) == Decimal("5090")
+        assert Decimal(summary["adjustments"]) == Decimal("-5")
+        assert Decimal(summary["rig_saving_litres"]) == Decimal("1095")  # 30*35 + 45
+
+        # Company & category roll-ups: Acme has 2 categories on day 31 -> day_count must be 1, not 2!
+        comp_report = client.get(f"/api/v1/fuel-cost/rigs/{rig_id}/company-consumption", headers=headers).json()
+        assert comp_report["active_day_count"] == 31
+        assert Decimal(comp_report["total_litres"]) == Decimal("3625")  # 360*10 + 25
+        assert Decimal(comp_report["rig_engine_litres"]) == Decimal("3080")
+        assert Decimal(comp_report["total_ago_litres"]) == Decimal("6705")
+        acme_summary = next(row for row in comp_report["company_rows"] if row["company_name"] == "Acme Fuel Services")
+        assert acme_summary["day_count"] == 1
+        assert acme_summary["line_count"] == 2
+        assert acme_summary["category_count"] == 2
+        assert Decimal(acme_summary["litres"]) == Decimal("25")
+        assert any(row["category_name"] == "Crew" for row in comp_report["category_rows"])
+        assert any(row["category_name"] == "Uncategorised" for row in comp_report["category_rows"])
+
+        # Server-paginated lines ledger (20 / 50 / 100) + search + filters + export audit.
+        page_1 = client.get(f"/api/v1/fuel-cost/rigs/{rig_id}/lines", headers=headers, params={
+            "page": 1, "page_size": 20,
+        }).json()
+        assert page_1["total_count"] == 362
+        assert Decimal(page_1["total_litres"]) == Decimal("3625")
+        assert len(page_1["rows"]) == 20
+
+        filtered_acme = client.get(f"/api/v1/fuel-cost/rigs/{rig_id}/lines", headers=headers, params={
+            "company_id": setup["acme"]["id"], "page": 1, "page_size": 20,
+        }).json()
+        assert filtered_acme["total_count"] == 2
+        assert Decimal(filtered_acme["total_litres"]) == Decimal("25")
+
+        filtered_uncat = client.get(f"/api/v1/fuel-cost/rigs/{rig_id}/lines", headers=headers, params={
+            "category_id": "__none__", "page": 1, "page_size": 50,
+        }).json()
+        assert filtered_uncat["total_count"] == 120  # 4 uncategorised contractors * 30 days
+        assert len(filtered_uncat["rows"]) == 50
+
+        for export_module in ("recent-register", "material-balance", "company-consumption", "category-consumption", "company-lines"):
+            audit_res = client.post("/api/v1/fuel-cost/export-audit", headers=headers, json={
+                "module": export_module,
+                "format": "xlsx",
+                "record_count": 20,
+                "rig_id": rig_id,
+            })
+            assert audit_res.status_code == 204, audit_res.text
+
