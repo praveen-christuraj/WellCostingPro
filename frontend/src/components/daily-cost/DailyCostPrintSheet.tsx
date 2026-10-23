@@ -167,10 +167,16 @@ function depthText(value: string | number | null | undefined, unit: string) {
   return meters === null ? '—' : `${decimalText(meters)} m`
 }
 
-/** Labels supplied as "CODE · Name" retain the descriptive name only in print. */
-function nameOnly(label: string) {
+/** Mud APIs append scope and depth to CODE · Name; report headers need the section name only. */
+function sectionNameOnly(label: string) {
   const parts = label.split(' · ').map(part => part.trim()).filter(Boolean)
-  return parts.length > 1 ? parts.slice(1).join(' · ') : (label || '—')
+  return parts.length > 1 ? parts[1] : (label || '—')
+}
+
+/** The server may use Miscellaneous Services as a fallback; do not print that caption. */
+function printedServiceGroup(group: string | null | undefined) {
+  const label = serviceGroupLabel(group)
+  return /\bmiscellaneous\b/i.test(label) ? '' : label
 }
 
 function costName(label: string) {
@@ -408,10 +414,11 @@ function ReportCover({ report }: { report: CostPrintReport }) {
       </thead>
       <tbody>{rows.map((row, index) => {
         const split = daySplit(row)
+        const groupLabel = printedServiceGroup(row.service_group)
         return <tr key={row.budget_key}>
           <td>
-            {grouped && serviceGroupLabel(row.service_group) && row.service_group !== rows[index - 1]?.service_group
-              && <span className="dcr-group">{row.service_group} · </span>}
+            {grouped && groupLabel && row.service_group !== rows[index - 1]?.service_group
+              && <span className="dcr-group">{groupLabel} · </span>}
             {costName(row.item_name)}
           </td>
           <td className="num">{printMoney(row.planned, currency)}</td>
@@ -455,7 +462,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
         <div className="dcr-topline">
           <section className="dcr-panel dcr-milestone"><h2>Reporting milestone</h2><dl><dt>{reportMilestoneLabel(report)}</dt><dd>{spud ? `${spud.replace('T', ' ').slice(0, 16)} hrs` : 'Not recorded'}</dd><dt>Current report date</dt><dd>{displayDate(reportDate)} · 24:00 hrs</dd></dl></section>
           <section className="dcr-panel dcr-depth"><h2>Section-wise planned depth &amp; current depth</h2><table><thead><tr><th>Section</th><th>Planned depth (m)</th><th>Current depth (m)</th></tr></thead><tbody>{sections.map(section => <tr key={section.hole_section_id}><td>{section.section_name}</td><td className="num">{depthText(section.to_depth, 'm')}</td><td className="num">{depthText(sectionDepths.get(section.hole_section_id), 'm')}</td></tr>)}</tbody></table></section>
-          <section className="dcr-panel dcr-time"><h2>Time position</h2><dl><dt>Planned</dt><dd>{decimalText(plannedDays)} days</dd><dt>Actual from spud</dt><dd>{decimalText(actualDays)} days</dd><dt>Actual against planned activities</dt><dd>{decimalText(plannedActivityDays)} days</dd><dt>NPT</dt><dd>{decimalText(nptDays)} days</dd><dt>UPA</dt><dd>{decimalText(upaDays)} days</dd></dl></section>
+          <section className="dcr-panel dcr-time"><h2>Time position</h2><dl><dt>Planned</dt><dd>{decimalText(plannedDays)} days</dd><dt>Actual</dt><dd>{decimalText(actualDays)} days</dd><dt>Actual against planned activities</dt><dd>{decimalText(plannedActivityDays)} days</dd><dt>NPT</dt><dd>{decimalText(nptDays)} days</dd><dt>UPA</dt><dd>{decimalText(upaDays)} days</dd></dl></section>
         </div>
         <CostTable title="Services cost · AFE vs last day, this day and cumulative" rows={services} position={servicePosition}
           day={serviceDay} grouped/>
@@ -474,13 +481,13 @@ function ReportCover({ report }: { report: CostPrintReport }) {
               Tangibles; the AFE vs actual summary follows it downward. */}
           <div className="dcr-stack">
             <section className="dcr-panel dcr-lih"><h2>LIH cost · manual register deduction from the AFE</h2><div><span>LIH cost <strong>{printMoney(lihTotal, currency)}</strong></span><span className="dcr-lih-deduct">Deducted from AFE <strong>{printMoney(lihTotal, currency)}</strong></span><span>Actual incl. LIH <strong>{printMoney(actualIncludingLih, currency)}</strong></span><span>AFE available after LIH <strong>{printMoney(afeAvailable, currency)}</strong></span></div><p className="dcr-lih-note">{lihEntryCount ? `${lihLineCount} item${lihLineCount === 1 ? '' : 's'} across ${lihEntryCount} LIH register day${lihEntryCount === 1 ? '' : 's'} · item detail prints on the cumulative pages.` : 'No LIH cost recorded for this report.'}</p></section>
-            <section className="dcr-panel dcr-overall"><h2>AFE vs actual summary</h2><table><tbody><tr><th>Services</th><td>{printMoney(servicePosition.planned, currency)}</td><td>{printMoney(servicePosition.actual, currency)}</td></tr><tr><th>Consumables</th><td>{printMoney(consumablePosition.planned, currency)}</td><td>{printMoney(consumablePosition.actual, currency)}</td></tr><tr><th>Tangibles</th><td>{printMoney(tangiblePosition.planned, currency)}</td><td>{printMoney(tangiblePosition.actual, currency)}</td></tr><tr><th>Other expenses</th><td>—</td><td>{printMoney(otherExpenses, currency)}</td></tr><tr><th>LIH cost · register</th><td>—</td><td>{printMoney(lihTotal, currency)}</td></tr><tr className="dcr-total"><th>Total</th><td>{printMoney(totalPlanned, currency)}</td><td>{printMoney(actualIncludingLih, currency)}</td></tr></tbody></table><p>AFE available after LIH {printMoney(afeAvailable, currency)} · Balance {printMoney(balance, currency)} · {percent(actualIncludingLih, totalPlanned)} used</p></section>
+            <section className="dcr-panel dcr-overall"><h2>AFE vs actual summary</h2><table><tbody><tr><th>Services</th><td>{printMoney(servicePosition.planned, currency)}</td><td>{printMoney(servicePosition.actual, currency)}</td></tr><tr><th>Consumables</th><td>{printMoney(consumablePosition.planned, currency)}</td><td>{printMoney(consumablePosition.actual, currency)}</td></tr><tr><th>Tangibles</th><td>{printMoney(tangiblePosition.planned, currency)}</td><td>{printMoney(tangiblePosition.actual, currency)}</td></tr><tr><th>Other expenses</th><td>—</td><td>{printMoney(otherExpenses, currency)}</td></tr><tr><th>LIH cost · register</th><td>—</td><td>{printMoney(lihTotal, currency)}</td></tr><tr className="dcr-total"><th>Total</th><td>{printMoney(totalPlanned, currency)}</td><td>{printMoney(actualIncludingLih, currency)}</td></tr></tbody></table><p>AFE available = {printMoney(balance, currency)} · {percent(actualIncludingLih, totalPlanned)} used</p></section>
           </div>
           <section className="dcr-panel dcr-mud-cost"><h2>Mud chemical cost · section-wise</h2><table><thead><tr><th>Section / mud</th><th>Planned</th><th>Actual</th><th>Reconciled</th></tr></thead><tbody>{mudSections.slice(0, 5).map(row => {
             const sectionFactor = summary?.factors.find(item => item.dimension === 'section')?.rows.find(item => item.code === ('section_code' in row ? row.section_code : ''))
-            return <tr key={row.section_id}><td>{nameOnly(row.section_label)} · {row.mud_type ?? 'Not configured'}</td><td className="num">{printMoney(sectionFactor?.planned ?? 0, currency)}</td><td className="num">{printMoney(row.actual_cost, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : printMoney(row.reconciled_cost, currency)}</td></tr>
+            return <tr key={row.section_id}><td>{sectionNameOnly(row.section_label)} · {row.mud_type ?? 'Not configured'}</td><td className="num">{printMoney(sectionFactor?.planned ?? 0, currency)}</td><td className="num">{printMoney(row.actual_cost, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : printMoney(row.reconciled_cost, currency)}</td></tr>
           })}{!mudSections.length && <tr><td colSpan={4} className="dcr-none">No mud reconciliation data.</td></tr>}</tbody></table></section>
-          <section className="dcr-panel dcr-loss dcr-loss-matrix"><h2>Consumption / losses · cumulative matrix</h2><table><thead><tr><th>Loss measure</th>{mudSections.map(row => <th key={row.section_id}>{nameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
+          <section className="dcr-panel dcr-loss dcr-loss-matrix"><h2>Consumption / losses · cumulative matrix</h2><table><thead><tr><th>Loss measure</th>{mudSections.map(row => <th key={row.section_id}>{sectionNameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
             <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Surface losses</th></tr>
             {lossMetricRows.filter(metric => metric.group === 'surface' || metric.group === 'surface-total').map(metric => <tr className={metric.group === 'surface-total' ? 'dcr-matrix-total' : ''} key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
             <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Other losses</th></tr>
@@ -491,7 +498,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
         </div>
       </div>
       <aside className="dcr-side">
-        <section className="dcr-panel dcr-mud-analysis"><h2>Mud cost analysis · section / mud type</h2><table><thead><tr><th>Measure</th>{mudSections.map(row => <th key={row.section_id}>{nameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
+        <section className="dcr-panel dcr-mud-analysis"><h2>Mud cost analysis · section / mud type</h2><table><thead><tr><th>Measure</th>{mudSections.map(row => <th key={row.section_id}>{sectionNameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
           {mudMatrixRows.map(metric => <tr key={metric.label}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
           {!mudSections.length && <tr><td colSpan={2} className="dcr-none">No mud material-balance data for this reporting period.</td></tr>}
         </tbody></table></section>

@@ -57,6 +57,8 @@ const second = { ...day, entry: { ...day.entry, id: 'd2', afe_id: 'afe2', afe_co
     budget_lines: [
       { budget_key: 'service:20', budget_kind: 'service', item_code: 'SVC-20', item_name: 'Directional drilling', service_group: 'Rig Operations', cost_group: 'Services', planned: '2000', actual_to_date: '400', balance: '1600', is_planned: true,
         actual_prior: '250', actual_today: '150', actual_planned: '400', actual_upa: '0', actual_npt: '0' },
+      { budget_key: 'service:10', budget_kind: 'service', item_code: 'SVC-10', item_name: 'Wireline logging', service_group: 'Miscellaneous Services', cost_group: 'Services', planned: '0', actual_to_date: '0', balance: '0', is_planned: true,
+        actual_prior: '0', actual_today: '0', actual_planned: '0', actual_upa: '0', actual_npt: '0' },
       { budget_key: 'service:03', budget_kind: 'service', item_code: 'SVC-03', item_name: 'Mud logging', service_group: 'Supervisions', cost_group: 'Services', planned: '1000', actual_to_date: '300', balance: '700', is_planned: true,
         actual_prior: '250', actual_today: '50', actual_planned: '250', actual_upa: '50', actual_npt: '0' },
       { budget_key: 'consumable:Fuel', budget_kind: 'consumable_category', item_code: 'Fuel', item_name: 'Fuel allowance', cost_group: 'Consumables', planned: '7000', actual_to_date: '100', balance: '6900', is_planned: true,
@@ -73,7 +75,7 @@ const second = { ...day, entry: { ...day.entry, id: 'd2', afe_id: 'afe2', afe_co
 }
 day.entry.section_depths = [{ hole_section_id: 'section-1', section_code: 'SURFACE', section_name: 'Surface hole', actual_depth: '1234.567', depth_unit: 'm', entered_depth: '1234.567', entered_unit: 'm', daily_cost_code: 'DC-1' }]
 second.entry.section_depths = day.entry.section_depths
-const mudReconciliation = { currency: 'EUR', sections: [{ section_id: 'section-1', hole_section_id: 'section-1', section_label: 'SURFACE · Surface hole', mud_type: 'OBM', additions: '60', total_mud: '90', consumption_losses: '15', cost_per_bbl: '12.5', reconciled_cost: '187.5', actual_cost: '200',
+const mudReconciliation = { currency: 'EUR', sections: [{ section_id: 'section-1', hole_section_id: 'section-1', section_label: 'SURFACE · Surface hole · Drilling · 0–1,500', mud_type: 'OBM', additions: '60', total_mud: '90', consumption_losses: '15', cost_per_bbl: '12.5', reconciled_cost: '187.5', actual_cost: '200',
   verti_g_mud_on_cuttings: '1', centrifuge: '2', by_pass: '3', evaporation: '4', trips: '5', surface_loss_total: '15',
   mud_cleaner: '6', formation_seepage: '7', pit_cleaning_dump: '8', left_in_hole: '9', other_losses: '10', other_loss_total: '40', total_losses: '55' }] }
 const mudBalance = { view: 'section', rows: [{ section_id: 'section-1', opening_stock: '20', receipt: '30', additions: '60', consumption_losses: '15', closing_stock: '95' }] }
@@ -87,8 +89,9 @@ assert.ok(sheet.querySelector('.daily-report-cover'), 'the model-report summary 
 assert.ok(sheet.querySelector('.daily-report-details'), 'cumulative schedules follow the cover')
 const coverPanels = sheet.querySelectorAll('.daily-report-cover .dcr-cost-panel')
 const serviceNames = [...coverPanels[0].querySelectorAll('tbody tr')].map(row => row.cells[0].textContent)
-assert.deepEqual(serviceNames, ['Rig Operations · Directional drilling', 'Supervisions · Mud logging'],
-  'services print in reporting-group order before the hidden service code')
+assert.deepEqual(serviceNames, ['Rig Operations · Directional drilling', 'Wireline logging', 'Supervisions · Mud logging'],
+  'services print in reporting-group order while suppressing the miscellaneous fallback caption')
+assert.ok(!coverPanels[0].textContent.includes('Miscellaneous'), 'services table never prints the miscellaneous fallback group')
 const consumableRows = [...coverPanels[1].querySelectorAll('tbody tr')]
 const consumableNames = consumableRows.map(row => row.cells[0].textContent)
 assert.deepEqual(consumableNames, ['Mud Chemicals', 'Cement Additives', 'Fuel', 'Drill Bits'], 'consumables print the four fixed category totals only')
@@ -152,12 +155,18 @@ const matrix = sheet.querySelector('.dcr-mud-analysis')
 for (const text of ['Surface hole', 'OBM', 'Opening Stock', 'Receipt', 'Additions', 'Total Mud', 'Losses', 'Closing Stock', 'Meterage (current depth)', 'Cost / BBL', 'Reconciled Cost', '20.00', '30.00', '60.00', '90.00', '15.00', '95.00', '1,234.57 m', '€12.50', '€187.50']) {
   assert.ok(matrix.textContent.includes(text), `mud matrix prints ${text}`)
 }
+assert.equal(matrix.querySelector('thead th:nth-child(2)').textContent, 'Surface holeOBM', 'mud analysis header prints only section and mud type')
 const lossMatrix = sheet.querySelector('.dcr-loss-matrix')
 assert.ok(lossMatrix, 'consumption and losses print as a matrix')
 for (const text of ['Surface hole', 'OBM', 'Surface losses', 'Verti-G/Mud on Cuttings', 'Centrifuge', 'By-Pass', 'Evaporation', 'Trips', 'Surface losses total', 'Other losses', 'Mud Cleaner', 'Formation/Seepage', 'Pit Cleaning/Dump', 'Left-In-Hole', '10.00', 'Other losses total', 'Total losses', '15.00', '40.00', '55.00']) {
   assert.ok(lossMatrix.textContent.includes(text), `loss matrix prints ${text}`)
 }
 assert.equal(lossMatrix.querySelectorAll('thead th').length, 2, 'loss matrix uses sections and mud types as columns')
+assert.equal(lossMatrix.querySelector('thead th:nth-child(2)').textContent, 'Surface holeOBM', 'loss header prints only section and mud type')
+assert.equal(sheet.querySelector('.dcr-mud-cost tbody tr td').textContent, 'Surface hole · OBM', 'mud chemical row prints only section and mud type')
+const afeSummaryNote = sheet.querySelector('.dcr-overall p').textContent
+assert.equal(afeSummaryNote, 'AFE available = €6,900.00 · 1.43% used', 'AFE summary labels the final balance as the available amount')
+assert.ok(!afeSummaryNote.includes('after LIH') && !afeSummaryNote.includes('Balance'), 'AFE summary removes the old after-LIH and duplicate balance wording')
 for (const code of ['DC-1', 'DC-2', 'AFE-1', 'AFE-2', 'WELL-1', 'RIG-1', 'SVC', 'SURFACE', 'DRL', 'DRILL', 'SA1', 'V1', 'T1', 'BAR']) {
   assert.ok(!sheet.textContent.includes(code), `${code} is omitted in favour of its name`)
 }
@@ -174,10 +183,10 @@ window.print = () => {
   assert.ok(printed.textContent.includes('Well one'), 'portal is mounted before window.print with the well name')
   assert.ok(printed.querySelector('.dcr-titlebar h1').textContent.endsWith('(LEAD/LAG: 0 days)'), 'no selection prints the zero lead/lag fallback')
   const timePosition = printed.querySelector('.dcr-time').textContent
-  for (const text of ['Planned', '10.13 days', 'Actual from spud', '8.13 days', 'Actual against planned activities', '6.13 days', 'NPT', '2.00 days', 'UPA', '0.00 days']) {
+  for (const text of ['Planned', '10.13 days', 'Actual', '8.13 days', 'Actual against planned activities', '6.13 days', 'NPT', '2.00 days', 'UPA', '0.00 days']) {
     assert.ok(timePosition.includes(text), `time position prints ${text}`)
   }
-  assert.ok(!timePosition.includes('Variance') && !timePosition.includes('Sheets / status'), 'time position omits variance and sheet status')
+  assert.ok(!timePosition.includes('from spud') && !timePosition.includes('Variance') && !timePosition.includes('Sheets / status'), 'time position omits the spud suffix, variance and sheet status')
 }
 await act(async () => trigger({ title: 'Daily sheet', period: 'Today', days: [day], milestoneLabel: 'Side track on date / time' }))
 assert.ok(printCalled)
