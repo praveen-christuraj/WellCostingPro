@@ -78,6 +78,7 @@ export default function RigWellOverview() {
       data: [
         { name: 'Draft', value: overview?.draft_wells ?? 0, itemStyle: { color: mode === 'dark' ? '#6E9DD0' : '#4A6F96' } },
         { name: 'Configured', value: overview?.configured_wells ?? 0, itemStyle: { color: mode === 'dark' ? '#8FB8E4' : '#123A63' } },
+        { name: 'Final review', value: overview?.final_review_wells ?? 0, itemStyle: { color: mode === 'dark' ? '#C9A227' : '#B8860B' } },
         { name: 'Completed', value: overview?.completed_wells ?? 0, itemStyle: { color: mode === 'dark' ? '#445F7D' : '#9BAFC5' } },
       ],
     }],
@@ -104,6 +105,7 @@ export default function RigWellOverview() {
         <StatCard label="Active wells" value={overview.active_wells} hint={`${overview.deleted_wells} deleted wells`} icon={<LanguageOutlined sx={{ fontSize: 18 }}/> } tone="blue"/>
         <StatCard label="In planning" value={overview.draft_wells} hint="Active wells with a draft plan" icon={<FactCheckOutlined sx={{ fontSize: 18 }}/> } tone="slate"/>
         <StatCard label="Configured" value={overview.configured_wells} hint={`${overview.completed_wells} completed wells`} icon={<TaskAltOutlined sx={{ fontSize: 18 }}/> } tone="blue"/>
+        <StatCard label="In final review" value={overview.final_review_wells} hint="Scopes marked for final review" icon={<TaskAltOutlined sx={{ fontSize: 18 }}/> } tone="blue"/>
         <StatCard label="Sub activities" value={overview.active_sub_activities} hint={`${overview.deleted_sub_activities} retained in Deleted Entries`} icon={<TaskAltOutlined sx={{ fontSize: 18 }}/>}/>
         <Paper className="stat-card" variant="outlined" sx={{ p: 2.2, borderRadius: 2, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <Typography color="text.secondary" fontSize={11} fontWeight={800} letterSpacing={.8} textTransform="uppercase">Operational structure</Typography>
@@ -141,7 +143,7 @@ export default function RigWellOverview() {
         </Paper>
         <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2, minHeight: 330 }}>
           <Typography fontFamily="Manrope" fontWeight={800} fontSize={15}>Well lifecycle</Typography>
-          <Typography color="text.secondary" fontSize={12} mt={.35} mb={1}>Draft, configured and completed status across active wells.</Typography>
+          <Typography color="text.secondary" fontSize={12} mt={.35} mb={1}>Draft, configured, final review and completed status across active wells.</Typography>
           <ReactECharts option={lifecycleOption} style={{ height: 268, width: '100%' }}/>
         </Paper>
       </Box>

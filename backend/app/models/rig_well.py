@@ -95,9 +95,9 @@ class Well(RigWellRecord):
     __table_args__ = (
         UniqueConstraint("organization_id", "well_code", name="uq_wells_org_code"),
         CheckConstraint("status IN ('active', 'completed')", name="ck_wells_status"),
-        CheckConstraint("config_status IN ('draft', 'configured')", name="ck_wells_config_status"),
+        CheckConstraint("config_status IN ('draft', 'configured', 'final_review')", name="ck_wells_config_status"),
         CheckConstraint("completion_status IN ('active', 'completed')", name="ck_wells_completion_status"),
-        CheckConstraint("completion_config_status IN ('draft', 'configured')", name="ck_wells_completion_config_status"),
+        CheckConstraint("completion_config_status IN ('draft', 'configured', 'final_review')", name="ck_wells_completion_config_status"),
         CheckConstraint("completion_depth_unit IN ('m', 'ft')", name="ck_wells_completion_depth_unit"),
         CheckConstraint("depth_unit IN ('m', 'ft')", name="ck_wells_depth_unit"),
         Index("ix_wells_org_rig", "organization_id", "rig_id"),

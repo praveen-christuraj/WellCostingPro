@@ -24,7 +24,8 @@ export type DailyCostSectionOption = {
 }
 export type DailyCostWellOption = {
   id: string; rig_id: string; well_code: string; well_name: string; display_name: string
-  status: string; config_status: string; sections: DailyCostSectionOption[]
+  status: string; config_status: string; completion_status: string; completion_config_status: string
+  sections: DailyCostSectionOption[]
 }
 export type WellScopeKey = 'drilling' | 'completion'
 export type DailyCostAfeOption = {

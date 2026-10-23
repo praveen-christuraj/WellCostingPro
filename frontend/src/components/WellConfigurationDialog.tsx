@@ -35,7 +35,7 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
   const [options, setOptions] = useState<RigWellConfigurationOptions>({ hole_sections: [], phases: [] })
   const [scope, setScope] = useState<'drilling' | 'completion'>('drilling')
   const [revision, setRevision] = useState(0)
-  const [transition, setTransition] = useState<'configure' | 'draft' | 'complete' | 'activate' | null>(null)
+  const [transition, setTransition] = useState<'configure' | 'draft' | 'final_review' | 'complete' | 'activate' | null>(null)
   const [transitionRemarks, setTransitionRemarks] = useState('')
   const [transitionError, setTransitionError] = useState('')
   const [dirty, setDirty] = useState(false)
@@ -197,7 +197,7 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
 
   const optionById = (items: MasterConfigurationOption[], id: string) => items.find(item => item.id === id)
 
-  const transitionLabels = { configure: 'Mark configured', draft: 'Reopen as Draft', complete: 'Mark completed', activate: 'Reactivate scope' }
+  const transitionLabels = { configure: 'Mark configured', draft: 'Reopen as Draft', final_review: 'Mark for final review', complete: 'Mark completed', activate: 'Reactivate scope' }
   const confirmTransition = async () => {
     if (!well || !transition) return
     setSaving(true)
@@ -240,7 +240,8 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
 
       {configuration && can('rig-well:update') && <Box display="flex" gap={1} flexWrap="wrap">
         {(configuration.status === 'completed' ? ['activate'] as const
-          : configuration.config_status === 'configured' ? ['draft', 'complete'] as const
+          : configuration.config_status === 'configured' ? ['draft', 'final_review'] as const
+          : configuration.config_status === 'final_review' ? ['complete'] as const
           : configuration.sections.length ? ['configure'] as const : []).map(action =>
           <Button key={action} size="small" variant="outlined" disabled={saving || dirty} onClick={() => { setTransitionRemarks(''); setTransitionError(''); setTransition(action) }}>{transitionLabels[action]}</Button>)}
       </Box>}

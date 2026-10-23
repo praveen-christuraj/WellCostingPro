@@ -30,8 +30,7 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
       : emptyForm())
   }, [open, record])
 
-  const wells = useMemo(() => (reference?.wells ?? []).filter(well => well.rig_id === form.rig_id), [reference, form.rig_id])
-  const selectedWell = wells.find(well => well.id === form.well_id)
+  const rigWells = useMemo(() => (reference?.wells ?? []).filter(well => well.rig_id === form.rig_id), [reference, form.rig_id])
   const scopeState = (well: AfeReference['wells'][number]) => form.configuration_scope === 'completion'
     ? { status: well.completion_status, config_status: well.completion_config_status, section_count: well.completion_section_count }
     : well
@@ -40,6 +39,15 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
     return (plan.status === 'active' && plan.config_status === 'configured' && plan.section_count > 0)
       || (well.id === record?.well_id && form.configuration_scope === record.configuration_scope)
   }
+  // The well picker lists only wells whose chosen scope is active and marked
+  // Configured (plus the well being edited, so it stays selectable).
+  const wells = useMemo(() => {
+    const list = rigWells.filter(wellEligible)
+    const selected = rigWells.find(well => well.id === form.well_id)
+    if (selected && !list.some(well => well.id === selected.id)) list.push(selected)
+    return list
+  }, [rigWells, form.well_id, record, form.configuration_scope])
+  const selectedWell = wells.find(well => well.id === form.well_id)
   const wellNote = (well: AfeReference['wells'][number]) => {
     const plan = scopeState(well)
     return plan.section_count === 0 ? ' · no scoped plan saved' : plan.status !== 'active' ? ' · scope completed' : plan.config_status !== 'configured' ? ' · scope not configured' : ''
@@ -105,7 +113,7 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
       <TextField
         select label="Well" required value={form.well_id} onChange={event => set('well_id', event.target.value)}
         disabled={!form.rig_id}
-        helperText={!form.rig_id ? 'Choose a rig first.' : !wells.length ? 'This rig has no wells yet.' : selectedWell && !wellEligible(selectedWell) ? 'This scoped plan is not active or not marked Configured.' : 'The selected scope must be active and have a plan marked Configured.'}
+        helperText={!form.rig_id ? 'Choose a rig first.' : !rigWells.length ? 'This rig has no wells yet.' : !wells.length ? 'No well on this rig has an active scope marked Configured.' : selectedWell && !wellEligible(selectedWell) ? 'This scoped plan is not active or not marked Configured.' : 'The selected scope must be active and have a plan marked Configured.'}
         error={Boolean(selectedWell) && !wellEligible(selectedWell!)}
       >
         {wells.map(well => <MenuItem key={well.id} value={well.id} disabled={!wellEligible(well)}>

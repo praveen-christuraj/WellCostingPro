@@ -214,7 +214,7 @@ class WellUpdate(BaseModel):
 
 class WellOut(BaseModel):
     completion_status: Literal["active", "completed"] = "active"
-    completion_config_status: Literal["draft", "configured"] = "draft"
+    completion_config_status: Literal["draft", "configured", "final_review"] = "draft"
     completion_section_count: int = 0
     id: str
     rig_id: str
@@ -231,12 +231,16 @@ class WellOut(BaseModel):
     objective: str
     remarks: str
     status: Literal["active", "completed"]
-    config_status: Literal["draft", "configured"]
+    config_status: Literal["draft", "configured", "final_review"]
     depth_unit: Literal["m", "ft"]
+    completion_depth_unit: Literal["m", "ft"]
     standard_depth_unit: Literal["m"] = "m"
     total_depth: Decimal | None = None
     total_depth_m: Decimal | None = None
     total_days: Decimal = Decimal("0")
+    completion_total_depth: Decimal | None = None
+    completion_total_depth_m: Decimal | None = None
+    completion_total_days: Decimal = Decimal("0")
     section_count: int = 0
     sub_activity_count: int = 0
     is_deleted: bool
@@ -319,7 +323,7 @@ class WellConfigurationOut(BaseModel):
     rig_code: str
     rig_name: str
     status: Literal["active", "completed"]
-    config_status: Literal["draft", "configured"]
+    config_status: Literal["draft", "configured", "final_review"]
     depth_unit: Literal["m", "ft"]
     standard_depth_unit: Literal["m"] = "m"
     total_depth: Decimal | None = None
@@ -330,7 +334,7 @@ class WellConfigurationOut(BaseModel):
 
 class WellTransitionIn(BaseModel):
     scope: Literal["drilling", "completion"] = "drilling"
-    action: Literal["configure", "draft", "complete", "activate"]
+    action: Literal["configure", "draft", "final_review", "complete", "activate"]
     remarks: str = Field(min_length=3, max_length=500)
 
     model_config = ConfigDict(extra="forbid")
@@ -514,6 +518,7 @@ class RigWellOverview(BaseModel):
     deleted_sub_activities: int
     configured_wells: int
     draft_wells: int
+    final_review_wells: int = 0
     completed_wells: int
     activity_counts: list[RigWellActivityCount]
     recent_activity: list[RigWellRecentActivity]
