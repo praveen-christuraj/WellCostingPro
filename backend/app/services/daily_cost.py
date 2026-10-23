@@ -820,6 +820,8 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
             display_name=_label(well.well_code, well.well_name), status=well.status, config_status=well.config_status,
             completion_status=well.completion_status,
             completion_config_status=well.completion_config_status,
+            drilling_is_deleted=well.drilling_is_deleted,
+            completion_is_deleted=well.completion_is_deleted,
             sections=[DailyCostSectionOption(
                 hole_section_id=section.hole_section_id, section_code=section.hole_section.section_code,
                 section_name=section.hole_section.section_name,
@@ -835,7 +837,9 @@ def reference_data(db: Session, organization_id: str) -> DailyCostReference:
         afes=afe_options,
         activities=[{"id": row.id, "activity_code": row.activity_code, "activity_name": row.activity_name, "display_name": _label(row.activity_code, row.activity_name)} for row in activities],
         sub_activities=[DailyCostSubActivityOption(
-            id=row.id, well_id=row.well_id, activity_id=row.activity_id, sub_activity_code=row.sub_activity_code,
+            id=row.id, well_id=row.well_id,
+            scope=(row.scope if row.scope in ("drilling", "completion") else "drilling"),
+            activity_id=row.activity_id, sub_activity_code=row.sub_activity_code,
             sub_activity_name=row.sub_activity_name, responsible_party=row.responsible_party,
             display_name=_label(row.sub_activity_code, row.sub_activity_name),
         ) for row in sub_activities],
@@ -888,10 +892,18 @@ def create_entry(db: Session, organization_id: str, data: DailyCostEntryCreate, 
     try:
         with _WRITE_LOCK:
             well = _well_or_422(db, organization_id, data.well_id)
+            afe = _afe_or_422(db, organization_id, data.afe_id, well.id)
+            entry_scope = afe.configuration_scope if afe.configuration_scope in ("drilling", "completion") else "drilling"
+            if well.scope_is_deleted(entry_scope):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Restore the {entry_scope} scope on {well.well_code} in Rig & Well Management before entering daily costs.",
+                )
             has_sub_activity = db.scalar(
                 select(WellSubActivity.id).where(
                     WellSubActivity.organization_id == organization_id,
                     WellSubActivity.well_id == well.id,
+                    WellSubActivity.scope == entry_scope,
                     WellSubActivity.is_deleted.is_(False),
                 ).limit(1)
             )
@@ -899,11 +911,10 @@ def create_entry(db: Session, organization_id: str, data: DailyCostEntryCreate, 
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        f"Configure the well sub activities for {well.well_code} in Rig & Well Management "
+                        f"Configure the {entry_scope} well sub activities for {well.well_code} in Rig & Well Management "
                         "before entering daily costs. Every daily cost line needs the Activity and Sub activity."
                     ),
                 )
-            afe = _afe_or_422(db, organization_id, data.afe_id, well.id)
             duplicate = db.scalar(select(DailyCostEntry.id).where(
                 DailyCostEntry.organization_id == organization_id, DailyCostEntry.well_id == well.id,
                 DailyCostEntry.afe_id == afe.id, DailyCostEntry.cost_date == data.cost_date,
@@ -1050,6 +1061,7 @@ def _get_sub_activity(
     sub_activity_id: str | None,
     activity_id: str,
     *,
+    expected_scope: str | None = None,
     existing: bool,
     label: str,
 ) -> WellSubActivity:
@@ -1072,6 +1084,11 @@ def _get_sub_activity(
         raise HTTPException(status_code=422, detail=f"{label}: select a sub activity configured for this well")
     if row.is_deleted and not existing:
         raise HTTPException(status_code=422, detail=f"{label}: the selected sub activity is inactive")
+    if not existing and expected_scope in ("drilling", "completion") and row.scope != expected_scope:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{label}: select a sub activity configured for this sheet's {expected_scope} scope",
+        )
     if row.activity_id != activity_id:
         raise HTTPException(status_code=422, detail=f"{label}: the sub activity must belong to the selected Master Data Activity")
     return row
@@ -1192,8 +1209,14 @@ def _base_fields(
         phase_id=data.phase_id,
         require_section=require_section,
     )
+    entry_scope = (
+        entry.afe.configuration_scope
+        if entry.afe is not None and entry.afe.configuration_scope in ("drilling", "completion")
+        else None
+    )
     sub_activity = _get_sub_activity(
         db, entry.organization_id, entry.well_id, data.sub_activity_id, activity.id,
+        expected_scope=entry_scope,
         existing=existing, label=label,
     )
     vendor = _get_vendor(db, entry.organization_id, data.vendor_id, existing=existing, label=label)
@@ -4541,8 +4564,15 @@ def import_daily_cost(
     vendor_rows = db.scalars(select(Vendor).where(
         Vendor.organization_id == organization_id, Vendor.is_deleted.is_(False), Vendor.status == "active"
     )).all()
+    entry_scope = (
+        entry.afe.configuration_scope
+        if entry.afe is not None and entry.afe.configuration_scope in ("drilling", "completion")
+        else "drilling"
+    )
     sub_activity_rows = db.scalars(select(WellSubActivity).where(
-        WellSubActivity.organization_id == organization_id, WellSubActivity.well_id == entry.well_id,
+        WellSubActivity.organization_id == organization_id,
+        WellSubActivity.well_id == entry.well_id,
+        WellSubActivity.scope == entry_scope,
         WellSubActivity.is_deleted.is_(False),
     )).all()
     section_map: dict[str, DailyCostBaselineSection] = {}

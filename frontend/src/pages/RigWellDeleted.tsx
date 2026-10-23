@@ -7,7 +7,17 @@ import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
-import { entityLabel, type DeletedRigWellRecord } from '../lib/rigWell'
+import { entityLabel, scopeLabel, type DeletedRigWellRecord } from '../lib/rigWell'
+
+function selectionPayload(target: DeletedRigWellRecord) {
+  return target.entity_type === 'well' && target.scope
+    ? { entity_type: target.entity_type, id: target.id, scope: target.scope }
+    : { entity_type: target.entity_type, id: target.id }
+}
+
+function scopeQuery(target: DeletedRigWellRecord): string {
+  return target.entity_type === 'well' && target.scope ? `?scope=${encodeURIComponent(target.scope)}` : ''
+}
 
 export default function RigWellDeleted() {
   const { can } = useAuth()
@@ -42,10 +52,11 @@ export default function RigWellDeleted() {
     try {
       if (targets.length === 1) {
         const target = targets[0]
-        await api(`/rig-well/${target.entity_type === 'well_sub_activity' ? 'sub-activities' : `${target.entity_type}s`}/${target.id}/restore`, { method: 'POST' })
+        const collection = target.entity_type === 'well_sub_activity' ? 'sub-activities' : `${target.entity_type}s`
+        await api(`/rig-well/${collection}/${target.id}/restore${scopeQuery(target)}`, { method: 'POST' })
       } else {
         await api('/rig-well/deleted/bulk-restore', {
-          method: 'POST', body: body({ records: targets.map(target => ({ entity_type: target.entity_type, id: target.id })) }),
+          method: 'POST', body: body({ records: targets.map(selectionPayload) }),
         })
       }
       setNotice(`${targets.length} ${targets.length === 1 ? 'record was' : 'records were'} restored.`)
@@ -70,10 +81,10 @@ export default function RigWellDeleted() {
     try {
       if (purgeRecord) {
         const collection = purgeRecord.entity_type === 'well_sub_activity' ? 'sub-activities' : `${purgeRecord.entity_type}s`
-        await api(`/rig-well/${collection}/${purgeRecord.id}/permanent`, { method: 'DELETE' })
+        await api(`/rig-well/${collection}/${purgeRecord.id}/permanent${scopeQuery(purgeRecord)}`, { method: 'DELETE' })
       } else {
         await api('/rig-well/deleted/bulk-permanent-delete', {
-          method: 'POST', body: body({ records: targets.map(target => ({ entity_type: target.entity_type, id: target.id })) }),
+          method: 'POST', body: body({ records: targets.map(selectionPayload) }),
         })
       }
       setPurgeOpen(false)
@@ -103,8 +114,8 @@ export default function RigWellDeleted() {
     {
       headerName: 'ACTIONS', width: 240, minWidth: 240, maxWidth: 240, flex: 0, sortable: false,
       cellRenderer: ({ data }: { data: DeletedRigWellRecord }) => data && <Box display="flex" alignItems="center" height="100%" gap={.5}>
-        {can('rig-well:restore') && <Button size="small" disabled={restoring} onClick={() => void restoreRows([data])} aria-label={`Restore ${data.code}`} startIcon={<RestoreRounded sx={{ fontSize: 16 }}/>}>Restore</Button>}
-        {can('rig-well:permanent-delete') && <Button size="small" color="error" onClick={() => openPurge(data)} aria-label={`Permanently delete ${data.code}`} startIcon={<DeleteForeverOutlined sx={{ fontSize: 16 }}/>}>Permanently delete</Button>}
+        {can('rig-well:restore') && <Button size="small" disabled={restoring} onClick={() => void restoreRows([data])} aria-label={`Restore ${data.code}${data.scope ? ` ${scopeLabel(data.scope)}` : ''}`} startIcon={<RestoreRounded sx={{ fontSize: 16 }}/>}>Restore</Button>}
+        {can('rig-well:permanent-delete') && <Button size="small" color="error" onClick={() => openPurge(data)} aria-label={`Permanently delete ${data.code}${data.scope ? ` ${scopeLabel(data.scope)}` : ''}`} startIcon={<DeleteForeverOutlined sx={{ fontSize: 16 }}/>}>Permanently delete</Button>}
       </Box>,
     },
   ], [can, restoring])
@@ -122,19 +133,20 @@ export default function RigWellDeleted() {
     />
 
     <Alert severity="warning" sx={{ mb: 1.8 }} action={can('master-data:read') ? <Button component={RouterLink} to="/master-data/deleted" size="small">Master Data deleted entries</Button> : undefined}>
-      Permanent deletion is irreversible. Restore parent records first; a block stays pinned while any well record (including deleted wells) references it, and a rig or well is purged only after its child wells, sub activities, AFEs and daily-cost sheets are deleted. Configuration sections, phases, plan revisions and the locked daily-cost rate book are removed with their well once every sheet that priced from it is purged. Restore an Activity from Master Data before restoring sub activities assigned to it.
+      Permanent deletion is irreversible. Restore parent records first; a block stays pinned while any well record (including deleted wells) references it, and a rig or well scope is purged only after its own sub activities, AFEs and daily-cost sheets are deleted. Configuration sections, phases, plan revisions and the locked daily-cost rate book are removed with their well once every sheet that priced from it is purged. Restore an Activity from Master Data before restoring sub activities assigned to it.
     </Alert>
     {notice && <Alert severity="success" onClose={() => setNotice('')} sx={{ mb: 1.5 }}>{notice}</Alert>}
     <ErrorMessage message={error}/>
     <Paper variant="outlined" sx={{ p: { xs: 1.5, sm: 2.2 }, mb: 1.5, borderRadius: 2 }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
-        <Box><Typography fontWeight={800} fontSize={15}>Deleted Rig & Well records</Typography><Typography color="text.secondary" fontSize={12} mt={.35}>{rows.length} retained {rows.length === 1 ? 'record' : 'records'} across blocks, rigs, wells and well sub activities.</Typography></Box>
+        <Box><Typography fontWeight={800} fontSize={15}>Deleted Rig &amp; Well records</Typography><Typography color="text.secondary" fontSize={12} mt={.35}>{rows.length} retained {rows.length === 1 ? 'record' : 'records'} across blocks, rigs, well scopes and well sub activities.</Typography></Box>
       </Box>
     </Paper>
     {loading ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <DataTable
       fillHeight
       rows={rows}
       columns={columns}
+      rowKey={row => `${row.entity_type}:${row.id}:${row.scope ?? 'all'}`}
       searchPlaceholder="Search deleted codes, names, parent scope..."
       exportName="rig-well-deleted-entries"
       canExport={can('rig-well:export')}
@@ -146,7 +158,7 @@ export default function RigWellDeleted() {
     <FormDialog
       open={purgeOpen}
       title="Permanently delete these records?"
-      subtitle="This action cannot be undone. The API checks that required child entries are included or already removed."
+      subtitle="This action cannot be undone. The API checks that required child entries for each selected record or well scope are included or already removed."
       onClose={() => { if (!purging) { setPurgeOpen(false); setPurgeRecord(null) } }}
       onSubmit={() => void confirmPurge()}
       busy={purging}

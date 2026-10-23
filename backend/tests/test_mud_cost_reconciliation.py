@@ -384,8 +384,8 @@ def test_consumption_loss_report_groups_totals_drills_and_exports():
             line("pit_cleaning_dump", "8"),
             line("left_in_hole", "9"),
             line("consumption_losses_others", "10"),
-            # Historical loss fields remain represented in the requested
-            # matrix by rolling into the final Other-loss row.
+            # Legacy Shakers rolls into Other losses; the separate Others
+            # adjustment category (offline_centrifuge_loss) is excluded from loss reporting.
             line("shakers", "11"),
             line("offline_centrifuge_loss", "12"),
         ])
@@ -404,15 +404,15 @@ def test_consumption_loss_report_groups_totals_drills_and_exports():
         assert daily["selected_section_count"] == 2
         assert daily["entry_count"] == 3
         assert Decimal(daily["surface_loss_total"]) == 19
-        assert Decimal(daily["other_loss_total"]) == 69
-        assert Decimal(daily["total_losses"]) == 88
+        assert Decimal(daily["other_loss_total"]) == 57
+        assert Decimal(daily["total_losses"]) == 76
 
         first = next(row for row in daily["rows"] if row["cost_date"] == "2026-10-11")
         assert first["mud_type"] == "OBM"
         assert Decimal(first["surface_loss_total"]) == 15
-        assert Decimal(first["other_losses"]) == 33
-        assert Decimal(first["other_loss_total"]) == 63
-        assert Decimal(first["total_losses"]) == 78
+        assert Decimal(first["other_losses"]) == 21
+        assert Decimal(first["other_loss_total"]) == 51
+        assert Decimal(first["total_losses"]) == 66
         assert Decimal(first["surface_loss_total"]) + Decimal(first["other_loss_total"]) == Decimal(first["total_losses"])
 
         monthly = _json(client, "get", f"/api/v1/mud-cost/consumption-losses?{query}&view=monthly", headers)
@@ -420,7 +420,7 @@ def test_consumption_loss_report_groups_totals_drills_and_exports():
         assert len(monthly["rows"]) == 3  # October has one row per section; November one.
         october_obm = next(row for row in monthly["rows"] if row["period_label"] == "October 2026" and row["mud_type"] == "OBM")
         assert october_obm["entry_count"] == 1
-        assert Decimal(october_obm["total_losses"]) == 78
+        assert Decimal(october_obm["total_losses"]) == 66
 
         section_id = scope["sections"][0]["id"]
         ranged = _json(
@@ -432,7 +432,7 @@ def test_consumption_loss_report_groups_totals_drills_and_exports():
         assert ranged["entry_count"] == 1
         assert len(ranged["rows"]) == 1
         assert ranged["rows"][0]["period_label"].startswith("Selected range")
-        assert Decimal(ranged["total_losses"]) == 78
+        assert Decimal(ranged["total_losses"]) == 66
 
         inception = _json(
             client, "get",
@@ -441,13 +441,13 @@ def test_consumption_loss_report_groups_totals_drills_and_exports():
         )
         assert inception["from_date"] is None
         assert inception["entry_count"] == 2  # Inception intentionally ignores From.
-        assert Decimal(inception["total_losses"]) == 81
+        assert Decimal(inception["total_losses"]) == 69
 
         reconciliation = _json(client, "get", f"/api/v1/mud-cost/reconciliation?{query}&to=2026-11-30", headers)
         obm = next(row for row in reconciliation["sections"] if row["mud_type"] == "OBM")
         assert Decimal(obm["surface_loss_total"]) == 16
-        assert Decimal(obm["other_loss_total"]) == 65
-        assert Decimal(obm["total_losses"]) == 81
+        assert Decimal(obm["other_loss_total"]) == 53
+        assert Decimal(obm["total_losses"]) == 69
 
         invalid = client.get(
             f"/api/v1/mud-cost/consumption-losses?{query}&section_id=missing", headers=headers,

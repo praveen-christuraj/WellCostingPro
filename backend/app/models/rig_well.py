@@ -127,6 +127,15 @@ class Well(RigWellRecord):
     completion_config_status: Mapped[str] = mapped_column(String(20), default="draft", server_default="draft", nullable=False)
     completion_depth_unit: Mapped[str] = mapped_column(String(10), default="m", server_default="m", nullable=False)
 
+    # Independent per-scope soft-delete and permanent-purge flags so an unused scope
+    # (for example Completion when only Drilling is planned) can be deleted on its own.
+    drilling_is_deleted: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    drilling_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    drilling_purged: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    completion_is_deleted: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    completion_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completion_purged: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+
     # Daily-cost register progress milestones, one pair per configuration scope.
     # Naive datetimes keep the exact site-entered local date & time: actual days
     # count from the Well Spud Date & Time up to the Progress Completed Date &
@@ -144,6 +153,26 @@ class Well(RigWellRecord):
 
     def set_scope_value(self, scope: str, field: str, value: str) -> None:
         setattr(self, f"completion_{field}" if scope == "completion" else field, value)
+
+    def scope_is_deleted(self, scope: str) -> bool:
+        if self.is_deleted:
+            return True
+        return bool(self.completion_is_deleted if scope == "completion" else self.drilling_is_deleted)
+
+    def scope_deleted_at(self, scope: str) -> datetime | None:
+        return self.completion_deleted_at if scope == "completion" else self.drilling_deleted_at
+
+    def scope_is_purged(self, scope: str) -> bool:
+        return bool(self.completion_purged if scope == "completion" else self.drilling_purged)
+
+    def sync_deleted_from_scopes(self, timestamp: datetime | None = None) -> None:
+        if self.drilling_is_deleted and self.completion_is_deleted:
+            self.is_deleted = True
+            if self.deleted_at is None:
+                self.deleted_at = timestamp or self.completion_deleted_at or self.drilling_deleted_at
+        else:
+            self.is_deleted = False
+            self.deleted_at = None
 
     rig: Mapped[Rig] = relationship(back_populates="wells", lazy="joined")
     block_record: Mapped[Block] = relationship(back_populates="wells", lazy="joined")

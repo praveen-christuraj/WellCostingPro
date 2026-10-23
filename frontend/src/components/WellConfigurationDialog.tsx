@@ -23,9 +23,10 @@ const numberValue = (value: string) => {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
+export function WellConfigurationDialog({ open, well, initialScope, onClose, onSaved }: {
   open: boolean
   well: Well | null
+  initialScope?: 'drilling' | 'completion'
   onClose: () => void
   onSaved: () => void
 }) {
@@ -39,7 +40,14 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
   const [transitionRemarks, setTransitionRemarks] = useState('')
   const [transitionError, setTransitionError] = useState('')
   const [dirty, setDirty] = useState(false)
-  useEffect(() => { if (open) { setScope('drilling'); setDirty(false); setTransition(null) } }, [open, well?.id])
+  useEffect(() => {
+    if (!open) return
+    const defaultScope: 'drilling' | 'completion' = initialScope
+      ?? (well?.drilling_is_deleted && !well?.completion_is_deleted ? 'completion' : 'drilling')
+    setScope(defaultScope)
+    setDirty(false)
+    setTransition(null)
+  }, [open, well?.id, initialScope])
   const [configuration, setConfiguration] = useState<WellConfiguration | null>(null)
   const [sections, setSections] = useState<SectionInput[]>([])
   const [depthUnit, setDepthUnit] = useState<'m' | 'ft'>('m')
@@ -229,8 +237,8 @@ export function WellConfigurationDialog({ open, well, onClose, onSaved }: {
     <TextField select label="Well scope" fullWidth value={scope} disabled={loading || saving || dirty}
       onChange={event => { setError(''); setScope(event.target.value as 'drilling' | 'completion') }}
       helperText={dirty ? 'Save the draft before switching scopes, or Cancel to discard edits.' : 'Each scope has its own sections, phases, depths, planned days and lifecycle.'} sx={{ mb: 2 }}>
-      <MenuItem value="drilling">Drilling Well Configuration</MenuItem>
-      <MenuItem value="completion">Completion Well Configuration</MenuItem>
+      <MenuItem value="drilling" disabled={Boolean(well?.drilling_is_deleted)}>Drilling Well Configuration{well?.drilling_is_deleted ? ' (deleted)' : ''}</MenuItem>
+      <MenuItem value="completion" disabled={Boolean(well?.completion_is_deleted)}>Completion Well Configuration{well?.completion_is_deleted ? ' (deleted)' : ''}</MenuItem>
     </TextField>
     {loading ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26}/></Box> : <Box display="grid" gap={2} pt={.5}>
       {configuration && <Box display="flex" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap" sx={{ bgcolor: 'action.hover', borderRadius: 2, px: 2, py: 1.3 }}>

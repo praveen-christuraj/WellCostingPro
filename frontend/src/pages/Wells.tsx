@@ -21,6 +21,7 @@ import {
   type ImportResult,
   type RigOption,
   type Well,
+  type WellConfigurationScope,
   type WellPayload,
 } from '../lib/rigWell'
 
@@ -34,14 +35,15 @@ const TABS: { key: WellTab; label: string }[] = [
 
 type TransitionAction = 'configure' | 'draft' | 'final_review' | 'complete' | 'activate'
 
-type ScopeRow = { well: Well; scope: 'drilling' | 'completion' }
+type ScopeRow = { well: Well; scope: WellConfigurationScope }
 
-function scopeState(well: Well, scope: 'drilling' | 'completion') {
+function scopeState(well: Well, scope: WellConfigurationScope) {
   return scope === 'completion'
     ? {
         status: well.completion_status,
         config_status: well.completion_config_status,
         section_count: well.completion_section_count,
+        sub_activity_count: well.completion_sub_activity_count ?? 0,
         total_depth: well.completion_total_depth,
         total_depth_m: well.completion_total_depth_m,
         total_days: well.completion_total_days,
@@ -51,6 +53,7 @@ function scopeState(well: Well, scope: 'drilling' | 'completion') {
         status: well.status,
         config_status: well.config_status,
         section_count: well.section_count,
+        sub_activity_count: well.drilling_sub_activity_count ?? 0,
         total_depth: well.total_depth,
         total_depth_m: well.total_depth_m,
         total_days: well.total_days,
@@ -58,7 +61,7 @@ function scopeState(well: Well, scope: 'drilling' | 'completion') {
       }
 }
 
-function scopeName(scope: 'drilling' | 'completion') {
+function scopeName(scope: WellConfigurationScope) {
   return scope === 'drilling' ? 'Drilling' : 'Completion'
 }
 
@@ -83,9 +86,10 @@ function WellActions({
   onDelete,
   onTransition,
   onAdjustPlan,
+  onActivateOtherScope,
 }: {
   well: Well
-  scope: 'drilling' | 'completion'
+  scope: WellConfigurationScope
   canEdit: boolean
   canDelete: boolean
   canAdjustPlan: boolean
@@ -94,9 +98,12 @@ function WellActions({
   onDelete: () => void
   onTransition: (action: TransitionAction) => void
   onAdjustPlan: () => void
+  onActivateOtherScope: (otherScope: WellConfigurationScope) => void
 }) {
   const plan = scopeState(well, scope)
   const label = scopeName(scope)
+  const otherScope: WellConfigurationScope = scope === 'drilling' ? 'completion' : 'drilling'
+  const otherIsMissing = otherScope === 'completion' ? well.completion_purged : well.drilling_purged
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const menuOpen = Boolean(anchor)
   const close = () => setAnchor(null)
@@ -104,13 +111,20 @@ function WellActions({
   return (
     <Box display="flex" alignItems="center" height="100%" gap={.1}>
       {canEdit && <Button size="small" aria-label={`Edit well ${well.well_code}`} onClick={onEdit} startIcon={<EditOutlined sx={{ fontSize: 15 }}/>}>Edit</Button>}
-      <Tooltip title="View or edit well plan">
+      <Tooltip title={`View or edit ${label.toLowerCase()} well plan`}>
         <IconButton size="small" aria-label={`${canEdit ? 'Configure' : 'View'} ${label} plan ${well.well_code}`} onClick={onConfigure}><TuneRounded fontSize="small"/></IconButton>
       </Tooltip>
-      <Tooltip title="Open this well's sub activities">
-        <IconButton component={RouterLink} to={`/rig-well/sub-activities?rig_id=${encodeURIComponent(well.rig_id)}&well_id=${encodeURIComponent(well.id)}`} size="small" aria-label={`Open sub activities for ${well.well_code}`}><ListAltRounded fontSize="small"/></IconButton>
+      <Tooltip title={`Open ${label.toLowerCase()} sub activities`}>
+        <IconButton
+          component={RouterLink}
+          to={`/rig-well/sub-activities?rig_id=${encodeURIComponent(well.rig_id)}&well_id=${encodeURIComponent(well.id)}&scope=${scope}`}
+          size="small"
+          aria-label={`Open ${label} sub activities for ${well.well_code}`}
+        >
+          <ListAltRounded fontSize="small"/>
+        </IconButton>
       </Tooltip>
-      {canAdjustPlan && plan.config_status === 'configured' && <Tooltip title="SOW plan adjustments (planned days)">
+      {canAdjustPlan && plan.config_status === 'configured' && <Tooltip title={`SOW plan adjustments (${label.toLowerCase()} planned days)`}>
         <Button size="small" onClick={onAdjustPlan}>Plan adj.</Button>
       </Tooltip>}
       {(canEdit || canDelete) && <>
@@ -122,7 +136,8 @@ function WellActions({
           {canEdit && plan.status === 'active' && plan.config_status === 'configured' && <MenuItem onClick={() => action('draft')}>Reopen {label} as Draft</MenuItem>}
           {canEdit && plan.status === 'active' && plan.config_status === 'configured' && <MenuItem onClick={() => action('final_review')}>Mark {label} for final review</MenuItem>}
           {canEdit && plan.status === 'active' && plan.config_status === 'final_review' && <MenuItem onClick={() => action('complete')}>Mark {label} completed</MenuItem>}
-          {canDelete && <MenuItem sx={{ color: 'error.main' }} onClick={() => { close(); onDelete() }}>Move to Deleted Entries</MenuItem>}
+          {canEdit && otherIsMissing && <MenuItem onClick={() => { close(); onActivateOtherScope(otherScope) }}>Add {scopeName(otherScope)} scope</MenuItem>}
+          {canDelete && <MenuItem sx={{ color: 'error.main' }} onClick={() => { close(); onDelete() }}>Move {label} scope to Deleted Entries</MenuItem>}
         </Menu>
       </>}
     </Box>
@@ -157,6 +172,18 @@ const transitionCopy: Record<TransitionAction, { title: (scope: string) => strin
   },
 }
 
+const SCOPE_PRESETS: { value: string; label: string; scopes: WellConfigurationScope[] }[] = [
+  { value: 'both', label: 'Drilling & Completion', scopes: ['drilling', 'completion'] },
+  { value: 'drilling', label: 'Drilling only (no completion planned)', scopes: ['drilling'] },
+  { value: 'completion', label: 'Completion only', scopes: ['completion'] },
+]
+
+function scopePresetValue(scopes: WellConfigurationScope[]): string {
+  if (scopes.includes('drilling') && scopes.includes('completion')) return 'both'
+  if (scopes.includes('completion')) return 'completion'
+  return 'drilling'
+}
+
 export default function Wells() {
   const { can } = useAuth()
   const [params, setParams] = useSearchParams()
@@ -178,11 +205,11 @@ export default function Wells() {
   const [saving, setSaving] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [deleteRecord, setDeleteRecord] = useState<Well | null>(null)
+  const [deleteRecord, setDeleteRecord] = useState<ScopeRow | null>(null)
   const [deleteError, setDeleteError] = useState('')
   const [deleting, setDeleting] = useState(false)
-  const [configurationTarget, setConfigurationTarget] = useState<Well | null>(null)
-  const [adjustTarget, setAdjustTarget] = useState<Well | null>(null)
+  const [configurationTarget, setConfigurationTarget] = useState<ScopeRow | null>(null)
+  const [adjustTarget, setAdjustTarget] = useState<ScopeRow | null>(null)
   const [transitionTarget, setTransitionTarget] = useState<ScopeRow | null>(null)
   const [transitionAction, setTransitionAction] = useState<TransitionAction>('configure')
   const [transitionRemarks, setTransitionRemarks] = useState('')
@@ -212,10 +239,12 @@ export default function Wells() {
 
   useEffect(() => { void load() }, [load])
 
-  const scopeRows = useMemo<ScopeRow[]>(() => rows.flatMap(well => [
-    { well, scope: 'drilling' },
-    { well, scope: 'completion' },
-  ]), [rows])
+  const scopeRows = useMemo<ScopeRow[]>(() => rows.flatMap(well => {
+    const out: ScopeRow[] = []
+    if (!well.drilling_is_deleted) out.push({ well, scope: 'drilling' })
+    if (!well.completion_is_deleted) out.push({ well, scope: 'completion' })
+    return out
+  }), [rows])
 
   const tabRows = useMemo<ScopeRow[]>(() => scopeRows.filter(row => {
     const { status, config_status } = scopeState(row.well, row.scope)
@@ -252,15 +281,27 @@ export default function Wells() {
       well_location: well.well_location,
       objective: well.objective,
       remarks: well.remarks,
+      scopes: ['drilling', 'completion'],
     })
     setFormError('')
     setFormOpen(true)
   }
 
+  const activateScope = async (well: Well, scope: WellConfigurationScope) => {
+    setError('')
+    try {
+      await api(`/rig-well/wells/${well.id}/scopes/${scope}/activate`, { method: 'POST' })
+      setNotice(`${scopeName(scope)} scope added to ${well.well_code}.`)
+      await load()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Well scope could not be added')
+    }
+  }
+
   const save = async () => {
     setSaving(true)
     setFormError('')
-    const payload = {
+    const basePayload = {
       rig_id: form.rig_id,
       block_id: form.block_id,
       well_code: form.well_code.trim(),
@@ -271,10 +312,13 @@ export default function Wells() {
     }
     try {
       if (formRecord) {
-        await api(`/rig-well/wells/${formRecord.id}`, { method: 'PATCH', body: body(payload) })
+        await api(`/rig-well/wells/${formRecord.id}`, { method: 'PATCH', body: body(basePayload) })
         setNotice(`${formRecord.well_code} was updated.`)
       } else {
-        const created = await api<Well>('/rig-well/wells', { method: 'POST', body: body(payload) })
+        const created = await api<Well>('/rig-well/wells', {
+          method: 'POST',
+          body: body({ ...basePayload, scopes: form.scopes }),
+        })
         setNotice(`${created.well_code} was created under ${created.rig_code} in block ${created.block_code}.`)
       }
       setFormOpen(false)
@@ -287,28 +331,35 @@ export default function Wells() {
     }
   }
 
-  const openDelete = (well?: Well) => {
-    setDeleteRecord(well ?? null)
+  const openDelete = (target?: ScopeRow) => {
+    setDeleteRecord(target ?? null)
     setDeleteError('')
     setDeleteOpen(true)
   }
   const confirmDelete = async () => {
     setDeleting(true)
     setDeleteError('')
-    const targets = deleteRecord ? [deleteRecord] : selectedRows.map(row => row.well)
+    const targets = deleteRecord ? [deleteRecord] : selectedRows
     try {
       if (deleteRecord) {
-        await api(`/rig-well/wells/${deleteRecord.id}`, { method: 'DELETE' })
+        await api(`/rig-well/wells/${deleteRecord.well.id}?scope=${deleteRecord.scope}`, { method: 'DELETE' })
       } else {
-        await api('/rig-well/wells/bulk-delete', { method: 'POST', body: body({ ids: targets.map(well => well.id) }) })
+        await api('/rig-well/wells/bulk-delete', {
+          method: 'POST',
+          body: body({ items: targets.map(item => ({ id: item.well.id, scope: item.scope })) }),
+        })
       }
       setDeleteOpen(false)
       setDeleteRecord(null)
       setSelectedRows([])
-      setNotice(`${targets.length} ${targets.length === 1 ? 'well was' : 'wells were'} moved to Deleted Entries.`)
+      setNotice(
+        targets.length === 1
+          ? `${targets[0].well.well_code} (${scopeName(targets[0].scope)}) was moved to Deleted Entries.`
+          : `${targets.length} well scopes were moved to Deleted Entries.`,
+      )
       await load()
     } catch (caught) {
-      setDeleteError(caught instanceof Error ? caught.message : 'Could not move these wells to Deleted Entries')
+      setDeleteError(caught instanceof Error ? caught.message : 'Could not move these well scopes to Deleted Entries')
     } finally {
       setDeleting(false)
     }
@@ -357,7 +408,7 @@ export default function Wells() {
     }
   }
 
-    const columns = useMemo<ColDef<ScopeRow>[]>(() => [
+  const columns = useMemo<ColDef<ScopeRow>[]>(() => [
     { headerName: 'WELL CODE', field: 'well.well_code', minWidth: 125, flex: .75 },
     { headerName: 'WELL NAME', field: 'well.well_name', minWidth: 180, flex: 1.1 },
     { headerName: 'RIG', field: 'well.rig_display', minWidth: 170, flex: 1 },
@@ -395,7 +446,7 @@ export default function Wells() {
     },
     {
       headerName: 'SUB ACTIVITIES', minWidth: 125, maxWidth: 145,
-      valueGetter: params => params.data ? scopeState(params.data.well, params.data.scope).section_count : 0,
+      valueGetter: params => params.data ? scopeState(params.data.well, params.data.scope).sub_activity_count : 0,
       valueFormatter: params => Number(params.value ?? 0).toLocaleString(),
     },
     { headerName: 'UPDATED', field: 'well.updated_at', minWidth: 135, valueFormatter: params => params.value ? new Date(params.value).toLocaleDateString() : '' },
@@ -408,10 +459,11 @@ export default function Wells() {
         canDelete={can('rig-well:delete')}
         canAdjustPlan={can('rig-well:plan-adjust')}
         onEdit={() => openEdit(data.well)}
-        onConfigure={() => setConfigurationTarget(data.well)}
-        onDelete={() => openDelete(data.well)}
+        onConfigure={() => setConfigurationTarget(data)}
+        onDelete={() => openDelete(data)}
         onTransition={action => openTransition(data, action)}
-        onAdjustPlan={() => setAdjustTarget(data.well)}
+        onAdjustPlan={() => setAdjustTarget(data)}
+        onActivateOtherScope={otherScope => void activateScope(data.well, otherScope)}
       />,
     },
   ], [can])
@@ -424,7 +476,7 @@ export default function Wells() {
       <PageHeading
         eyebrow="RIG & WELL MANAGEMENT / WELL REGISTER"
         title="Wells"
-        subtitle="Every well belongs to one active rig. Each well tracks its Drilling and Completion scopes separately, with its own plan, AFEs and cost registers. Configured scopes are active wells; completed scopes move to the Completed wells tab."
+        subtitle="Every well belongs to one active rig. Each well tracks its Drilling and Completion scopes separately, with its own plan, sub activities, AFEs and cost registers. Unused scopes can be moved to Deleted Entries independently."
         action={<Box display="flex" gap={1} flexWrap="wrap">
           <Button component={RouterLink} to="/rig-well/deleted" variant="outlined" startIcon={<DeleteOutlineRounded/>}>Deleted entries</Button>
           {can('rig-well:create') && <Button variant="contained" startIcon={<AddRounded/>} onClick={openCreate} disabled={!rigs.length || !blocks.length}>Add well</Button>}
@@ -467,8 +519,8 @@ export default function Wells() {
               {can('rig-well:delete') && <Button color="error" variant="outlined" size="small" startIcon={<DeleteOutlineRounded/>} disabled={!selectedRows.length} onClick={() => openDelete()}>Move {selectedRows.length || ''} to Deleted Entries</Button>}
             </Box>
           </Box>
-          {selectedRows.length > 0 && <Alert severity="warning" sx={{ mt: 1.5 }}>
-            {selectedRows.length} scope row{selectedRows.length === 1 ? '' : 's'} selected. Moving a well to Deleted Entries moves the whole well, not just this scope.
+          {selectedRows.length > 0 && <Alert severity="info" sx={{ mt: 1.5 }}>
+            {selectedRows.length} scope row{selectedRows.length === 1 ? '' : 's'} selected. Only the selected scope{selectedRows.length === 1 ? '' : 's'} will be moved to Deleted Entries; any active sibling scope remains untouched.
           </Alert>}
         </Paper>
         {loading ? <Box py={8} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26} /></Box> : <DataTable
@@ -511,6 +563,22 @@ export default function Wells() {
               {blocks.map(block => <MenuItem key={block.id} value={block.id}>{block.display_name}</MenuItem>)}
             </TextField>
           </Box>
+          {!formRecord && (
+            <TextField
+              select
+              label="Planned scopes"
+              required
+              fullWidth
+              value={scopePresetValue(form.scopes)}
+              onChange={event => {
+                const preset = SCOPE_PRESETS.find(item => item.value === event.target.value)
+                setForm({ ...form, scopes: preset ? [...preset.scopes] : ['drilling', 'completion'] })
+              }}
+              helperText="Choose both scopes or start with only Drilling / Completion. You can add or remove scopes independently later."
+            >
+              {SCOPE_PRESETS.map(item => <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>)}
+            </TextField>
+          )}
           <TextField label="Objective" required fullWidth multiline minRows={2} value={form.objective} onChange={event => setForm({ ...form, objective: event.target.value })} inputProps={{ maxLength: 500 }} />
           <TextField label="Remarks" fullWidth multiline minRows={2} value={form.remarks} onChange={event => setForm({ ...form, remarks: event.target.value })} inputProps={{ maxLength: 1000 }} />
           <ErrorMessage message={formError} />
@@ -519,15 +587,19 @@ export default function Wells() {
 
       <FormDialog
         open={deleteOpen}
-        title="Move well to Deleted Entries?"
-        subtitle="A well with active sub activities cannot be deleted. Move its sub activities to Deleted Entries first."
+        title={deleteRecord ? `Move ${scopeName(deleteRecord.scope)} scope to Deleted Entries?` : 'Move selected well scopes to Deleted Entries?'}
+        subtitle="Only dependencies belonging to the selected scope (its sub activities, AFEs and cost entries) are checked. Sibling active scopes remain untouched."
         onClose={() => { if (!deleting) { setDeleteOpen(false); setDeleteRecord(null) } }}
         onSubmit={() => void confirmDelete()}
         busy={deleting}
         submitLabel="Move to Deleted Entries"
       >
         <Box display="grid" gap={1.5} pt={.5}>
-          <Typography fontSize={13}>{deleteRecord ? `“${deleteRecord.well_code} — ${deleteRecord.well_name}” under ${deleteRecord.rig_code} will be moved to Deleted Entries.` : `${selectedRows.length} selected wells will be moved to Deleted Entries.`}</Typography>
+          <Typography fontSize={13}>
+            {deleteRecord
+              ? `The ${scopeName(deleteRecord.scope)} scope of “${deleteRecord.well.well_code} — ${deleteRecord.well.well_name}” under ${deleteRecord.well.rig_code} will be moved to Deleted Entries.`
+              : `${selectedRows.length} selected well scope${selectedRows.length === 1 ? '' : 's'} will be moved to Deleted Entries.`}
+          </Typography>
           <ErrorMessage message={deleteError} />
         </Box>
       </FormDialog>
@@ -546,14 +618,16 @@ export default function Wells() {
 
       <WellConfigurationDialog
         open={!!configurationTarget}
-        well={configurationTarget}
+        well={configurationTarget?.well ?? null}
+        initialScope={configurationTarget?.scope}
         onClose={() => setConfigurationTarget(null)}
         onSaved={() => { setNotice('Scoped well configuration updated.'); void load() }}
       />
 
       {adjustTarget && <PlanAdjustmentDialog
         open={!!adjustTarget}
-        well={adjustTarget}
+        well={adjustTarget.well}
+        initialScope={adjustTarget.scope}
         onClose={() => setAdjustTarget(null)}
         onChanged={() => { setNotice('Plan adjustment recorded.'); void load() }}
       />}

@@ -312,6 +312,8 @@ export type AfeReference = {
     completion_config_status: string
     completion_status: string
     completion_section_count: number
+    drilling_is_deleted?: boolean
+    completion_is_deleted?: boolean
     id: string; rig_id: string; well_code: string; well_name: string; display_name: string; status: string
     config_status: string; total_days: string; total_depth: string | null; depth_unit: string; section_count: number
   }[]

@@ -25,6 +25,7 @@ export type DailyCostSectionOption = {
 export type DailyCostWellOption = {
   id: string; rig_id: string; well_code: string; well_name: string; display_name: string
   status: string; config_status: string; completion_status: string; completion_config_status: string
+  drilling_is_deleted?: boolean; completion_is_deleted?: boolean
   sections: DailyCostSectionOption[]
 }
 export type WellScopeKey = 'drilling' | 'completion'
@@ -35,7 +36,7 @@ export type DailyCostAfeOption = {
 }
 export type DailyCostActivityOption = { id: string; activity_code: string; activity_name: string; display_name: string }
 export type DailyCostSubActivityOption = {
-  id: string; well_id: string; activity_id: string; sub_activity_code: string
+  id: string; well_id: string; scope?: WellScopeKey; activity_id: string; sub_activity_code: string
   sub_activity_name: string; responsible_party: string; display_name: string
 }
 export type DailyCostServiceOption = {

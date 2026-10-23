@@ -340,6 +340,8 @@ class DailyCostWellOption(BaseModel):
     config_status: str
     completion_status: str = "active"
     completion_config_status: str = "draft"
+    drilling_is_deleted: bool = False
+    completion_is_deleted: bool = False
     sections: list[DailyCostSectionOption]
 
 
@@ -369,6 +371,7 @@ class DailyCostActivityOption(BaseModel):
 class DailyCostSubActivityOption(BaseModel):
     id: str
     well_id: str
+    scope: Literal["drilling", "completion"] = "drilling"
     activity_id: str
     sub_activity_code: str
     sub_activity_name: str

@@ -33,6 +33,7 @@ type Props = {
   baseline: DailyCostBaseline
   reference: DailyCostReference
   wellId: string
+  scope?: 'drilling' | 'completion'
   onClose: () => void
   onApply: (updates: Selection[]) => void
 }
@@ -49,7 +50,7 @@ function rateQuantityUnit(basis: string, category: string): DailyQuantityUnit {
 }
 
 export function DailyCostBulkScopeDialog({
-  open, selections, allLines, baseline, reference, wellId, onClose, onApply,
+  open, selections, allLines, baseline, reference, wellId, scope = 'drilling', onClose, onApply,
 }: Props) {
   const [activityId, setActivityId] = useState('')
   const [subActivityId, setSubActivityId] = useState('')
@@ -65,8 +66,10 @@ export function DailyCostBulkScopeDialog({
   const [error, setError] = useState('')
 
   const subActivities = useMemo(
-    () => reference.sub_activities.filter(item => item.well_id === wellId && item.activity_id === activityId),
-    [reference.sub_activities, activityId, wellId],
+    () => reference.sub_activities.filter(
+      item => item.well_id === wellId && (item.scope ?? 'drilling') === scope && item.activity_id === activityId,
+    ),
+    [reference.sub_activities, activityId, wellId, scope],
   )
   const sections = baseline.sections
   const selectedSection = sections.find(section => section.hole_section_id === sectionId)
@@ -105,7 +108,7 @@ export function DailyCostBulkScopeDialog({
   const setActivity = (nextActivityId: string) => {
     setActivityId(nextActivityId)
     if (!reference.sub_activities.some(item =>
-      item.id === subActivityId && item.well_id === wellId && item.activity_id === nextActivityId,
+      item.id === subActivityId && item.well_id === wellId && (item.scope ?? 'drilling') === scope && item.activity_id === nextActivityId,
     )) setSubActivityId('')
     setError('')
   }
@@ -114,7 +117,7 @@ export function DailyCostBulkScopeDialog({
     setError('')
     if (!activityId) { setError('Select one Activity for the selected service lines.'); return }
     const selectedSub = reference.sub_activities.find(item =>
-      item.id === subActivityId && item.well_id === wellId && item.activity_id === activityId,
+      item.id === subActivityId && item.well_id === wellId && (item.scope ?? 'drilling') === scope && item.activity_id === activityId,
     )
     if (!selectedSub) { setError('Select a well sub activity that belongs to this well and Activity.'); return }
 

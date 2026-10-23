@@ -331,6 +331,70 @@ assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog
 assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
 assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
+
+// Verify scoped Well Sub Activities and per-scope Well lifecycle across UI sources and live dialog rendering.
+const { MemoryRouter } = await import('react-router-dom')
+const { DailyCostLineDialog } = await import('../../frontend/src/components/daily-cost/DailyCostLineDialog')
+const scopedBaseline = {
+  id: 'base-1', rate_baseline_id: 'rb-1', afe_id: 'afe-comp-1', afe_code: 'AFE-COMP-1', afe_name: 'Completion AFE',
+  standard_currency: 'USD', total_amount: '10000', locked_at: '2026-10-01T00:00:00Z', locked_by: 'Owner',
+  afe_estimate_saved_at: '2026-10-01T00:00:00Z', catalogue_rates: [], budget_lines: [], exchange_rates: {},
+  sections: [{ hole_section_id: 'sec-c1', section_code: 'COMP', section_name: 'Completion', from_depth: '0', to_depth: '1500', total_days: '5', phases: [{ phase_id: 'ph-c1', phase_code: 'RUN', phase_name: 'Run Tubing', days: '5' }] }],
+  service_rates: [{ id: 'sr-1', service_id: 'svc-1', source_afe_line_id: 'al-1', service_code: 'SVC-1', service_name: 'Completion Service', charging_basis: 'Day Rate', rate_kind: 'day_rate', charge_category: 'Operation', hole_section_id: null, section_label: '', phase_id: null, phase_label: '', unit_rate: '2000', currency: 'USD', display_name: 'SVC-1 · Completion Service' }],
+}
+const scopedReference = {
+  rigs: [{ id: 'rig-1', rig_code: 'RIG-1', rig_name: 'Rig One', display_name: 'RIG-1 — Rig One' }],
+  wells: [{ id: 'well-1', rig_id: 'rig-1', well_code: 'WELL-1', well_name: 'Well One', display_name: 'WELL-1 — Well One', status: 'active', config_status: 'configured', completion_status: 'active', completion_config_status: 'configured', sections: [] }],
+  afes: [{ id: 'afe-comp-1', well_id: 'well-1', afe_code: 'AFE-COMP-1', afe_name: 'Completion AFE', afe_type: 'Completion', status: 'approved', configuration_scope: 'completion', standard_currency: 'USD', total_cost: '10000', estimate_saved_at: '2026-10-01T00:00:00Z', display_name: 'AFE-COMP-1 · Completion AFE' }],
+  activities: [{ id: 'act-1', activity_code: 'COMP', activity_name: 'Completion Operations', display_name: 'COMP · Completion Operations' }],
+  sub_activities: [
+    {
+      id: 'sub-drl-only', well_id: 'well-1', scope: 'drilling', activity_id: 'act-1',
+      sub_activity_code: 'DRL-ONLY', sub_activity_name: 'Drill surface hole', responsible_party: 'Not Applicable',
+      display_name: 'DRL-ONLY · Drill surface hole',
+    },
+    {
+      id: 'sub-comp-only', well_id: 'well-1', scope: 'completion', activity_id: 'act-1',
+      sub_activity_code: 'COMP-ONLY', sub_activity_name: 'Run completion tubing', responsible_party: 'Not Applicable',
+      display_name: 'COMP-ONLY · Run completion tubing',
+    },
+  ],
+  services: [{ id: 'svc-1', service_code: 'SVC-1', service_name: 'Completion Service', service_category: 'Completion', service_group: 'Rig Operations', provider_type: 'External', vendor_id: 'vnd-1', vendor_code: 'V1', vendor_name: 'Vendor One', display_name: 'SVC-1 · Completion Service' }],
+  catalogue_items: [],
+  vendors: [{ id: 'vnd-1', vendor_code: 'V1', vendor_name: 'Vendor One', vendor_type: 'Contractor', status: 'active', display_name: 'V1 · Vendor One' }],
+  currencies: ['USD'],
+  charge_categories: ['Operation'],
+  charge_bases: ['Day Rate'],
+  quantity_units: ['days', 'hours', 'service', 'section', 'unit'],
+  classifications: ['Planned', 'UPA', 'NPT'],
+  consumable_categories: ['Mud Chemicals', 'Cement Additives', 'Fuel', 'Drill Bits'],
+  other_expense_types: [],
+}
+const scopedRoot = createRoot(document.createElement('div'))
+await act(async () => scopedRoot.render(<MemoryRouter><ThemeProvider theme={buildTheme('light')}>
+  <DailyCostLineDialog
+    open kind="service" initialLine={null} serviceLines={[]} lineIndex={null}
+    baseline={scopedBaseline} reference={scopedReference} wellId="well-1" scope="completion"
+    onClose={() => {}} onSave={() => {}}
+  />
+</ThemeProvider></MemoryRouter>))
+await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+assert.ok(document.body.textContent.includes('COMP-ONLY · Run completion tubing'), 'completion sheet selects completion sub-activity')
+assert.ok(!document.body.textContent.includes('DRL-ONLY · Drill surface hole'), 'completion sheet excludes drilling sub-activity')
+await act(async () => scopedRoot.unmount())
+
+const subActivitiesPage = readFileSync('../frontend/src/pages/WellSubActivities.tsx', 'utf8')
+for (const required of ['label="Well scope"', 'scope: selectedScope', 'well_id=${encodeURIComponent(selectedWellId)}`', 'key={`${selectedWellId}:${selectedScope}`}']) {
+  assert.ok(subActivitiesPage.includes(required), `well sub activities page retains ${required}`)
+}
+const wellsPage = readFileSync('../frontend/src/pages/Wells.tsx', 'utf8')
+for (const required of ['?scope=${deleteRecord.scope}', 'sub_activity_count', '&scope=${scope}', 'drilling_is_deleted', 'completion_is_deleted']) {
+  assert.ok(wellsPage.includes(required), `wells register retains ${required}`)
+}
+const rigWellDeletedPage = readFileSync('../frontend/src/pages/RigWellDeleted.tsx', 'utf8')
+for (const required of ['row => `${row.entity_type}:${row.id}:${row.scope ?? \'all\'}`', '? `?scope=${encodeURIComponent(target.scope)}`']) {
+  assert.ok(rigWellDeletedPage.includes(required), `rig-well deleted page retains ${required}`)
+}
 console.log('Daily cost checks passed: advanced consumable/tangible bulk selection with required usage, locked prices and show-selected-only review, the same selector reused by the AFE tangible estimate, bulk depth/quantity/unit controls, editable milestone and lead/lag title suffix, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud and loss matrices, group-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
 
 dom.window.close()

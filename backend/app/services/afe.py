@@ -198,7 +198,11 @@ def _wells_by_id(db: Session, organization_id: str, well_ids: Iterable[str]) -> 
         return {}
     rows = db.scalars(
         select(Well)
-        .options(joinedload(Well.rig), selectinload(Well.sections).selectinload(WellSection.phases))
+        .options(
+            joinedload(Well.rig),
+            selectinload(Well.sections).selectinload(WellSection.phases),
+            selectinload(Well.completion_sections).selectinload(WellSection.phases),
+        )
         .where(Well.organization_id == organization_id, Well.id.in_(ids))
     ).unique().all()
     return {well.id: well for well in rows}
@@ -1225,6 +1229,11 @@ def _check_well_and_rig(db: Session, organization_id: str, rig_id: str, well_id:
         raise HTTPException(status_code=422, detail="The selected well does not belong to the selected rig.")
     if well.rig is None or well.rig.is_deleted:
         raise HTTPException(status_code=409, detail="Restore the well's rig before creating AFEs for this well.")
+    if well.scope_is_deleted(configuration_scope):
+        raise HTTPException(
+            status_code=422,
+            detail=f"The {configuration_scope} scope on well {well.well_code} is deleted. Restore or add it in Rig & Well Management first.",
+        )
     if not well.sections_for_scope(configuration_scope):
         raise HTTPException(
             status_code=422,
@@ -1433,8 +1442,8 @@ def _ensure_restorable(db: Session, organization_id: str, afe: Afe) -> None:
     well = _wells_by_id(db, organization_id, [afe.well_id]).get(afe.well_id)
     if rig is None or rig.is_deleted:
         raise HTTPException(status_code=409, detail="Restore the rig for this AFE first.")
-    if well is None or well.is_deleted:
-        raise HTTPException(status_code=409, detail="Restore the well for this AFE first.")
+    if well is None or well.is_deleted or well.scope_is_deleted(afe.configuration_scope):
+        raise HTTPException(status_code=409, detail="Restore the well and configuration scope for this AFE first.")
 
 
 def bulk_restore(db: Session, organization_id: str, data: AfeIDs, user: User, request: Request | None) -> int:
@@ -1775,7 +1784,10 @@ def reference_data(db: Session, organization_id: str) -> AfeReference:
     wells = list(
         db.scalars(
             select(Well)
-            .options(selectinload(Well.sections))
+            .options(
+                selectinload(Well.sections).selectinload(WellSection.phases),
+                selectinload(Well.completion_sections).selectinload(WellSection.phases),
+            )
             .where(Well.organization_id == organization_id, Well.is_deleted.is_(False))
             .order_by(Well.well_code)
         ).all()
@@ -1824,6 +1836,8 @@ def reference_data(db: Session, organization_id: str) -> AfeReference:
                 completion_config_status=well.completion_config_status,
                 completion_status=well.completion_status,
                 completion_section_count=len(well.completion_sections),
+                drilling_is_deleted=well.drilling_is_deleted,
+                completion_is_deleted=well.completion_is_deleted,
                 total_days=sum((phase.days for section in well.sections for phase in section.phases), Decimal("0")),
                 total_depth=sorted(well.sections, key=lambda row: row.sort_order)[-1].to_depth if well.sections else None,
                 depth_unit=well.depth_unit,

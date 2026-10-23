@@ -450,9 +450,10 @@ export default function DailyCostSheet() {
       ?? reference.activities.find(item => deriveClassification(item) === 'Planned')?.id
       ?? reference.activities[0]?.id
       ?? ''
+    const sheetScope = reference.afes.find(item => item.id === day.entry.afe_id)?.configuration_scope ?? 'drilling'
     const activity = reference.activities.find(item => item.id === preferredActivityId)
     const subActivity = reference.sub_activities.find(item =>
-      item.well_id === day.entry.well_id && item.activity_id === preferredActivityId,
+      item.well_id === day.entry.well_id && (item.scope ?? 'drilling') === sheetScope && item.activity_id === preferredActivityId,
     )
     const defaultSection = baseline.sections[0]
     const defaultPhase = defaultSection?.phases[0]
@@ -830,8 +831,9 @@ export default function DailyCostSheet() {
     const unit = rate?.charging_basis === 'Per Service Rate' ? 'service'
       : rate?.charging_basis === 'Per Section Rate' ? 'section'
         : ['Mobilization', 'Demobilization', 'Fixed Charge'].includes(category) ? 'unit' : 'days'
+    const sheetScope = reference.afes.find(item => item.id === entry.afe_id)?.configuration_scope ?? 'drilling'
     const activityCode = reference.activities[0]?.activity_code || 'DRILL'
-    const subActivityCode = reference.sub_activities.find(item => item.well_id === entry.well_id)?.sub_activity_code ?? ''
+    const subActivityCode = reference.sub_activities.find(item => item.well_id === entry.well_id && (item.scope ?? 'drilling') === sheetScope)?.sub_activity_code ?? ''
     downloadTemplate('daily-cost-import-template.csv', importHeaders, [
       {
         line_type: 'Service', activity_code: activityCode,
@@ -1204,6 +1206,7 @@ export default function DailyCostSheet() {
       baseline={baseline}
       reference={reference}
       wellId={entry.well_id}
+      scope={reference.afes.find(item => item.id === entry.afe_id)?.configuration_scope ?? 'drilling'}
       onClose={() => setBulkScopeOpen(false)}
       onApply={applyBulkServiceScope}
     />
@@ -1225,6 +1228,7 @@ export default function DailyCostSheet() {
       serviceLines={payload.services}
       lineIndex={lineEditor?.kind === 'service' ? lineEditor.index : null}
       baseline={baseline} reference={reference} wellId={entry.well_id}
+      scope={reference.afes.find(item => item.id === entry.afe_id)?.configuration_scope ?? 'drilling'}
       onClose={() => setLineEditor(null)} onSave={addOrEditLine}
     />
 
