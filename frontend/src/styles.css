@@ -439,9 +439,29 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-eyebrow { color: #4A6F96; font-size: 6.2pt; font-weight: 700; letter-spacing: .65pt; text-transform: uppercase; margin-bottom: .6mm; }
   .daily-cost-print-sheet .dcr-report-meta { display: grid; justify-items: end; gap: .35mm; text-align: right; white-space: nowrap; }
   .daily-cost-print-sheet .dcr-report-meta strong { color: #0B2A47; font-size: 8pt; }
-  .daily-cost-print-sheet .dcr-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 2.12fr) minmax(0, 1fr); gap: 1.2mm; }
-  .daily-cost-print-sheet .dcr-main { min-width: 0; display: grid; grid-template-rows: auto auto auto auto 1fr; gap: 1.05mm; }
-  .daily-cost-print-sheet .dcr-side { min-width: 0; display: grid; grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1fr); gap: 1.05mm; }
+  .daily-cost-print-sheet .dcr-layout {
+    --dcr-lower-row-height: 58mm;
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 2.12fr) minmax(0, 1fr);
+    gap: 1.2mm;
+  }
+  /* Both report columns finish on the same fixed lower row. The left side gives
+     the released height to its two cost schedules; the top and tangible panels
+     retain their content height. */
+  .daily-cost-print-sheet .dcr-main {
+    min-width: 0;
+    display: grid;
+    grid-template-rows: max-content minmax(auto, 1.25fr) minmax(auto, .75fr) max-content var(--dcr-lower-row-height);
+    gap: 1.05mm;
+  }
+  .daily-cost-print-sheet .dcr-side {
+    min-width: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr) var(--dcr-lower-row-height);
+    gap: 1.05mm;
+  }
   .daily-cost-print-sheet .dcr-panel { min-width: 0; border: .55pt solid #B9CCE0; break-inside: avoid; overflow: hidden; }
   .daily-cost-print-sheet .dcr-panel h2 {
     font-size: 6.3pt;
@@ -457,10 +477,13 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
     print-color-adjust: exact;
   }
   .daily-cost-print-sheet .dcr-topline { display: grid; grid-template-columns: .85fr 1.55fr .8fr; gap: 1.05mm; }
-  .daily-cost-print-sheet .dcr-bottomline { min-height: 0; display: grid; grid-template-columns: 1fr 1fr 1.18fr; gap: 1.05mm; }
+  .daily-cost-print-sheet .dcr-bottomline { min-height: 0; height: var(--dcr-lower-row-height); display: grid; grid-template-columns: 1fr 1fr 1.18fr; gap: 1.05mm; }
   /* The LIH register panel takes the bottom-left slot under Tangibles; the AFE
-     vs actual summary stacks below it rather than staying beside the mud cost. */
-  .daily-cost-print-sheet .dcr-stack { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto 1fr; gap: 1.05mm; }
+     vs actual summary stacks below it. Their combined height, the section mud
+     cost, the loss matrix and the UPA summary all resolve to the shared row. */
+  .daily-cost-print-sheet .dcr-stack { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: minmax(0, .37fr) minmax(0, .63fr); gap: 1.05mm; }
+  .daily-cost-print-sheet .dcr-bottomline > .dcr-panel,
+  .daily-cost-print-sheet .dcr-side > .dcr-incident:last-child { height: var(--dcr-lower-row-height); }
   .daily-cost-print-sheet .dcr-panel table { table-layout: fixed; margin: 0; font-size: 5.7pt; line-height: 1.08; }
   .daily-cost-print-sheet .dcr-panel th,
   .daily-cost-print-sheet .dcr-panel td { padding: .42mm .55mm; border-color: #B9CCE0; }
@@ -480,9 +503,11 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-panel tfoot th,
   .daily-cost-print-sheet .dcr-panel tfoot td { font-weight: 800; background: #F3F6FA !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   /* AFE | up to last day | cost on the report day | cumulative | balance | used. */
+  .daily-cost-print-sheet .dcr-cost-panel { display: grid; grid-template-rows: max-content minmax(0, 1fr); }
   .daily-cost-print-sheet .dcr-cost-panel table { font-size: 5.55pt; line-height: 1.05; }
+  .daily-cost-print-sheet .dcr-cost-panel table { height: 100%; }
   .daily-cost-print-sheet .dcr-cost-panel th,
-  .daily-cost-print-sheet .dcr-cost-panel td { padding: .26mm .34mm; }
+  .daily-cost-print-sheet .dcr-cost-panel td { padding: .38mm .34mm; }
   .daily-cost-print-sheet .dcr-cost-panel thead th { font-size: 4.6pt; line-height: 1.02; padding-top: .2mm; padding-bottom: .2mm; }
   .daily-cost-print-sheet .dcr-cost-panel table th:first-child { width: 27%; }
   .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(2) { width: 12.5%; }

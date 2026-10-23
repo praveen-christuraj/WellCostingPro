@@ -135,6 +135,12 @@ for (const heading of [
   'Mud chemical cost · section-wise', 'Consumption / losses · cumulative', 'Mud cost analysis · section / mud type',
   'NPT summary', 'UPA summary',
 ]) assert.ok(sheet.textContent.includes(heading), `cover prints ${heading}`)
+const lowerRow = sheet.querySelector('.dcr-bottomline')
+assert.deepEqual([...lowerRow.children].map(node => node.classList.contains('dcr-stack') ? 'stack' : node.classList.contains('dcr-mud-cost') ? 'mud' : 'loss'),
+  ['stack', 'mud', 'loss'], 'lower-row placement stays LIH/AFE stack, mud cost, then consumption/losses')
+assert.deepEqual([...lowerRow.querySelector('.dcr-stack').children].map(node => node.classList.contains('dcr-lih') ? 'LIH' : 'AFE'),
+  ['LIH', 'AFE'], 'LIH and AFE summary remain a double-decker in the bottom-left slot')
+assert.ok(sheet.querySelector('.dcr-side > .dcr-incident:last-child').textContent.includes('UPA summary'), 'UPA remains the far-right lower panel')
 assert.ok(sheet.textContent.includes('Side track on date / time'), 'the report prints the user-edited milestone label')
 assert.ok(sheet.querySelector('.dcr-titlebar h1').textContent.endsWith('(LEAD: 2.75 days)'), 'selected decimal lead days print at the end of the title')
 assert.ok(validLeadLagDays('LAG', '0.125') && !validLeadLagDays('LAG', '') && !validLeadLagDays('LEAD', '-1'), 'lead/lag validation accepts non-negative decimals only')
@@ -360,6 +366,10 @@ assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog
 assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
 assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
+assert.ok(styles.includes('--dcr-lower-row-height: 58mm'), 'the four lower columns share one compact physical height')
+assert.ok(styles.includes('grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr) var(--dcr-lower-row-height)'), 'UPA resolves to the shared lower-row height')
+assert.ok(styles.includes('height: var(--dcr-lower-row-height); display: grid; grid-template-columns: 1fr 1fr 1.18fr'), 'LIH/AFE, mud cost and losses resolve to the same lower-row height')
+assert.ok(styles.includes('.dcr-cost-panel table { height: 100%; }'), 'service and consumable table rows absorb the released vertical space')
 
 // Verify scoped Well Sub Activities and per-scope Well lifecycle across UI sources and live dialog rendering.
 const { MemoryRouter } = await import('react-router-dom')
