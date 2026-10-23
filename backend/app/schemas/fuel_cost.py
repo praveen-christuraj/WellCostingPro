@@ -4,6 +4,11 @@ The register is rig-scoped and quantity-based: every value is litres. No prices
 or currencies are stored, so a fuel day joins no AFE estimate and needs no
 exchange rate.
 
+``gas_consumption`` / ``rig_saving_litres`` represents **Rig Saving (litres)** —
+the AGO saved through gas usage on the rig. Both field names are accepted on
+write/import and returned on read for seamless compatibility, and the value is
+always kept outside AGO consumption and the physical stock balance.
+
 Material balance fields are returned, never accepted: opening stock is derived
 from the preceding actual closing (or captured once on the first day), the book
 closing is opening + receipts − AGO consumption, and the adjustments reconcile
@@ -15,18 +20,18 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.precision import Decimal10
 
-# One rig's day is generous at a million litres; the ceiling only stops absurd input.
+# One rig's day is generous at a billion litres; the ceiling only stops absurd input.
 MAX_LITRES = Decimal("1000000000")
 MAX_COMPANY_NAME = 200
 MAX_CATEGORY_NAME = 120
 MAX_REMARKS = 500
 MAX_DAY_REMARKS = 1000
-MAX_LINES_PER_DAY = 200
-MAX_IMPORT_ROWS = 2000
+MAX_LINES_PER_DAY = 1000
+MAX_IMPORT_ROWS = 25000
 
 
 def _trim(value: Any) -> Any:
@@ -203,8 +208,12 @@ class FuelCostEntrySave(_Strict):
     cost_date: date
     rig_engine_consumption: Decimal10 = Field(default=Decimal("0"), ge=0, le=MAX_LITRES)
     rig_engine_remarks: str = Field(default="", max_length=MAX_REMARKS)
+    # Rig Saving (litres): AGO saved through gas usage. Accepted via either
+    # ``rig_saving_litres`` or the legacy ``gas_consumption`` key.
     gas_consumption: Decimal10 = Field(default=Decimal("0"), ge=0, le=MAX_LITRES)
     gas_remarks: str = Field(default="", max_length=MAX_REMARKS)
+    rig_saving_litres: Decimal10 | None = Field(default=None, ge=0, le=MAX_LITRES)
+    rig_saving_remarks: str | None = Field(default=None, max_length=MAX_REMARKS)
     opening_stock: Decimal10 | None = Field(default=None, ge=0, le=MAX_LITRES)
     opening_overridden: bool = False
     # Returns an ordinary day to the carried-forward opening. Ignored on the
@@ -224,6 +233,7 @@ class FuelCostEntrySave(_Strict):
         "rig_id",
         "rig_engine_remarks",
         "gas_remarks",
+        "rig_saving_remarks",
         "opening_remarks",
         "receipt_remarks",
         "closing_remarks",
@@ -234,10 +244,18 @@ class FuelCostEntrySave(_Strict):
     def trim_text(cls, value: Any) -> Any:
         return _trim(value)
 
-    @field_validator("opening_stock", "closing_stock", mode="before")
+    @field_validator("opening_stock", "closing_stock", "rig_saving_litres", mode="before")
     @classmethod
     def blank_quantities(cls, value: Any) -> Any:
         return _blank_to_none(value)
+
+    @model_validator(mode="after")
+    def sync_rig_saving_aliases(self) -> "FuelCostEntrySave":
+        if self.rig_saving_litres is not None:
+            self.gas_consumption = self.rig_saving_litres
+        if self.rig_saving_remarks is not None:
+            self.gas_remarks = self.rig_saving_remarks
+        return self
 
 
 class FuelCostOpeningStockUpdate(_Strict):
@@ -283,6 +301,16 @@ class FuelCostCompanyLineOut(BaseModel):
     updated_at: datetime
 
 
+class FuelCostPreviousLineOut(BaseModel):
+    """One company/category allocation from the preceding fuel day of the rig."""
+
+    company_id: str
+    company_name: str
+    category_id: str | None = None
+    category_name: str = ""
+    litres: Decimal = Decimal("0")
+
+
 class FuelCostBalance(BaseModel):
     """The day's material balance, computed from the rig's active chain."""
 
@@ -300,8 +328,9 @@ class FuelCostBalance(BaseModel):
     actual_closing_stock: Decimal = Decimal("0")
     closing_adjustment: Decimal = Decimal("0")
     adjustments: Decimal = Decimal("0")
-    # Gas is reported beside the balance, never inside it.
+    # Rig Saving (litres): AGO saved via gas usage, reported beside the balance.
     gas_consumption: Decimal = Decimal("0")
+    rig_saving_litres: Decimal = Decimal("0")
 
 
 class FuelCostEntryOut(BaseModel):
@@ -314,6 +343,8 @@ class FuelCostEntryOut(BaseModel):
     rig_engine_remarks: str = ""
     gas_consumption: Decimal
     gas_remarks: str = ""
+    rig_saving_litres: Decimal = Decimal("0")
+    rig_saving_remarks: str = ""
     opening_stock: Decimal | None = None
     opening_overridden: bool = False
     opening_remarks: str = ""
@@ -342,6 +373,8 @@ class FuelCostDayOut(BaseModel):
     ``entry`` is null before the first save; ``balance`` then previews the day
     (the carried opening, whether this would be the rig's first day, and the
     previous date) so the dialog can lock the opening stock correctly.
+    ``previous_lines`` provides the preceding active day's company/category set
+    for instant one-click pre-filling.
     """
 
     rig_id: str
@@ -350,7 +383,35 @@ class FuelCostDayOut(BaseModel):
     cost_date: date
     entry: FuelCostEntryOut | None = None
     lines: list[FuelCostCompanyLineOut] = Field(default_factory=list)
+    previous_lines: list[FuelCostPreviousLineOut] = Field(default_factory=list)
     balance: FuelCostBalance
+
+
+class FuelCostRigSummaryOut(BaseModel):
+    """Fast period and inception summary for one rig without transferring all rows."""
+
+    rig_id: str
+    rig_code: str
+    rig_name: str
+    from_date: date | None = None
+    to_date: date | None = None
+    total_active_days: int = 0
+    period_days: int = 0
+    earliest_date: date | None = None
+    latest_date: date | None = None
+    opening_stock: Decimal = Decimal("0")
+    opening_adjustment: Decimal = Decimal("0")
+    receipt: Decimal = Decimal("0")
+    rig_engine_consumption: Decimal = Decimal("0")
+    company_consumption: Decimal = Decimal("0")
+    total_consumption: Decimal = Decimal("0")
+    expected_closing_stock: Decimal = Decimal("0")
+    book_closing_stock: Decimal = Decimal("0")
+    actual_closing_stock: Decimal = Decimal("0")
+    closing_adjustment: Decimal = Decimal("0")
+    adjustments: Decimal = Decimal("0")
+    gas_consumption: Decimal = Decimal("0")
+    rig_saving_litres: Decimal = Decimal("0")
 
 
 class FuelCostCompanyConsumptionRow(BaseModel):
@@ -365,6 +426,30 @@ class FuelCostCompanyConsumptionRow(BaseModel):
     line_count: int
 
 
+class FuelCostCompanySummaryRow(BaseModel):
+    """Company-level AGO consumption summary across all categories."""
+
+    company_id: str
+    company_name: str
+    vendor_code: str = ""
+    is_default: bool = False
+    category_count: int = 0
+    litres: Decimal
+    day_count: int
+    line_count: int
+
+
+class FuelCostCategorySummaryRow(BaseModel):
+    """Category-level AGO consumption summary across companies."""
+
+    category_key: str
+    category_name: str
+    company_count: int
+    litres: Decimal
+    day_count: int
+    line_count: int
+
+
 class FuelCostCompanyConsumptionOut(BaseModel):
     rig_id: str
     rig_code: str
@@ -372,7 +457,39 @@ class FuelCostCompanyConsumptionOut(BaseModel):
     from_date: date | None = None
     to_date: date | None = None
     total_litres: Decimal = Decimal("0")
+    rig_engine_litres: Decimal = Decimal("0")
+    total_ago_litres: Decimal = Decimal("0")
+    rig_saving_litres: Decimal = Decimal("0")
+    active_day_count: int = 0
     rows: list[FuelCostCompanyConsumptionRow] = Field(default_factory=list)
+    company_rows: list[FuelCostCompanySummaryRow] = Field(default_factory=list)
+    category_rows: list[FuelCostCategorySummaryRow] = Field(default_factory=list)
+
+
+class FuelCostLedgerLineOut(BaseModel):
+    """One company/category consumption row in the paginated ledger."""
+
+    id: str
+    entry_id: str
+    cost_date: date
+    rig_code: str
+    company_id: str
+    company_name: str
+    vendor_code: str = ""
+    category_id: str | None = None
+    category_name: str = ""
+    litres: Decimal
+    remarks: str = ""
+    source: str = "manual"
+
+
+class FuelCostPaginatedLinesOut(BaseModel):
+    rig_id: str
+    total_count: int
+    total_litres: Decimal = Decimal("0")
+    page: int
+    page_size: int
+    rows: list[FuelCostLedgerLineOut] = Field(default_factory=list)
 
 
 class FuelCostImportRow(_Strict):
@@ -380,7 +497,7 @@ class FuelCostImportRow(_Strict):
 
     Fields stay lenient so the import can report a precise per-row error instead
     of rejecting the whole file. A row may carry only day-level values (engine,
-    gas, stock, receipt) or one company consumption line as well.
+    rig saving litres, stock, receipt) or one company consumption line as well.
     """
 
     rig_code: Any = ""
@@ -389,6 +506,8 @@ class FuelCostImportRow(_Strict):
     rig_engine_remarks: Any = ""
     gas_consumption: Any = ""
     gas_remarks: Any = ""
+    rig_saving_litres: Any = ""
+    rig_saving_remarks: Any = ""
     opening_stock: Any = ""
     opening_remarks: Any = ""
     receipt_quantity: Any = ""
@@ -427,7 +546,16 @@ class FuelCostBulkActionOut(BaseModel):
 
 
 class FuelCostExportAudit(_Strict):
-    module: Literal["register", "deleted", "company-consumption", "day"]
+    module: Literal[
+        "register",
+        "recent-register",
+        "deleted",
+        "material-balance",
+        "company-consumption",
+        "category-consumption",
+        "company-lines",
+        "day",
+    ]
     format: Literal["csv", "xlsx", "pdf"]
     record_count: int = Field(ge=0, le=1_000_000)
     rig_id: str = Field(default="", max_length=36)

@@ -1,9 +1,10 @@
 """Fuel Cost Register services (Daily Cost Management).
 
 The register is rig-scoped and manual. A user picks a rig and a date, captures
-that day's AGO consumption, gas recording, stock and receipts, and allocates the
-company-wise consumption to registered companies (and optionally to each
-company's own categories). The whole day is saved in one transaction.
+that day's AGO consumption, Rig Saving (litres) — AGO saved through gas usage,
+stock and receipts, and allocates the company-wise consumption to registered
+companies (and optionally to each company's own categories). The whole day is
+saved in one transaction.
 
 Material balance rules implemented here (the API never accepts these figures):
 
@@ -13,7 +14,8 @@ Material balance rules implemented here (the API never accepts these figures):
   the carried closing is an *opening adjustment*.
 * **Receipts** are a daily entry, zero when empty.
 * **AGO consumption** is the rig engines' litres plus every company line's
-  litres. Gas is recorded in its own column and never joins this total.
+  litres. Rig Saving (litres) (`gas_consumption`) is recorded in its own column
+  and never joins this total.
 * **Book closing** = opening + receipts − AGO consumption.
 * **Actual closing** is the physical count; when it is not taken the book closing
   stands and the closing adjustment is zero.
@@ -22,6 +24,13 @@ Material balance rules implemented here (the API never accepts these figures):
 Nothing is stored as JSON, and the balance is never persisted: it is recomputed
 from the active chain on every read, so a back-dated insert, edit, deletion or
 restore always produces a consistent carry-forward.
+
+Large-data design:
+* Balance chains, register listings, rig summaries and company/category roll-ups
+  aggregate line totals in SQL (``GROUP BY``) over narrow scalar projections
+  rather than instantiating tens of thousands of child ORM objects.
+* Detailed company/category consumption lines expose server-side filtering and
+  pagination (``LIMIT`` / ``OFFSET``) so multi-year ledgers remain fast.
 """
 
 from collections import defaultdict
@@ -30,7 +39,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Iterable, Sequence
 
 from fastapi import HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 
@@ -53,19 +62,25 @@ from app.schemas.fuel_cost import (
     FuelCompanyUpdate,
     FuelCostBalance,
     FuelCostBulkActionOut,
+    FuelCostCategorySummaryRow,
     FuelCostCompanyConsumptionOut,
     FuelCostCompanyConsumptionRow,
     FuelCostCompanyLineIn,
     FuelCostCompanyLineOut,
+    FuelCostCompanySummaryRow,
     FuelCostDayOut,
     FuelCostEntryOut,
     FuelCostEntrySave,
     FuelCostExportAudit,
     FuelCostImportRequest,
     FuelCostImportResponse,
+    FuelCostLedgerLineOut,
     FuelCostOpeningStockUpdate,
+    FuelCostPaginatedLinesOut,
+    FuelCostPreviousLineOut,
     FuelCostReference,
     FuelCostRigOption,
+    FuelCostRigSummaryOut,
     FuelCostVendorOption,
 )
 from app.services import audit
@@ -73,6 +88,8 @@ from app.services import audit
 TEN_PLACES = Decimal("0.0000000001")
 ZERO = Decimal("0")
 MAX_IMPORT_ERRORS = 200
+UNCATEGORISED_KEY = "__none__"
+UNCATEGORISED_LABEL = "Uncategorised"
 
 
 def _quantity(value: Decimal | int | str | None) -> Decimal:
@@ -255,8 +272,35 @@ def _category_named(
 
 
 # ---------------------------------------------------------------------------
-# Output mappers
+# Output mappers and scalar projections
 # ---------------------------------------------------------------------------
+
+_ENTRY_PROJECTION = (
+    FuelCostEntry.id,
+    FuelCostEntry.rig_id,
+    FuelCostEntry.rig_code_snapshot,
+    FuelCostEntry.rig_name_snapshot,
+    FuelCostEntry.cost_date,
+    FuelCostEntry.rig_engine_consumption,
+    FuelCostEntry.rig_engine_remarks,
+    FuelCostEntry.gas_consumption,
+    FuelCostEntry.gas_remarks,
+    FuelCostEntry.opening_stock,
+    FuelCostEntry.opening_overridden,
+    FuelCostEntry.opening_remarks,
+    FuelCostEntry.receipt_quantity,
+    FuelCostEntry.receipt_remarks,
+    FuelCostEntry.closing_stock,
+    FuelCostEntry.closing_remarks,
+    FuelCostEntry.remarks,
+    FuelCostEntry.revision,
+    FuelCostEntry.is_deleted,
+    FuelCostEntry.deleted_at,
+    FuelCostEntry.created_by,
+    FuelCostEntry.updated_by,
+    FuelCostEntry.created_at,
+    FuelCostEntry.updated_at,
+)
 
 
 def _category_out(category: FuelCompanyCategory) -> FuelCompanyCategoryOut:
@@ -324,11 +368,22 @@ def _company_total(entry: FuelCostEntry) -> Decimal:
 
 
 def _balance_out(values: dict[str, Any]) -> FuelCostBalance:
-    return FuelCostBalance(**values)
+    payload = dict(values)
+    payload.setdefault("rig_saving_litres", payload.get("gas_consumption", ZERO))
+    return FuelCostBalance(**payload)
 
 
-def _entry_out(entry: FuelCostEntry, balance: dict[str, Any]) -> FuelCostEntryOut:
-    company_total = _company_total(entry)
+def _entry_out(
+    entry: Any,
+    balance: dict[str, Any],
+    *,
+    line_count: int | None = None,
+    company_total: Decimal | None = None,
+) -> FuelCostEntryOut:
+    computed_company = _quantity(company_total) if company_total is not None else _company_total(entry)
+    computed_lines = line_count if line_count is not None else len(entry.lines)
+    rig_saving = _quantity(entry.gas_consumption)
+    display_label = f"{entry.rig_code_snapshot} · {entry.cost_date.isoformat()}"[:255]
     return FuelCostEntryOut(
         id=entry.id,
         rig_id=entry.rig_id,
@@ -337,8 +392,10 @@ def _entry_out(entry: FuelCostEntry, balance: dict[str, Any]) -> FuelCostEntryOu
         cost_date=entry.cost_date,
         rig_engine_consumption=_quantity(entry.rig_engine_consumption),
         rig_engine_remarks=entry.rig_engine_remarks,
-        gas_consumption=_quantity(entry.gas_consumption),
+        gas_consumption=rig_saving,
         gas_remarks=entry.gas_remarks,
+        rig_saving_litres=rig_saving,
+        rig_saving_remarks=entry.gas_remarks,
         opening_stock=_quantity(entry.opening_stock) if entry.opening_stock is not None else None,
         opening_overridden=entry.opening_overridden,
         opening_remarks=entry.opening_remarks,
@@ -348,11 +405,11 @@ def _entry_out(entry: FuelCostEntry, balance: dict[str, Any]) -> FuelCostEntryOu
         closing_remarks=entry.closing_remarks,
         remarks=entry.remarks,
         revision=entry.revision or 0,
-        line_count=len(entry.lines),
-        company_consumption=company_total,
+        line_count=computed_lines,
+        company_consumption=computed_company,
         total_consumption=_quantity(balance["total_consumption"]),
         balance=_balance_out(balance),
-        display_name=_day_label(entry),
+        display_name=display_label,
         is_deleted=entry.is_deleted,
         deleted_at=entry.deleted_at,
         created_by=entry.created_by,
@@ -363,11 +420,46 @@ def _entry_out(entry: FuelCostEntry, balance: dict[str, Any]) -> FuelCostEntryOu
 
 
 # ---------------------------------------------------------------------------
-# Material balance
+# Material balance (SQL-aggregated line totals for O(days) scaling)
 # ---------------------------------------------------------------------------
 
 
-def _balance_for_entries(entries: Iterable[FuelCostEntry]) -> dict[str, dict[str, Any]]:
+def _line_stats_for_entries(
+    db: Session,
+    organization_id: str,
+    *,
+    rig_ids: set[str] | None = None,
+    entry_ids: set[str] | None = None,
+) -> dict[str, tuple[int, Decimal]]:
+    """Return ``{entry_id: (line_count, sum_litres)}`` via a single SQL GROUP BY."""
+    if rig_ids is not None and not rig_ids:
+        return {}
+    if entry_ids is not None and not entry_ids:
+        return {}
+    query = (
+        select(
+            FuelCostCompanyLine.entry_id,
+            func.count(FuelCostCompanyLine.id),
+            func.coalesce(func.sum(FuelCostCompanyLine.litres), 0),
+        )
+        .join(FuelCostEntry, FuelCostEntry.id == FuelCostCompanyLine.entry_id)
+        .where(FuelCostCompanyLine.organization_id == organization_id)
+    )
+    if rig_ids is not None:
+        query = query.where(FuelCostEntry.rig_id.in_(rig_ids))
+    if entry_ids is not None:
+        query = query.where(FuelCostCompanyLine.entry_id.in_(entry_ids))
+    query = query.group_by(FuelCostCompanyLine.entry_id)
+    return {
+        str(entry_id): (int(count or 0), _quantity(total))
+        for entry_id, count, total in db.execute(query).all()
+    }
+
+
+def _compute_balance_chain(
+    entries: Iterable[Any],
+    company_totals: dict[str, Decimal] | None = None,
+) -> dict[str, dict[str, Any]]:
     """Compute the material balance for one rig's entries, in date order."""
     ordered = sorted(entries, key=lambda item: (item.cost_date, item.id))
     result: dict[str, dict[str, Any]] = {}
@@ -385,13 +477,18 @@ def _balance_for_entries(entries: Iterable[FuelCostEntry]) -> dict[str, dict[str
 
         receipt = _quantity(entry.receipt_quantity)
         engine = _quantity(entry.rig_engine_consumption)
-        company = _company_total(entry)
+        company = (
+            _quantity(company_totals.get(entry.id, ZERO))
+            if company_totals is not None
+            else _company_total(entry)
+        )
         total_consumption = engine + company
         book_closing = opening + receipt - total_consumption
         actual_closing = (
             _quantity(entry.closing_stock) if entry.closing_stock is not None else book_closing
         )
         closing_adjustment = actual_closing - book_closing
+        rig_saving = _quantity(entry.gas_consumption)
 
         result[entry.id] = {
             "is_first_entry": is_first,
@@ -408,48 +505,56 @@ def _balance_for_entries(entries: Iterable[FuelCostEntry]) -> dict[str, dict[str
             "actual_closing_stock": _quantity(actual_closing),
             "closing_adjustment": _quantity(closing_adjustment),
             "adjustments": _quantity(opening_adjustment + closing_adjustment),
-            "gas_consumption": _quantity(entry.gas_consumption),
+            "gas_consumption": rig_saving,
+            "rig_saving_litres": rig_saving,
         }
         previous_closing = actual_closing
         previous_date = entry.cost_date
     return result
 
 
-def _balances_for_rigs(
+def _balance_for_entries(entries: Iterable[FuelCostEntry]) -> dict[str, dict[str, Any]]:
+    """Compute the material balance for loaded ORM entries, in date order."""
+    return _compute_balance_chain(entries)
+
+
+def _balances_and_stats_for_rigs(
     db: Session, organization_id: str, rig_ids: set[str]
-) -> dict[str, dict[str, Any]]:
-    """Balances for every active entry of the given rigs (date filtering never
-    breaks the carry-forward chain, so all active days are considered)."""
+) -> tuple[dict[str, dict[str, Any]], dict[str, tuple[int, Decimal]], list[Any]]:
+    """Balances and SQL line counts/totals for every active entry of the rigs."""
     if not rig_ids:
-        return {}
-    rows = db.scalars(
-        select(FuelCostEntry)
+        return {}, {}, []
+    rows = db.execute(
+        select(*_ENTRY_PROJECTION)
         .where(
             FuelCostEntry.organization_id == organization_id,
             FuelCostEntry.is_deleted.is_(False),
             FuelCostEntry.rig_id.in_(rig_ids),
         )
         .order_by(FuelCostEntry.rig_id, FuelCostEntry.cost_date, FuelCostEntry.id)
-    ).unique().all()
-    grouped: dict[str, list[FuelCostEntry]] = defaultdict(list)
+    ).all()
+    stats = _line_stats_for_entries(db, organization_id, rig_ids=rig_ids)
+    company_totals = {entry_id: total for entry_id, (_count, total) in stats.items()}
+    grouped: dict[str, list[Any]] = defaultdict(list)
     for row in rows:
         grouped[row.rig_id].append(row)
     balances: dict[str, dict[str, Any]] = {}
     for entries in grouped.values():
-        balances.update(_balance_for_entries(entries))
-    return balances
+        balances.update(_compute_balance_chain(entries, company_totals))
+    return balances, stats, rows
 
 
-def _isolated_balance(entry: FuelCostEntry) -> dict[str, Any]:
+def _isolated_balance(entry: Any, company_total: Decimal) -> dict[str, Any]:
     """A deleted day's own figures, outside the active chain."""
     opening = _quantity(entry.opening_stock) if entry.opening_stock is not None else ZERO
     receipt = _quantity(entry.receipt_quantity)
     engine = _quantity(entry.rig_engine_consumption)
-    company = _company_total(entry)
+    company = _quantity(company_total)
     total_consumption = engine + company
     book_closing = opening + receipt - total_consumption
     actual_closing = _quantity(entry.closing_stock) if entry.closing_stock is not None else book_closing
     closing_adjustment = actual_closing - book_closing
+    rig_saving = _quantity(entry.gas_consumption)
     return {
         "is_first_entry": False,
         "opening_overridden": bool(entry.opening_overridden),
@@ -465,7 +570,8 @@ def _isolated_balance(entry: FuelCostEntry) -> dict[str, Any]:
         "actual_closing_stock": _quantity(actual_closing),
         "closing_adjustment": _quantity(closing_adjustment),
         "adjustments": _quantity(closing_adjustment),
-        "gas_consumption": _quantity(entry.gas_consumption),
+        "gas_consumption": rig_saving,
+        "rig_saving_litres": rig_saving,
     }
 
 
@@ -478,16 +584,14 @@ def _day_balance_preview(
     exclude_entry_id: str | None = None,
 ) -> dict[str, Any]:
     """What the balance will look like for a day that is not saved yet."""
-    conditions = [
-        FuelCostEntry.organization_id == organization_id,
-        FuelCostEntry.rig_id == rig_id,
-        FuelCostEntry.is_deleted.is_(False),
-    ]
+    balances, _stats, rows = _balances_and_stats_for_rigs(db, organization_id, {rig_id})
     if exclude_entry_id:
-        conditions.append(FuelCostEntry.id != exclude_entry_id)
-    entries = list(db.scalars(select(FuelCostEntry).where(*conditions)).unique().all())
-    balances = _balance_for_entries(entries)
-    earlier = [entry for entry in entries if entry.cost_date < cost_date]
+        filtered_rows = [row for row in rows if row.id != exclude_entry_id]
+        stats = _line_stats_for_entries(db, organization_id, rig_ids={rig_id})
+        company_totals = {entry_id: total for entry_id, (_c, total) in stats.items()}
+        balances = _compute_balance_chain(filtered_rows, company_totals)
+        rows = filtered_rows
+    earlier = [entry for entry in rows if entry.cost_date < cost_date]
     if not earlier:
         return {
             "is_first_entry": True,
@@ -505,6 +609,7 @@ def _day_balance_preview(
             "closing_adjustment": ZERO,
             "adjustments": ZERO,
             "gas_consumption": ZERO,
+            "rig_saving_litres": ZERO,
         }
     previous = max(earlier, key=lambda item: (item.cost_date, item.id))
     carried = _quantity(balances[previous.id]["actual_closing_stock"])
@@ -524,7 +629,52 @@ def _day_balance_preview(
         "closing_adjustment": ZERO,
         "adjustments": ZERO,
         "gas_consumption": ZERO,
+        "rig_saving_litres": ZERO,
     }
+
+
+def _previous_lines_for_rig_date(
+    db: Session, organization_id: str, rig_id: str, cost_date: date
+) -> list[FuelCostPreviousLineOut]:
+    """Return active company/category lines from the immediately preceding fuel day."""
+    previous_entry = db.scalars(
+        select(FuelCostEntry)
+        .options(
+            joinedload(FuelCostEntry.lines).joinedload(FuelCostCompanyLine.company),
+            joinedload(FuelCostEntry.lines).joinedload(FuelCostCompanyLine.category),
+        )
+        .where(
+            FuelCostEntry.organization_id == organization_id,
+            FuelCostEntry.rig_id == rig_id,
+            FuelCostEntry.is_deleted.is_(False),
+            FuelCostEntry.cost_date < cost_date,
+        )
+        .order_by(FuelCostEntry.cost_date.desc(), FuelCostEntry.id.desc())
+        .limit(1)
+    ).unique().first()
+    if previous_entry is None:
+        return []
+    items: list[FuelCostPreviousLineOut] = []
+    for line in previous_entry.lines:
+        if line.company is None or line.company.is_deleted:
+            continue
+        category_id = line.category_id
+        category_name = ""
+        if category_id:
+            if line.category is None or line.category.is_deleted:
+                category_id = None
+            else:
+                category_name = line.category.category_name
+        items.append(
+            FuelCostPreviousLineOut(
+                company_id=line.company_id,
+                company_name=line.company.company_name,
+                category_id=category_id,
+                category_name=category_name,
+                litres=_quantity(line.litres),
+            )
+        )
+    return items
 
 
 # ---------------------------------------------------------------------------
@@ -609,7 +759,6 @@ def create_company(
             status_code=409, detail=f"“{existing.company_name}” is already registered for fuel consumption"
         )
     if existing is not None:
-        # Revive the soft-deleted company rather than blocking a familiar name.
         existing.is_deleted = False
         existing.deleted_at = None
         existing.company_name = name
@@ -876,8 +1025,6 @@ def restore_category(
     db: Session, organization_id: str, category_id: str, user: User, request: Request | None
 ) -> FuelCompanyOut:
     category = _category_or_404(db, organization_id, category_id, deleted=True)
-    # The company may itself be live or still deleted; either way its category
-    # can be restored (the dialog shows both in one place).
     company = db.scalar(
         select(FuelCompany).where(
             FuelCompany.id == category.company_id,
@@ -938,8 +1085,8 @@ def _has_earlier(
     cost_date: date,
     *,
     exclude_entry_id: str | None = None,
-) -> FuelCostEntry | None:
-    query = select(FuelCostEntry).where(
+) -> str | None:
+    query = select(FuelCostEntry.id).where(
         FuelCostEntry.organization_id == organization_id,
         FuelCostEntry.rig_id == rig_id,
         FuelCostEntry.is_deleted.is_(False),
@@ -947,7 +1094,7 @@ def _has_earlier(
     )
     if exclude_entry_id:
         query = query.where(FuelCostEntry.id != exclude_entry_id)
-    return db.scalars(query.order_by(FuelCostEntry.cost_date.desc(), FuelCostEntry.id)).first()
+    return db.scalars(query.order_by(FuelCostEntry.cost_date.desc(), FuelCostEntry.id).limit(1)).first()
 
 
 def _existing_day(
@@ -955,7 +1102,9 @@ def _existing_day(
 ) -> FuelCostEntry | None:
     return db.scalars(
         select(FuelCostEntry)
-        .options(joinedload(FuelCostEntry.lines))
+        .options(
+            joinedload(FuelCostEntry.lines).joinedload(FuelCostCompanyLine.category),
+        )
         .where(
             FuelCostEntry.organization_id == organization_id,
             FuelCostEntry.rig_id == rig_id,
@@ -966,17 +1115,51 @@ def _existing_day(
 
 def _validate_line_payload(
     db: Session, organization_id: str, lines: Sequence[FuelCostCompanyLineIn]
-) -> dict[str, FuelCompany]:
-    """Check every company/category and reject duplicate (company, category) rows."""
-    companies: dict[str, FuelCompany] = {}
+) -> tuple[dict[str, FuelCompany], dict[str, FuelCompanyCategory]]:
+    """Batch-check companies/categories and reject duplicate (company, category) rows."""
+    company_ids = {line.company_id for line in lines if line.company_id}
+    category_ids = {line.category_id for line in lines if line.category_id}
+
+    loaded_companies = (
+        {
+            company.id: company
+            for company in db.scalars(
+                select(FuelCompany).where(
+                    FuelCompany.organization_id == organization_id,
+                    FuelCompany.is_deleted.is_(False),
+                    FuelCompany.id.in_(company_ids),
+                )
+            ).unique().all()
+        }
+        if company_ids
+        else {}
+    )
+    loaded_categories = (
+        {
+            category.id: category
+            for category in db.scalars(
+                select(FuelCompanyCategory).where(
+                    FuelCompanyCategory.organization_id == organization_id,
+                    FuelCompanyCategory.is_deleted.is_(False),
+                    FuelCompanyCategory.id.in_(category_ids),
+                )
+            ).unique().all()
+        }
+        if category_ids
+        else {}
+    )
+
     seen: dict[tuple[str, str | None], int] = {}
     for index, line in enumerate(lines, start=1):
-        if line.company_id not in companies:
-            companies[line.company_id] = _company_or_404(db, organization_id, line.company_id)
-        company = companies[line.company_id]
+        company = loaded_companies.get(line.company_id)
+        if company is None:
+            raise HTTPException(status_code=404, detail="Fuel company not found in this workspace")
         category_id: str | None = line.category_id or None
+        category: FuelCompanyCategory | None = None
         if category_id:
-            category = _category_or_404(db, organization_id, category_id)
+            category = loaded_categories.get(category_id)
+            if category is None:
+                raise HTTPException(status_code=404, detail="Fuel company category not found in this workspace")
             if category.company_id != company.id:
                 raise HTTPException(
                     status_code=422,
@@ -984,9 +1167,7 @@ def _validate_line_payload(
                 )
         key = (company.id, category_id)
         if key in seen:
-            label = company.company_name + (
-                f" · {_category_or_404(db, organization_id, category_id).category_name}" if category_id else ""
-            )
+            label = company.company_name + (f" · {category.category_name}" if category else "")
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -995,15 +1176,15 @@ def _validate_line_payload(
                 ),
             )
         seen[key] = index
-    return companies
+    return loaded_companies, loaded_categories
 
 
 def _apply_lines(
-    db: Session,
-    organization_id: str,
     entry: FuelCostEntry,
+    organization_id: str,
     lines: Sequence[FuelCostCompanyLineIn],
     companies: dict[str, FuelCompany],
+    categories: dict[str, FuelCompanyCategory],
 ) -> tuple[int, int, int]:
     """Make the payload authoritative for the day's company lines."""
     existing = {line.id: line for line in entry.lines}
@@ -1016,7 +1197,7 @@ def _apply_lines(
                 detail="A company consumption line does not belong to this fuel day. Reload the day and retry.",
             )
         category_id = payload.category_id or None
-        category = _category_or_404(db, organization_id, category_id) if category_id else None
+        category = categories.get(category_id) if category_id else None
         company = companies[payload.company_id]
         if payload.id:
             line = existing[payload.id]
@@ -1119,7 +1300,7 @@ def save_entry(
         db.add(entry)
         action = "create"
 
-    companies = _validate_line_payload(db, organization_id, data.lines)
+    companies, categories = _validate_line_payload(db, organization_id, data.lines)
     if not _meaningful_day(
         data.rig_engine_consumption,
         data.gas_consumption,
@@ -1130,7 +1311,7 @@ def save_entry(
         raise HTTPException(
             status_code=422,
             detail=(
-                "Record at least one of: rig engine consumption, gas consumption, a receipt, "
+                "Record at least one of: rig engine consumption, rig saving litres, a receipt, "
                 "a closing stock or a company consumption line."
             ),
         )
@@ -1161,8 +1342,6 @@ def save_entry(
         if is_first and data.opening_overridden:
             raise HTTPException(status_code=422, detail="Enter the opening stock for the first day of this rig")
         if entry_id:
-            # Omitted opening keeps what is stored; the Override action is the only
-            # way to change it. A first day must still carry an anchor.
             if is_first and entry.opening_stock is None:
                 raise HTTPException(
                     status_code=422,
@@ -1216,19 +1395,10 @@ def save_entry(
     entry.updated_by = _actor_name(user)
     entry.revision = (entry.revision or 0) + 1
 
-    added, updated, removed = _apply_lines(db, organization_id, entry, data.lines, companies)
+    added, updated, removed = _apply_lines(entry, organization_id, data.lines, companies, categories)
     db.flush()
 
-    db.refresh(entry)
-    balances = _balance_for_entries(
-        db.scalars(
-            select(FuelCostEntry).where(
-                FuelCostEntry.organization_id == organization_id,
-                FuelCostEntry.rig_id == rig.id,
-                FuelCostEntry.is_deleted.is_(False),
-            )
-        ).unique().all()
-    )
+    balances, _stats, _rows = _balances_and_stats_for_rigs(db, organization_id, {rig.id})
     balance = balances[entry.id]
     total = _quantity(balance["total_consumption"])
     _audit(
@@ -1242,7 +1412,7 @@ def save_entry(
             f"{'Saved' if action == 'update' else 'Created'} the fuel day of {rig.rig_code} on "
             f"{entry.cost_date.isoformat()}: {_litres_text(entry.rig_engine_consumption)} L rig engines, "
             f"{_litres_text(balance['company_consumption'])} L companies, {_litres_text(total)} L AGO total, "
-            f"{_litres_text(entry.gas_consumption)} L gas, opening {_litres_text(balance['opening_stock'])} L, "
+            f"{_litres_text(entry.gas_consumption)} L rig saving, opening {_litres_text(balance['opening_stock'])} L, "
             f"book closing {_litres_text(balance['book_closing_stock'])} L, actual closing "
             f"{_litres_text(balance['actual_closing_stock'])} L, adjustments "
             f"{_litres_text(balance['adjustments'])} L"
@@ -1267,16 +1437,9 @@ def set_opening_stock(
     earlier = _has_earlier(db, organization_id, entry.rig_id, entry.cost_date, exclude_entry_id=entry.id)
     is_first = earlier is None
     previous = _quantity(entry.opening_stock) if entry.opening_stock is not None else None
-    siblings = list(
-        db.scalars(
-            select(FuelCostEntry).where(
-                FuelCostEntry.organization_id == organization_id,
-                FuelCostEntry.rig_id == entry.rig_id,
-                FuelCostEntry.is_deleted.is_(False),
-            )
-        ).unique().all()
+    sibling_balances, _stats, siblings = _balances_and_stats_for_rigs(
+        db, organization_id, {entry.rig_id}
     )
-    sibling_balances = _balance_for_entries(siblings)
     earlier_entries = [
         row for row in siblings if row.id != entry.id and row.cost_date < entry.cost_date
     ]
@@ -1346,6 +1509,7 @@ def day_for_rig_date(
 ) -> FuelCostDayOut:
     rig = _rig_or_404(db, organization_id, rig_id)
     entry = _existing_day(db, organization_id, rig.id, cost_date)
+    previous_lines = _previous_lines_for_rig_date(db, organization_id, rig.id, cost_date)
     if entry is None:
         preview = _day_balance_preview(db, organization_id, rig.id, cost_date)
         return FuelCostDayOut(
@@ -1355,17 +1519,22 @@ def day_for_rig_date(
             cost_date=cost_date,
             entry=None,
             lines=[],
+            previous_lines=previous_lines,
             balance=_balance_out(preview),
         )
-    balances = _balance_for_entries(
-        db.scalars(
-            select(FuelCostEntry).where(
-                FuelCostEntry.organization_id == organization_id,
-                FuelCostEntry.rig_id == rig.id,
-                FuelCostEntry.is_deleted.is_(False),
-            )
-        ).unique().all()
-    )
+    if entry.is_deleted:
+        preview = _day_balance_preview(db, organization_id, rig.id, cost_date)
+        return FuelCostDayOut(
+            rig_id=rig.id,
+            rig_code=rig.rig_code,
+            rig_name=rig.rig_name,
+            cost_date=cost_date,
+            entry=None,
+            lines=[],
+            previous_lines=previous_lines,
+            balance=_balance_out(preview),
+        )
+    balances, _stats, _rows = _balances_and_stats_for_rigs(db, organization_id, {rig.id})
     balance = balances[entry.id]
     return FuelCostDayOut(
         rig_id=rig.id,
@@ -1374,6 +1543,7 @@ def day_for_rig_date(
         cost_date=cost_date,
         entry=_entry_out(entry, balance),
         lines=[_line_out(line) for line in entry.lines],
+        previous_lines=previous_lines,
         balance=_balance_out(balance),
     )
 
@@ -1386,27 +1556,145 @@ def list_entries(
     date_from: date | None = None,
     date_to: date | None = None,
     deleted: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[FuelCostEntryOut]:
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=422, detail="The start date must not be after the end date")
-    query = _entry_query(organization_id, deleted=deleted)
+    query = select(*_ENTRY_PROJECTION).where(
+        FuelCostEntry.organization_id == organization_id,
+        FuelCostEntry.is_deleted.is_(deleted),
+    )
     if rig_id:
         query = query.where(FuelCostEntry.rig_id == rig_id)
-    date_conditions = []
     if date_from is not None:
-        date_conditions.append(FuelCostEntry.cost_date >= date_from)
+        query = query.where(FuelCostEntry.cost_date >= date_from)
     if date_to is not None:
-        date_conditions.append(FuelCostEntry.cost_date <= date_to)
-    rows = db.scalars(
-        query.where(*date_conditions).order_by(FuelCostEntry.cost_date.desc(), FuelCostEntry.rig_code_snapshot)
-    ).unique().all()
+        query = query.where(FuelCostEntry.cost_date <= date_to)
+    query = query.order_by(
+        FuelCostEntry.cost_date.desc(),
+        FuelCostEntry.rig_code_snapshot,
+        FuelCostEntry.id.desc(),
+    )
+    if offset > 0:
+        query = query.offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+
+    rows = db.execute(query).all()
+    if not rows:
+        return []
     if deleted:
-        return [_entry_out(row, _isolated_balance(row)) for row in rows]
+        stats = _line_stats_for_entries(db, organization_id, entry_ids={row.id for row in rows})
+        return [
+            _entry_out(
+                row,
+                _isolated_balance(row, stats.get(row.id, (0, ZERO))[1]),
+                line_count=stats.get(row.id, (0, ZERO))[0],
+                company_total=stats.get(row.id, (0, ZERO))[1],
+            )
+            for row in rows
+        ]
     # Carry-forward is computed over every active day of the involved rigs, so a
-    # date filter never changes an opening stock.
+    # date filter or LIMIT (such as the last 5 days view) never alters opening stock.
     rig_ids = {row.rig_id for row in rows}
-    balances = _balances_for_rigs(db, organization_id, rig_ids)
-    return [_entry_out(row, balances[row.id]) for row in rows]
+    balances, stats, _all_rows = _balances_and_stats_for_rigs(db, organization_id, rig_ids)
+    return [
+        _entry_out(
+            row,
+            balances[row.id],
+            line_count=stats.get(row.id, (0, ZERO))[0],
+            company_total=stats.get(row.id, (0, ZERO))[1],
+        )
+        for row in rows
+    ]
+
+
+def rig_summary(
+    db: Session,
+    organization_id: str,
+    rig_id: str,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> FuelCostRigSummaryOut:
+    """Compute a rig's period and inception summary without returning every entry."""
+    rig = _rig_or_404(db, organization_id, rig_id)
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="The start date must not be after the end date")
+
+    balances, _stats, rows = _balances_and_stats_for_rigs(db, organization_id, {rig.id})
+    total_active_days = len(rows)
+    in_period = [
+        row
+        for row in rows
+        if (date_from is None or row.cost_date >= date_from)
+        and (date_to is None or row.cost_date <= date_to)
+    ]
+    if not in_period:
+        # Even when no entry falls inside the filtered window, carry the preceding
+        # closing stock when an earlier entry exists.
+        earlier = [row for row in rows if date_from is not None and row.cost_date < date_from]
+        carried = (
+            _quantity(balances[earlier[-1].id]["actual_closing_stock"]) if earlier else ZERO
+        )
+        return FuelCostRigSummaryOut(
+            rig_id=rig.id,
+            rig_code=rig.rig_code,
+            rig_name=rig.rig_name,
+            from_date=date_from,
+            to_date=date_to,
+            total_active_days=total_active_days,
+            period_days=0,
+            earliest_date=None,
+            latest_date=rows[-1].cost_date if rows and date_from is None and date_to is None else None,
+            opening_stock=carried,
+            expected_closing_stock=carried,
+            book_closing_stock=carried,
+            actual_closing_stock=carried,
+        )
+
+    first_bal = balances[in_period[0].id]
+    last_bal = balances[in_period[-1].id]
+    period_start_stock = (
+        _quantity(first_bal["opening_stock"])
+        if first_bal["is_first_entry"]
+        else _quantity(first_bal["carried_opening"])
+    )
+    opening_adj = _quantity(sum((balances[row.id]["opening_adjustment"] for row in in_period), ZERO))
+    receipt = _quantity(sum((balances[row.id]["receipt"] for row in in_period), ZERO))
+    engine = _quantity(sum((balances[row.id]["rig_engine_consumption"] for row in in_period), ZERO))
+    company = _quantity(sum((balances[row.id]["company_consumption"] for row in in_period), ZERO))
+    total_ago = _quantity(engine + company)
+    closing_adj = _quantity(sum((balances[row.id]["closing_adjustment"] for row in in_period), ZERO))
+    adjustments = _quantity(opening_adj + closing_adj)
+    expected_closing = _quantity(period_start_stock + receipt - total_ago)
+    rig_saving = _quantity(sum((balances[row.id]["gas_consumption"] for row in in_period), ZERO))
+
+    return FuelCostRigSummaryOut(
+        rig_id=rig.id,
+        rig_code=rig.rig_code,
+        rig_name=rig.rig_name,
+        from_date=date_from,
+        to_date=date_to,
+        total_active_days=total_active_days,
+        period_days=len(in_period),
+        earliest_date=in_period[0].cost_date,
+        latest_date=in_period[-1].cost_date,
+        opening_stock=period_start_stock,
+        opening_adjustment=opening_adj,
+        receipt=receipt,
+        rig_engine_consumption=engine,
+        company_consumption=company,
+        total_consumption=total_ago,
+        expected_closing_stock=expected_closing,
+        book_closing_stock=_quantity(last_bal["book_closing_stock"]),
+        actual_closing_stock=_quantity(last_bal["actual_closing_stock"]),
+        closing_adjustment=closing_adj,
+        adjustments=adjustments,
+        gas_consumption=rig_saving,
+        rig_saving_litres=rig_saving,
+    )
 
 
 def _selected_entries(
@@ -1428,32 +1716,24 @@ def _selected_entries(
 def _reanchor_after_removal(
     db: Session, organization_id: str, rows: Sequence[FuelCostEntry], user: User
 ) -> dict[str, str]:
-    """Keep the stock chain intact when the earliest day of a rig is removed.
-
-    The earliest active day holds the opening anchor. If it is deleted, the next
-    surviving day becomes the first day; its carried opening is persisted as the
-    new anchor so the physical stock is not reset to zero.
-    """
+    """Keep the stock chain intact when the earliest day of a rig is removed."""
     removed_ids = {row.id for row in rows}
     notes: dict[str, str] = {}
     for rig_id in {row.rig_id for row in rows}:
-        entries = list(
-            db.scalars(
-                select(FuelCostEntry).where(
-                    FuelCostEntry.organization_id == organization_id,
-                    FuelCostEntry.rig_id == rig_id,
-                    FuelCostEntry.is_deleted.is_(False),
-                )
-            ).unique().all()
-        )
-        ordered = sorted(entries, key=lambda item: (item.cost_date, item.id))
+        balances, _stats, ordered = _balances_and_stats_for_rigs(db, organization_id, {rig_id})
         if not ordered or ordered[0].id not in removed_ids:
             continue
         survivors = [entry for entry in ordered if entry.id not in removed_ids]
         if not survivors:
             continue
-        balances = _balance_for_entries(ordered)
-        new_first = survivors[0]
+        new_first = db.scalar(
+            select(FuelCostEntry).where(
+                FuelCostEntry.id == survivors[0].id,
+                FuelCostEntry.organization_id == organization_id,
+            )
+        )
+        if new_first is None:
+            continue
         if new_first.opening_stock is not None and not new_first.opening_overridden:
             continue
         opening = _quantity(balances[new_first.id]["opening_stock"])
@@ -1556,7 +1836,7 @@ def permanently_delete_entries(
 
 
 # ---------------------------------------------------------------------------
-# Company / category classification
+# Company / category classification and paginated ledger (SQL-aggregated)
 # ---------------------------------------------------------------------------
 
 
@@ -1571,62 +1851,321 @@ def company_consumption(
     rig = _rig_or_404(db, organization_id, rig_id)
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=422, detail="The start date must not be after the end date")
-    lines = db.scalars(
-        select(FuelCostCompanyLine)
-        .join(FuelCostEntry, FuelCostEntry.id == FuelCostCompanyLine.entry_id)
-        .options(joinedload(FuelCostCompanyLine.company), joinedload(FuelCostCompanyLine.category))
-        .where(
-            FuelCostCompanyLine.organization_id == organization_id,
-            FuelCostEntry.rig_id == rig.id,
-            FuelCostEntry.is_deleted.is_(False),
-            *([FuelCostEntry.cost_date >= date_from] if date_from else []),
-            *([FuelCostEntry.cost_date <= date_to] if date_to else []),
-        )
-        .order_by(FuelCostCompanyLine.sort_order)
-    ).unique().all()
-    buckets: dict[tuple[str, str | None], dict[str, Any]] = {}
-    for line in lines:
-        key = (line.company_id, line.category_id)
-        company_name = line.company.company_name if line.company else line.company_name_snapshot
-        category_name = ""
-        if line.category_id:
-            category_name = line.category.category_name if line.category else line.category_name_snapshot
-        bucket = buckets.setdefault(
-            key,
-            {
-                "company_id": line.company_id,
-                "company_name": company_name,
-                "category_id": line.category_id,
-                "category_name": category_name,
-                "litres": ZERO,
-                "days": set(),
-                "lines": 0,
-            },
-        )
-        bucket["litres"] += Decimal(line.litres or 0)
-        bucket["days"].add(line.entry_id)
-        bucket["lines"] += 1
-    rows = [
-        FuelCostCompanyConsumptionRow(
-            company_id=bucket["company_id"],
-            company_name=bucket["company_name"],
-            category_id=bucket["category_id"],
-            category_name=bucket["category_name"],
-            litres=_quantity(bucket["litres"]),
-            day_count=len(bucket["days"]),
-            line_count=bucket["lines"],
-        )
-        for bucket in buckets.values()
+
+    entry_filters = [
+        FuelCostEntry.organization_id == organization_id,
+        FuelCostEntry.rig_id == rig.id,
+        FuelCostEntry.is_deleted.is_(False),
+        *([FuelCostEntry.cost_date >= date_from] if date_from else []),
+        *([FuelCostEntry.cost_date <= date_to] if date_to else []),
     ]
+
+    # 1. Day-level engine and rig-saving totals in SQL.
+    day_totals_row = db.execute(
+        select(
+            func.count(FuelCostEntry.id),
+            func.coalesce(func.sum(FuelCostEntry.rig_engine_consumption), 0),
+            func.coalesce(func.sum(FuelCostEntry.gas_consumption), 0),
+        ).where(*entry_filters)
+    ).one()
+    active_day_count = int(day_totals_row[0] or 0)
+    rig_engine_litres = _quantity(day_totals_row[1])
+    rig_saving_litres = _quantity(day_totals_row[2])
+
+    # Lookup live company / category metadata (archived rows still exist in DB;
+    # snapshots are kept as fallback).
+    companies_by_id = {
+        row.id: row
+        for row in db.execute(
+            select(
+                FuelCompany.id,
+                FuelCompany.company_name,
+                FuelCompany.vendor_code_snapshot,
+                FuelCompany.is_default,
+            ).where(FuelCompany.organization_id == organization_id)
+        ).all()
+    }
+    categories_by_id = {
+        row.id: row.category_name
+        for row in db.execute(
+            select(FuelCompanyCategory.id, FuelCompanyCategory.category_name).where(
+                FuelCompanyCategory.organization_id == organization_id
+            )
+        ).all()
+    }
+
+    line_filters = [
+        FuelCostCompanyLine.organization_id == organization_id,
+        *entry_filters,
+    ]
+
+    # 2. Company + category breakdown via SQL GROUP BY.
+    grouped_rows = db.execute(
+        select(
+            FuelCostCompanyLine.company_id,
+            FuelCostCompanyLine.category_id,
+            func.min(FuelCostCompanyLine.company_name_snapshot),
+            func.min(FuelCostCompanyLine.category_name_snapshot),
+            func.coalesce(func.sum(FuelCostCompanyLine.litres), 0),
+            func.count(func.distinct(FuelCostCompanyLine.entry_id)),
+            func.count(FuelCostCompanyLine.id),
+        )
+        .join(FuelCostEntry, FuelCostEntry.id == FuelCostCompanyLine.entry_id)
+        .where(*line_filters)
+        .group_by(FuelCostCompanyLine.company_id, FuelCostCompanyLine.category_id)
+    ).all()
+
+    rows: list[FuelCostCompanyConsumptionRow] = []
+    categories_per_company: dict[str, set[str]] = defaultdict(set)
+    for (
+        company_id,
+        category_id,
+        company_snapshot,
+        category_snapshot,
+        litres_sum,
+        day_count,
+        line_count,
+    ) in grouped_rows:
+        company_meta = companies_by_id.get(company_id)
+        company_name = company_meta.company_name if company_meta else (company_snapshot or "")
+        category_name = ""
+        if category_id:
+            category_name = categories_by_id.get(category_id) or category_snapshot or ""
+            if category_name:
+                categories_per_company[company_id].add(category_name)
+        rows.append(
+            FuelCostCompanyConsumptionRow(
+                company_id=company_id,
+                company_name=company_name,
+                category_id=category_id,
+                category_name=category_name,
+                litres=_quantity(litres_sum),
+                day_count=int(day_count or 0),
+                line_count=int(line_count or 0),
+            )
+        )
     rows.sort(key=lambda row: (row.company_name.lower(), row.category_name.lower()))
+
+    # 3. Pure company-wise summary via SQL GROUP BY company_id (accurate distinct day count).
+    company_grouped = db.execute(
+        select(
+            FuelCostCompanyLine.company_id,
+            func.min(FuelCostCompanyLine.company_name_snapshot),
+            func.coalesce(func.sum(FuelCostCompanyLine.litres), 0),
+            func.count(func.distinct(FuelCostCompanyLine.entry_id)),
+            func.count(FuelCostCompanyLine.id),
+        )
+        .join(FuelCostEntry, FuelCostEntry.id == FuelCostCompanyLine.entry_id)
+        .where(*line_filters)
+        .group_by(FuelCostCompanyLine.company_id)
+    ).all()
+
+    company_rows: list[FuelCostCompanySummaryRow] = []
+    for company_id, company_snapshot, litres_sum, day_count, line_count in company_grouped:
+        company_meta = companies_by_id.get(company_id)
+        company_name = company_meta.company_name if company_meta else (company_snapshot or "")
+        company_rows.append(
+            FuelCostCompanySummaryRow(
+                company_id=company_id,
+                company_name=company_name,
+                vendor_code=company_meta.vendor_code_snapshot if company_meta else "",
+                is_default=bool(company_meta.is_default) if company_meta else False,
+                category_count=len(categories_per_company.get(company_id, set())),
+                litres=_quantity(litres_sum),
+                day_count=int(day_count or 0),
+                line_count=int(line_count or 0),
+            )
+        )
+    company_rows.sort(key=lambda row: (-row.litres, row.company_name.lower()))
+
+    # 4. Category-wise summary across companies (grouping normalized category names).
+    # We compute distinct entry_id counts per normalized category label in SQL.
+    category_expr = func.coalesce(
+        FuelCompanyCategory.category_name,
+        func.nullif(FuelCostCompanyLine.category_name_snapshot, ""),
+    )
+    category_key_expr = func.coalesce(func.lower(category_expr), UNCATEGORISED_KEY)
+    category_grouped = db.execute(
+        select(
+            category_key_expr,
+            func.min(category_expr),
+            func.count(func.distinct(FuelCostCompanyLine.company_id)),
+            func.coalesce(func.sum(FuelCostCompanyLine.litres), 0),
+            func.count(func.distinct(FuelCostCompanyLine.entry_id)),
+            func.count(FuelCostCompanyLine.id),
+        )
+        .join(FuelCostEntry, FuelCostEntry.id == FuelCostCompanyLine.entry_id)
+        .outerjoin(
+            FuelCompanyCategory, FuelCompanyCategory.id == FuelCostCompanyLine.category_id
+        )
+        .where(*line_filters)
+        .group_by(category_key_expr)
+    ).all()
+
+    category_rows: list[FuelCostCategorySummaryRow] = []
+    for cat_key, cat_label, comp_count, litres_sum, day_count, line_count in category_grouped:
+        key_str = str(cat_key or UNCATEGORISED_KEY)
+        label_str = str(cat_label) if cat_label else UNCATEGORISED_LABEL
+        category_rows.append(
+            FuelCostCategorySummaryRow(
+                category_key=key_str,
+                category_name=label_str,
+                company_count=int(comp_count or 0),
+                litres=_quantity(litres_sum),
+                day_count=int(day_count or 0),
+                line_count=int(line_count or 0),
+            )
+        )
+    category_rows.sort(
+        key=lambda row: (row.category_key == UNCATEGORISED_KEY, -row.litres, row.category_name.lower())
+    )
+
+    total_company_litres = _quantity(sum((row.litres for row in rows), ZERO))
     return FuelCostCompanyConsumptionOut(
         rig_id=rig.id,
         rig_code=rig.rig_code,
         rig_name=rig.rig_name,
         from_date=date_from,
         to_date=date_to,
-        total_litres=_quantity(sum((row.litres for row in rows), ZERO)),
+        total_litres=total_company_litres,
+        rig_engine_litres=rig_engine_litres,
+        total_ago_litres=_quantity(rig_engine_litres + total_company_litres),
+        rig_saving_litres=rig_saving_litres,
+        active_day_count=active_day_count,
         rows=rows,
+        company_rows=company_rows,
+        category_rows=category_rows,
+    )
+
+
+def list_company_lines(
+    db: Session,
+    organization_id: str,
+    rig_id: str,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    company_id: str = "",
+    category_id: str = "",
+    category_name: str = "",
+    search: str = "",
+    page: int = 1,
+    page_size: int = 20,
+) -> FuelCostPaginatedLinesOut:
+    """Server-filtered, server-paginated ledger of company/category fuel lines."""
+    rig = _rig_or_404(db, organization_id, rig_id)
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="The start date must not be after the end date")
+
+    company_name_expr = func.coalesce(
+        FuelCompany.company_name, FuelCostCompanyLine.company_name_snapshot
+    )
+    category_name_expr = func.coalesce(
+        FuelCompanyCategory.category_name,
+        func.nullif(FuelCostCompanyLine.category_name_snapshot, ""),
+        "",
+    )
+    vendor_code_expr = func.coalesce(FuelCompany.vendor_code_snapshot, "")
+
+    conditions = [
+        FuelCostCompanyLine.organization_id == organization_id,
+        FuelCostEntry.organization_id == organization_id,
+        FuelCostEntry.rig_id == rig.id,
+        FuelCostEntry.is_deleted.is_(False),
+    ]
+    if date_from is not None:
+        conditions.append(FuelCostEntry.cost_date >= date_from)
+    if date_to is not None:
+        conditions.append(FuelCostEntry.cost_date <= date_to)
+    if company_id:
+        conditions.append(FuelCostCompanyLine.company_id == company_id)
+    if category_id == UNCATEGORISED_KEY:
+        conditions.append(FuelCostCompanyLine.category_id.is_(None))
+        conditions.append(category_name_expr == "")
+    elif category_id:
+        conditions.append(FuelCostCompanyLine.category_id == category_id)
+    if category_name:
+        if category_name == UNCATEGORISED_KEY or category_name.lower() == UNCATEGORISED_LABEL.lower():
+            conditions.append(category_name_expr == "")
+        else:
+            conditions.append(func.lower(category_name_expr) == category_name.strip().lower())
+    if search.strip():
+        needle = f"%{search.strip().lower()}%"
+        conditions.append(
+            or_(
+                func.lower(company_name_expr).like(needle),
+                func.lower(category_name_expr).like(needle),
+                func.lower(vendor_code_expr).like(needle),
+                func.lower(FuelCostCompanyLine.remarks).like(needle),
+            )
+        )
+
+    totals = db.execute(
+        select(
+            func.count(FuelCostCompanyLine.id),
+            func.coalesce(func.sum(FuelCostCompanyLine.litres), 0),
+        )
+        .join(FuelCostEntry, FuelCostEntry.id == FuelCostCompanyLine.entry_id)
+        .outerjoin(FuelCompany, FuelCompany.id == FuelCostCompanyLine.company_id)
+        .outerjoin(FuelCompanyCategory, FuelCompanyCategory.id == FuelCostCompanyLine.category_id)
+        .where(*conditions)
+    ).one()
+
+    total_count = int(totals[0] or 0)
+    total_litres = _quantity(totals[1])
+    offset = max(0, (page - 1) * page_size)
+
+    rows = db.execute(
+        select(
+            FuelCostCompanyLine.id,
+            FuelCostCompanyLine.entry_id,
+            FuelCostEntry.cost_date,
+            FuelCostEntry.rig_code_snapshot,
+            FuelCostCompanyLine.company_id,
+            company_name_expr,
+            vendor_code_expr,
+            FuelCostCompanyLine.category_id,
+            category_name_expr,
+            FuelCostCompanyLine.litres,
+            FuelCostCompanyLine.remarks,
+            FuelCostCompanyLine.source,
+        )
+        .join(FuelCostEntry, FuelCostEntry.id == FuelCostCompanyLine.entry_id)
+        .outerjoin(FuelCompany, FuelCompany.id == FuelCostCompanyLine.company_id)
+        .outerjoin(FuelCompanyCategory, FuelCompanyCategory.id == FuelCostCompanyLine.category_id)
+        .where(*conditions)
+        .order_by(
+            FuelCostEntry.cost_date.desc(),
+            FuelCostCompanyLine.sort_order.asc(),
+            FuelCostCompanyLine.id.asc(),
+        )
+        .offset(offset)
+        .limit(page_size)
+    ).all()
+
+    return FuelCostPaginatedLinesOut(
+        rig_id=rig.id,
+        total_count=total_count,
+        total_litres=total_litres,
+        page=page,
+        page_size=page_size,
+        rows=[
+            FuelCostLedgerLineOut(
+                id=row[0],
+                entry_id=row[1],
+                cost_date=row[2],
+                rig_code=row[3],
+                company_id=row[4],
+                company_name=row[5] or "",
+                vendor_code=row[6] or "",
+                category_id=row[7],
+                category_name=row[8] or "",
+                litres=_quantity(row[9]),
+                remarks=row[10] or "",
+                source=row[11] or "manual",
+            )
+            for row in rows
+        ],
     )
 
 
@@ -1663,15 +2202,6 @@ def _date_cell(value: Any) -> date | None:
         except ValueError:
             continue
     raise ValueError(text)
-
-
-NUMERIC_DAY_FIELDS = (
-    "rig_engine_consumption",
-    "gas_consumption",
-    "opening_stock",
-    "receipt_quantity",
-    "closing_stock",
-)
 
 
 def import_rows(
@@ -1717,10 +2247,22 @@ def import_rows(
         if cost_date is None:
             errors.append(f"Row {number}: Date is mandatory.")
             continue
+
+        raw_rig_saving = (
+            row.rig_saving_litres
+            if str(row.rig_saving_litres or "").strip() != ""
+            else row.gas_consumption
+        )
+        raw_rig_saving_remarks = (
+            row.rig_saving_remarks
+            if str(row.rig_saving_remarks or "").strip() != ""
+            else row.gas_remarks
+        )
+
         try:
             numeric = {
                 "rig_engine_consumption": _decimal_cell(row.rig_engine_consumption, "Rig engine consumption", number),
-                "gas_consumption": _decimal_cell(row.gas_consumption, "Gas consumption", number),
+                "gas_consumption": _decimal_cell(raw_rig_saving, "Rig saving litres", number),
                 "opening_stock": _decimal_cell(row.opening_stock, "Opening stock", number),
                 "receipt_quantity": _decimal_cell(row.receipt_quantity, "Receipt", number),
                 "closing_stock": _decimal_cell(row.closing_stock, "Actual closing stock", number),
@@ -1737,7 +2279,7 @@ def import_rows(
         group["rows"].append(number)
         texts = {
             "rig_engine_remarks": row.rig_engine_remarks,
-            "gas_remarks": row.gas_remarks,
+            "gas_remarks": raw_rig_saving_remarks,
             "opening_remarks": row.opening_remarks,
             "receipt_remarks": row.receipt_remarks,
             "closing_remarks": row.closing_remarks,
@@ -1748,8 +2290,9 @@ def import_rows(
                 continue
             existing = group["day"].get(field)
             if existing is not None and Decimal(existing) != value and not group["error"]:
+                label = "rig saving litres" if field == "gas_consumption" else field.replace("_", " ")
                 group["error"] = (
-                    f"Row {number}: {field.replace('_', ' ')} conflicts with another row of the same "
+                    f"Row {number}: {label} conflicts with another row of the same "
                     f"rig and date ({rig.rig_code} · {cost_date.isoformat()}). Keep one value per day."
                 )
             group["day"][field] = value
@@ -1759,8 +2302,9 @@ def import_rows(
                 continue
             existing = group["day"].get(field)
             if existing is not None and str(existing).strip() and str(existing).strip() != text and not group["error"]:
+                label = "rig saving remarks" if field == "gas_remarks" else field.replace("_", " ")
                 group["error"] = (
-                    f"Row {number}: {field.replace('_', ' ')} conflicts with another row of the same "
+                    f"Row {number}: {label} conflicts with another row of the same "
                     f"rig and date ({rig.rig_code} · {cost_date.isoformat()}). Keep one value per day."
                 )
             group["day"][field] = text
@@ -1783,7 +2327,6 @@ def import_rows(
         if group["error"]:
             errors.append(group["error"])
 
-    # Order each rig's groups so the first-day anchor and its carry-forward are known.
     by_rig: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for group in groups.values():
         by_rig[group["rig"].id].append(group)
@@ -1814,7 +2357,7 @@ def import_rows(
             ):
                 group["error"] = (
                     f"{group['rig'].rig_code} · {group['date'].isoformat()}: record at least one of rig engine "
-                    "consumption, gas consumption, a receipt, a closing stock or a company line."
+                    "consumption, rig saving litres, a receipt, a closing stock or a company line."
                 )
                 errors.append(group["error"])
                 continue
@@ -1850,6 +2393,17 @@ def import_rows(
     imported = 0
     line_count = 0
     if valid:
+        # Pre-load all workspace companies and categories once so bulk imports
+        # with thousands of rows avoid N+1 lookups.
+        company_cache: dict[str, FuelCompany] = {}
+        category_cache: dict[tuple[str, str], FuelCompanyCategory] = {}
+        for existing_comp in db.scalars(
+            select(FuelCompany).where(FuelCompany.organization_id == organization_id)
+        ).unique().all():
+            company_cache[existing_comp.company_name.strip().lower()] = existing_comp
+            for existing_cat in existing_comp.categories:
+                category_cache[(existing_comp.id, existing_cat.category_name.strip().lower())] = existing_cat
+
         for group in valid:
             rig = group["rig"]
             day = group["day"]
@@ -1865,6 +2419,9 @@ def import_rows(
                     created_by=_actor_name(user),
                 )
                 db.add(entry)
+            else:
+                entry.is_deleted = False
+                entry.deleted_at = None
             entry.rig_engine_consumption = _quantity(day.get("rig_engine_consumption") or 0)
             entry.rig_engine_remarks = str(day.get("rig_engine_remarks") or "").strip()
             entry.gas_consumption = _quantity(day.get("gas_consumption") or 0)
@@ -1887,7 +2444,8 @@ def import_rows(
             existing_lines = {(line.company_id, line.category_id): line for line in entry.lines}
             kept: set[tuple[str, str | None]] = set()
             for order, payload in enumerate(group["lines"]):
-                company = _company_named(db, organization_id, payload["company_name"])
+                comp_key = payload["company_name"].strip().lower()
+                company = company_cache.get(comp_key)
                 if company is not None and company.is_deleted:
                     company.is_deleted = False
                     company.deleted_at = None
@@ -1904,9 +2462,11 @@ def import_rows(
                     )
                     db.add(company)
                     db.flush()
+                    company_cache[comp_key] = company
                 category: FuelCompanyCategory | None = None
                 if payload["category_name"]:
-                    category = _category_named(db, organization_id, company.id, payload["category_name"])
+                    cat_key = (company.id, payload["category_name"].strip().lower())
+                    category = category_cache.get(cat_key)
                     if category is not None and category.is_deleted:
                         category.is_deleted = False
                         category.deleted_at = None
@@ -1922,6 +2482,7 @@ def import_rows(
                         )
                         db.add(category)
                         db.flush()
+                        category_cache[cat_key] = category
                 key = (company.id, category.id if category else None)
                 kept.add(key)
                 line = existing_lines.get(key)
