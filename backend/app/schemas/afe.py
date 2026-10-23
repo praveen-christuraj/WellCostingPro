@@ -608,6 +608,8 @@ class AfeReferenceWell(DecimalResponseModel):
     completion_config_status: str = "draft"
     completion_status: str = "active"
     completion_section_count: int = 0
+    drilling_is_deleted: bool = False
+    completion_is_deleted: bool = False
     id: str
     rig_id: str
     well_code: str

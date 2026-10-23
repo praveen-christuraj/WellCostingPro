@@ -32,11 +32,11 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
 
   const rigWells = useMemo(() => (reference?.wells ?? []).filter(well => well.rig_id === form.rig_id), [reference, form.rig_id])
   const scopeState = (well: AfeReference['wells'][number]) => form.configuration_scope === 'completion'
-    ? { status: well.completion_status, config_status: well.completion_config_status, section_count: well.completion_section_count }
-    : well
+    ? { status: well.completion_status, config_status: well.completion_config_status, section_count: well.completion_section_count, is_deleted: Boolean(well.completion_is_deleted) }
+    : { status: well.status, config_status: well.config_status, section_count: well.section_count, is_deleted: Boolean(well.drilling_is_deleted) }
   const wellEligible = (well: AfeReference['wells'][number]) => {
     const plan = scopeState(well)
-    return (plan.status === 'active' && plan.config_status === 'configured' && plan.section_count > 0)
+    return (!plan.is_deleted && plan.status === 'active' && plan.config_status === 'configured' && plan.section_count > 0)
       || (well.id === record?.well_id && form.configuration_scope === record.configuration_scope)
   }
   // The well picker lists only wells whose chosen scope is active and marked
@@ -50,7 +50,7 @@ export function AfeFormDialog({ open, record, reference, onClose, onSaved }: {
   const selectedWell = wells.find(well => well.id === form.well_id)
   const wellNote = (well: AfeReference['wells'][number]) => {
     const plan = scopeState(well)
-    return plan.section_count === 0 ? ' · no scoped plan saved' : plan.status !== 'active' ? ' · scope completed' : plan.config_status !== 'configured' ? ' · scope not configured' : ''
+    return plan.is_deleted ? ' · scope deleted' : plan.section_count === 0 ? ' · no scoped plan saved' : plan.status !== 'active' ? ' · scope completed' : plan.config_status !== 'configured' ? ' · scope not configured' : ''
   }
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm(current => ({ ...current, [key]: value }))

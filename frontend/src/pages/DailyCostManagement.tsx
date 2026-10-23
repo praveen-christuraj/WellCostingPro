@@ -120,16 +120,31 @@ export default function DailyCostManagement() {
 
   const tabRows = useMemo(() => rows.filter(row => deletedView ? true : rowTab(row) === active), [rows, active, deletedView])
 
-  // Wells whose at least one scope is configured can take new daily sheets; the sheet's scope follows its AFE.
-  const wells = useMemo(() => reference?.wells.filter(well => well.status === 'active' && (well.config_status === 'configured' || well.completion_config_status === 'configured')) ?? [], [reference])
+  // Wells whose at least one non-deleted scope is configured can take new daily sheets; the sheet's scope follows its AFE.
+  const wells = useMemo(() => reference?.wells.filter(well => {
+    const drillingReady = !well.drilling_is_deleted && well.status === 'active' && well.config_status === 'configured'
+    const completionReady = !well.completion_is_deleted && well.completion_status === 'active' && well.completion_config_status === 'configured'
+    return drillingReady || completionReady
+  }) ?? [], [reference])
   const selectedWell = wells.find(well => well.id === wellId)
-  const afes = useMemo(() => reference?.afes.filter(afe => afe.well_id === wellId) ?? [], [reference, wellId])
+  const afes = useMemo(() => reference?.afes.filter(afe => {
+    if (afe.well_id !== wellId) return false
+    const well = wellsById[afe.well_id]
+    const afeScope = afe.configuration_scope ?? 'drilling'
+    if (well && (afeScope === 'completion' ? well.completion_is_deleted : well.drilling_is_deleted)) return false
+    return true
+  }) ?? [], [reference, wellId, wellsById])
   const selectedAfe = afes.find(afe => afe.id === afeId)
+  const selectedScope: 'drilling' | 'completion' = selectedAfe?.configuration_scope
+    ?? (selectedWell && (selectedWell.drilling_is_deleted || selectedWell.config_status !== 'configured') ? 'completion' : 'drilling')
   const needsUsdExchangeRate = Boolean(selectedAfe && selectedAfe.standard_currency.toUpperCase() !== 'USD')
   const usdRateValid = !needsUsdExchangeRate || (Number.isFinite(Number(usdExchangeRate)) && Number(usdExchangeRate) > 0)
   const createDateValid = isValidCostDate(costDate)
   const selectedDuplicate = rows.find(row => row.well_id === wellId && row.afe_id === afeId && row.cost_date === costDate)
-  const wellSubActivities = useMemo(() => reference?.sub_activities.filter(item => item.well_id === wellId) ?? [], [reference, wellId])
+  const wellSubActivities = useMemo(
+    () => reference?.sub_activities.filter(item => item.well_id === wellId && (item.scope ?? 'drilling') === selectedScope) ?? [],
+    [reference, wellId, selectedScope],
+  )
   const missingSubActivities = Boolean(selectedWell) && wellSubActivities.length === 0
 
   useEffect(() => {
@@ -394,8 +409,8 @@ export default function DailyCostManagement() {
             return <MenuItem key={well.id} value={well.id}>{well.well_code} · {well.well_name} — {rig?.rig_code ?? 'Rig'}</MenuItem>
           })}
         </TextField>
-        {missingSubActivities && <Alert severity="warning" sx={{ py: 0 }} action={<Button component={RouterLink} to="/rig-well/sub-activities" size="small" color="inherit" onClick={() => setCreateOpen(false)}>Open well sub activities</Button>}>
-          Configuring the well sub activity in Rig &amp; Well Management is mandatory for daily cost entry. Add the well's sub activities first — every cost line is recorded under an Activity and Sub activity.
+        {missingSubActivities && <Alert severity="warning" sx={{ py: 0 }} action={<Button component={RouterLink} to={selectedWell ? `/rig-well/sub-activities?rig_id=${encodeURIComponent(selectedWell.rig_id)}&well_id=${encodeURIComponent(selectedWell.id)}&scope=${selectedScope}` : '/rig-well/sub-activities'} size="small" color="inherit" onClick={() => setCreateOpen(false)}>Open well sub activities</Button>}>
+          Configuring the well sub activity for this well scope ({selectedScope}) in Rig &amp; Well Management is mandatory for daily cost entry. Add the scope's sub activities first — every cost line is recorded under an Activity and Sub activity.
         </Alert>}
         <TextField select required label="Saved AFE estimate" value={afeId} onChange={event => setAfeId(event.target.value)} disabled={!afes.length}>
           {afes.map(afe => <MenuItem key={afe.id} value={afe.id}>{afe.display_name}</MenuItem>)}

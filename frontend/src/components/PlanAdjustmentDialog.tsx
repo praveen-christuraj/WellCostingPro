@@ -74,9 +74,10 @@ function sectionChange(section: SectionInput, baseline: BaselineMap): LineChange
   return ownChanged || phasesChanged ? 'modified' : 'kept'
 }
 
-export function PlanAdjustmentDialog({ open, well, onClose, onChanged }: {
+export function PlanAdjustmentDialog({ open, well, initialScope, onClose, onChanged }: {
   open: boolean
   well: Well
+  initialScope?: AdjustmentScope
   onClose: () => void
   onChanged: () => void
 }) {
@@ -84,7 +85,10 @@ export function PlanAdjustmentDialog({ open, well, onClose, onChanged }: {
   const canAdjust = can('rig-well:plan-adjust')
   const keyCounter = useRef(0)
   const nextRowKey = () => `row-${++keyCounter.current}`
-  const [scope, setScope] = useState<AdjustmentScope>('drilling')
+  const [scope, setScope] = useState<AdjustmentScope>(initialScope ?? 'drilling')
+  useEffect(() => {
+    if (open) setScope(initialScope ?? (well.drilling_is_deleted && !well.completion_is_deleted ? 'completion' : 'drilling'))
+  }, [open, well.id, initialScope])
   const [options, setOptions] = useState<RigWellConfigurationOptions>({ hole_sections: [], phases: [] })
   const [configuration, setConfiguration] = useState<WellConfiguration | null>(null)
   const [adjustments, setAdjustments] = useState<WellPlanAdjustment[]>([])
@@ -350,8 +354,8 @@ export function PlanAdjustmentDialog({ open, well, onClose, onChanged }: {
     >
       <Box display="grid" gap={2}>
         <TextField select label="Configuration scope" fullWidth value={scope} onChange={event => changeScope(event.target.value as AdjustmentScope)}>
-          <MenuItem value="drilling">Drilling</MenuItem>
-          <MenuItem value="completion">Completion</MenuItem>
+          <MenuItem value="drilling" disabled={Boolean(well.drilling_is_deleted)}>Drilling{well.drilling_is_deleted ? ' (deleted)' : ''}</MenuItem>
+          <MenuItem value="completion" disabled={Boolean(well.completion_is_deleted)}>Completion{well.completion_is_deleted ? ' (deleted)' : ''}</MenuItem>
         </TextField>
         <ErrorMessage message={error}/>
         {loading

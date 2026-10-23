@@ -58,6 +58,7 @@ type Props = {
   baseline: DailyCostBaseline
   reference: DailyCostReference
   wellId: string
+  scope?: 'drilling' | 'completion'
   onClose: () => void
   onSave: (lines: EditableDailyCostLine | EditableDailyCostLine[]) => void
 }
@@ -155,6 +156,7 @@ export function DailyCostLineDialog({
   baseline,
   reference,
   wellId,
+  scope = 'drilling',
   onClose,
   onSave,
 }: Props) {
@@ -200,7 +202,7 @@ export function DailyCostLineDialog({
     const initialActivity = initialLine?.activity_id || reference.activities[0]?.id || ''
     const initialClassification = deriveClassification(reference.activities.find(a => a.id === initialActivity))
     const eligibleSubs = reference.sub_activities.filter(
-      item => item.well_id === wellId && item.activity_id === initialActivity,
+      item => item.well_id === wellId && (item.scope ?? 'drilling') === scope && item.activity_id === initialActivity,
     )
     const initialSubId = initialLine?.sub_activity_id || eligibleSubs[0]?.id || null
     const initialSub = reference.sub_activities.find(s => s.id === initialSubId)
@@ -417,8 +419,12 @@ export function DailyCostLineDialog({
   const sections = baseline.sections
   const selectedCommonSection = sections.find(section => section.hole_section_id === commonHoleSectionId)
   const eligibleSubActivities = useMemo(
-    () => reference.sub_activities.filter(item => item.well_id === wellId && item.activity_id === commonActivityId),
-    [reference.sub_activities, wellId, commonActivityId],
+    () => reference.sub_activities.filter(
+      item => item.well_id === wellId
+        && item.activity_id === commonActivityId
+        && ((item.scope ?? 'drilling') === scope || item.id === initialLine?.sub_activity_id),
+    ),
+    [reference.sub_activities, wellId, commonActivityId, scope, initialLine?.sub_activity_id],
   )
   const derivedClassification = deriveClassification(reference.activities.find(item => item.id === commonActivityId))
   const advancedItems = kind === 'consumable'
@@ -446,7 +452,7 @@ export function DailyCostLineDialog({
     setCommonActivityId(activityId)
     const nextClassification = deriveClassification(reference.activities.find(item => item.id === activityId))
     const eligible = reference.sub_activities.filter(
-      item => item.well_id === wellId && item.activity_id === activityId,
+      item => item.well_id === wellId && (item.scope ?? 'drilling') === scope && item.activity_id === activityId,
     )
     const nextSubId = eligible.some(item => item.id === commonSubActivityId) ? commonSubActivityId : eligible[0]?.id || null
     const nextSub = reference.sub_activities.find(item => item.id === nextSubId)
@@ -878,7 +884,13 @@ export function DailyCostLineDialog({
                   severity="warning"
                   sx={{ py: 0 }}
                   action={
-                    <Button component={RouterLink} to="/rig-well/sub-activities" size="small" color="inherit" onClick={onClose}>
+                    <Button
+                      component={RouterLink}
+                      to={`/rig-well/sub-activities?well_id=${encodeURIComponent(wellId)}&scope=${scope}`}
+                      size="small"
+                      color="inherit"
+                      onClick={onClose}
+                    >
                       Configure sub activities
                     </Button>
                   }

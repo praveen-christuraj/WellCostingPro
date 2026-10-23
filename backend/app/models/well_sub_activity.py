@@ -1,13 +1,14 @@
 """Tenant-scoped well sub activities.
 
-A sub activity belongs to one well and references an active Activity from the
-workspace's Master Data register. Its code is unique within that well only.
+A sub activity belongs to one well and one configuration scope (drilling or
+completion) and references an active Activity from the workspace's Master Data
+register. Its code is unique within that well and scope.
 """
 
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -24,16 +25,21 @@ def now() -> datetime:
 
 
 class WellSubActivity(Base):
-    """A well-scoped task classified under a Master Data Activity."""
+    """A well-and-scope task classified under a Master Data Activity."""
 
     __tablename__ = "well_sub_activities"
     __table_args__ = (
         UniqueConstraint(
-            "organization_id", "well_id", "sub_activity_code",
+            "organization_id",
+            "well_id",
+            "scope",
+            "sub_activity_code",
             name="uq_well_sub_activities_org_well_code",
         ),
+        CheckConstraint("scope IN ('drilling', 'completion')", name="ck_well_sub_activities_scope"),
         Index("ix_well_sub_activities_org_deleted", "organization_id", "is_deleted"),
         Index("ix_well_sub_activities_org_activity", "organization_id", "activity_id"),
+        Index("ix_well_sub_activities_well_scope", "organization_id", "well_id", "scope"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
@@ -42,6 +48,9 @@ class WellSubActivity(Base):
     )
     well_id: Mapped[str] = mapped_column(
         ForeignKey("wells.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    scope: Mapped[str] = mapped_column(
+        String(20), default="drilling", server_default="drilling", nullable=False
     )
     sub_activity_code: Mapped[str] = mapped_column(String(50), nullable=False)
     sub_activity_name: Mapped[str] = mapped_column(String(150), nullable=False)

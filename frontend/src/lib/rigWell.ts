@@ -41,11 +41,13 @@ export type RigOption = {
   well_count: number
 }
 
+export type WellConfigurationScope = 'drilling' | 'completion'
+
 export type Well = {
   completion_status: 'active' | 'completed'
   completion_config_status: 'draft' | 'configured' | 'final_review'
   /** The scope this row represents when the page lists scope-segregated wells. */
-  scope?: 'drilling' | 'completion'
+  scope?: WellConfigurationScope
   completion_section_count: number
   id: string
   rig_id: string
@@ -75,6 +77,14 @@ export type Well = {
   completion_total_days: string | number
   section_count: number
   sub_activity_count: number
+  drilling_sub_activity_count: number
+  completion_sub_activity_count: number
+  drilling_is_deleted: boolean
+  drilling_deleted_at: string | null
+  drilling_purged: boolean
+  completion_is_deleted: boolean
+  completion_deleted_at: string | null
+  completion_purged: boolean
   is_deleted: boolean
   deleted_at: string | null
   created_at: string
@@ -109,8 +119,6 @@ export type WellSectionDraft = {
   phases: WellPhaseDraft[]
 }
 
-export type WellConfigurationScope = 'drilling' | 'completion'
-
 export type WellConfiguration = {
   scope: WellConfigurationScope
   well_id: string
@@ -121,7 +129,7 @@ export type WellConfiguration = {
   status: 'active' | 'completed'
   config_status: 'draft' | 'configured' | 'final_review'
   depth_unit: 'm' | 'ft'
-  completion_depth_unit: 'm' | 'ft'
+  completion_depth_unit?: 'm' | 'ft'
   standard_depth_unit?: 'm'
   total_depth: string | number | null
   total_depth_m?: string | number | null
@@ -132,6 +140,7 @@ export type WellConfiguration = {
 export type SubActivity = {
   id: string
   well_id: string
+  scope: WellConfigurationScope
   sub_activity_code: string
   sub_activity_name: string
   activity_id: string
@@ -154,6 +163,7 @@ export type SubActivity = {
 export type DeletedRigWellRecord = {
   id: string
   entity_type: 'block' | 'rig' | 'well' | 'well_sub_activity'
+  scope?: WellConfigurationScope | null
   code: string
   name: string
   parent_label: string
@@ -214,9 +224,11 @@ export type WellPayload = {
   well_location: string
   objective: string
   remarks: string
+  scopes: WellConfigurationScope[]
 }
 export type SubActivityPayload = {
   well_id: string
+  scope: WellConfigurationScope
   sub_activity_code: string
   sub_activity_name: string
   activity_id: string
@@ -235,20 +247,41 @@ export const WELL_IMPORT_OPTIONAL_HEADERS = ['remarks']
 export const SUB_ACTIVITY_IMPORT_HEADERS = [
   'sub_activity_code', 'sub_activity_name', 'activity', 'responsible_party', 'description',
 ]
+export const SUB_ACTIVITY_IMPORT_OPTIONAL_HEADERS = ['scope']
 
 export const emptyBlockForm = (): BlockPayload => ({ block_code: '', block_name: '', description: '' })
 export const emptyRigForm = (): RigPayload => ({ rig_code: '', rig_name: '', remarks: '' })
 export const emptyWellForm = (): WellPayload => ({
-  rig_id: '', block_id: '', well_code: '', well_name: '', well_location: '', objective: '', remarks: '',
+  rig_id: '',
+  block_id: '',
+  well_code: '',
+  well_name: '',
+  well_location: '',
+  objective: '',
+  remarks: '',
+  scopes: ['drilling', 'completion'],
 })
-export const emptySubActivityForm = (wellId = ''): SubActivityPayload => ({
+export const emptySubActivityForm = (wellId = '', scope: WellConfigurationScope = 'drilling'): SubActivityPayload => ({
   well_id: wellId,
+  scope,
   sub_activity_code: '',
   sub_activity_name: '',
   activity_id: '',
   responsible_party: '',
   description: '',
 })
+
+export function activeWellScopes(well: Pick<Well, 'drilling_is_deleted' | 'completion_is_deleted'> | null | undefined): WellConfigurationScope[] {
+  if (!well) return []
+  const scopes: WellConfigurationScope[] = []
+  if (!well.drilling_is_deleted) scopes.push('drilling')
+  if (!well.completion_is_deleted) scopes.push('completion')
+  return scopes
+}
+
+export function scopeLabel(scope: WellConfigurationScope): string {
+  return scope === 'completion' ? 'Completion' : 'Drilling'
+}
 
 export function formatDepth(
   value: string | number | null | undefined,

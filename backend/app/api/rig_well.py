@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import ValidationError
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -30,12 +30,15 @@ from app.models import (
     DailyCostOtherExpenseLine,
     DailyCostServiceLine,
     DailyCostTangibleLine,
-    MudCostEntry,
     HoleSection,
+    LihCostEntry,
+    MudCostEntry,
+    MudCostSectionSetting,
     Phase,
     Rig,
     Well,
     WellPhase,
+    WellPlanAdjustment,
     WellSection,
     WellSubActivity,
 )
@@ -72,6 +75,7 @@ from app.schemas.rig_well import (
     RigWellConfigurationOptions,
     RigWellMasterDataOption,
     RigWellRecentActivity,
+    WellBulkDeleteRequest,
     WellConfigurationIn,
     WellConfigurationOut,
     WellCreate,
@@ -201,6 +205,14 @@ def _block_out(block: Block, well_count: int = 0) -> BlockOut:
     )
 
 
+def _scope_label(scope: str) -> str:
+    return "Completion" if scope == "completion" else "Drilling"
+
+
+def _other_scope(scope: str) -> str:
+    return "drilling" if scope == "completion" else "completion"
+
+
 def _well_or_404(
     db: Session,
     well_id: str,
@@ -213,6 +225,7 @@ def _well_or_404(
         .options(
             joinedload(Well.rig),
             selectinload(Well.sections).selectinload(WellSection.phases),
+            selectinload(Well.completion_sections).selectinload(WellSection.phases),
         )
         .where(Well.id == well_id, Well.organization_id == organization_id)
     )
@@ -229,11 +242,17 @@ def _well_for_sub_activity(
     well_id: str,
     organization_id: str,
     *,
+    scope: str | None = None,
     include_deleted: bool = False,
 ) -> Well:
     well = _well_or_404(db, well_id, organization_id, include_deleted=include_deleted)
     if well.rig is None or well.rig.organization_id != organization_id or well.rig.is_deleted:
         raise HTTPException(status_code=409, detail="Restore the well's rig before using this well")
+    if scope is not None and not include_deleted and well.scope_is_deleted(scope):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Restore or add the {_scope_label(scope)} scope on well {well.well_code} before using it",
+        )
     return well
 
 
@@ -333,17 +352,52 @@ def _effective_plan_map(db: Session, organization_id: str, well_ids: list[str]) 
     return effective
 
 
-def _well_out_for(db: Session, organization_id: str, well: Well, sub_activity_count: int = 0) -> WellOut:
-    """Single-well output enriched with its effective plan adjustment."""
+def _scoped_sub_activity_counts(
+    db: Session,
+    organization_id: str,
+    well_ids: list[str],
+) -> dict[tuple[str, str], int]:
+    if not well_ids:
+        return {}
+    rows = db.execute(
+        select(WellSubActivity.well_id, WellSubActivity.scope, func.count(WellSubActivity.id))
+        .where(
+            WellSubActivity.organization_id == organization_id,
+            WellSubActivity.is_deleted.is_(False),
+            WellSubActivity.well_id.in_(well_ids),
+        )
+        .group_by(WellSubActivity.well_id, WellSubActivity.scope)
+    ).all()
+    return {(str(well_id), str(scope)): int(value) for well_id, scope, value in rows}
+
+
+def _well_out_for(db: Session, organization_id: str, well: Well) -> WellOut:
+    """Single-well output enriched with scoped sub-activity counts and effective plan adjustment."""
+    scoped_counts = _scoped_sub_activity_counts(db, organization_id, [well.id])
+    drilling_count = scoped_counts.get((well.id, "drilling"), 0)
+    completion_count = scoped_counts.get((well.id, "completion"), 0)
     plan_map = _effective_plan_map(db, organization_id, [well.id])
-    return _well_out(well, sub_activity_count, plan_adjustment=plan_map.get(well.id))
+    return _well_out(
+        well,
+        drilling_count + completion_count,
+        drilling_sub_activity_count=drilling_count,
+        completion_sub_activity_count=completion_count,
+        plan_adjustment=plan_map.get(well.id),
+    )
 
 
 def _section_totals(sections: Any) -> tuple[Decimal | None, Decimal]:
     return _well_totals(list(sections))
 
 
-def _well_out(well: Well, sub_activity_count: int = 0, *, plan_adjustment: Any | None = None) -> WellOut:
+def _well_out(
+    well: Well,
+    sub_activity_count: int = 0,
+    *,
+    drilling_sub_activity_count: int = 0,
+    completion_sub_activity_count: int = 0,
+    plan_adjustment: Any | None = None,
+) -> WellOut:
     drilling_depth, drilling_days = _well_totals(well.sections)
     completion_depth, completion_days = _section_totals(well.completion_sections)
     rig = well.rig
@@ -378,6 +432,14 @@ def _well_out(well: Well, sub_activity_count: int = 0, *, plan_adjustment: Any |
         completion_total_days=completion_days,
         section_count=len(well.sections),
         sub_activity_count=sub_activity_count,
+        drilling_sub_activity_count=drilling_sub_activity_count,
+        completion_sub_activity_count=completion_sub_activity_count,
+        drilling_is_deleted=well.drilling_is_deleted,
+        drilling_deleted_at=well.drilling_deleted_at,
+        drilling_purged=well.drilling_purged,
+        completion_is_deleted=well.completion_is_deleted,
+        completion_deleted_at=well.completion_deleted_at,
+        completion_purged=well.completion_purged,
         is_deleted=well.is_deleted,
         deleted_at=well.deleted_at,
         created_at=well.created_at,
@@ -470,6 +532,7 @@ def _sub_activity_out(record: WellSubActivity) -> WellSubActivityOut:
     return WellSubActivityOut(
         id=record.id,
         well_id=record.well_id,
+        scope=record.scope if record.scope in ("drilling", "completion") else "drilling",
         sub_activity_code=record.sub_activity_code,
         sub_activity_name=record.sub_activity_name,
         activity_id=record.activity_id,
@@ -604,7 +667,20 @@ def overview(db: Db, user: Current) -> RigWellOverview:
     active_rigs = count(Rig, deleted=False)
     deleted_rigs = count(Rig, deleted=True)
     active_wells = count(Well, deleted=False, extra=(Well.status == "active",))
-    deleted_wells = count(Well, deleted=True)
+    whole_deleted_wells = count(
+        Well,
+        deleted=True,
+        extra=(Well.drilling_is_deleted.is_(False), Well.completion_is_deleted.is_(False)),
+    )
+    deleted_drilling_scopes = count(
+        Well,
+        extra=(Well.drilling_is_deleted.is_(True), Well.drilling_purged.is_(False)),
+    )
+    deleted_completion_scopes = count(
+        Well,
+        extra=(Well.completion_is_deleted.is_(True), Well.completion_purged.is_(False)),
+    )
+    deleted_wells = whole_deleted_wells + deleted_drilling_scopes + deleted_completion_scopes
     active_sub_activities = count(WellSubActivity, deleted=False)
     deleted_sub_activities = count(WellSubActivity, deleted=True)
     configured_wells = count(
@@ -616,7 +692,10 @@ def overview(db: Db, user: Current) -> RigWellOverview:
         deleted=False,
         extra=(
             Well.status == "active",
-            or_(Well.config_status == "final_review", Well.completion_config_status == "final_review"),
+            or_(
+                and_(Well.drilling_is_deleted.is_(False), Well.config_status == "final_review"),
+                and_(Well.completion_is_deleted.is_(False), Well.completion_config_status == "final_review"),
+            ),
         ),
     )
     completed_wells = count(Well, deleted=False, extra=(Well.status == "completed",))
@@ -1455,6 +1534,184 @@ def import_blocks(data: RigWellImportRequest, request: Request, db: Db, user: Cu
 # ---------------------------------------------------------------------------
 
 
+def _scope_active_dependencies(
+    db: Session,
+    organization_id: str,
+    well: Well,
+    scope: str,
+) -> list[str]:
+    active_children = _count_children(
+        db, WellSubActivity, organization_id, well_id=well.id, scope=scope, is_deleted=False
+    )
+    active_afes = _count_children(
+        db, Afe, organization_id, well_id=well.id, configuration_scope=scope, is_deleted=False
+    )
+    active_daily_sheets = int(
+        db.scalar(
+            select(func.count(DailyCostEntry.id))
+            .join(Afe, DailyCostEntry.afe_id == Afe.id)
+            .where(
+                DailyCostEntry.organization_id == organization_id,
+                DailyCostEntry.well_id == well.id,
+                DailyCostEntry.is_deleted.is_(False),
+                Afe.organization_id == organization_id,
+                Afe.configuration_scope == scope,
+            )
+        )
+        or 0
+    )
+    active_mud_entries = _count_children(
+        db, MudCostEntry, organization_id, well_id=well.id, section_scope=scope, is_deleted=False
+    )
+    active_lih_entries = int(
+        db.scalar(
+            select(func.count(LihCostEntry.id))
+            .join(Afe, LihCostEntry.afe_id == Afe.id)
+            .where(
+                LihCostEntry.organization_id == organization_id,
+                LihCostEntry.well_id == well.id,
+                LihCostEntry.is_deleted.is_(False),
+                Afe.organization_id == organization_id,
+                Afe.configuration_scope == scope,
+            )
+        )
+        or 0
+    )
+    dependencies: list[str] = []
+    if active_children:
+        dependencies.append(f"{active_children} active sub activity record(s)")
+    if active_afes:
+        dependencies.append(f"{active_afes} active AFE(s)")
+    if active_daily_sheets:
+        dependencies.append(f"{active_daily_sheets} active daily-cost sheet(s)")
+    if active_mud_entries:
+        dependencies.append(f"{active_mud_entries} active Mud Cost entry/entries")
+    if active_lih_entries:
+        dependencies.append(f"{active_lih_entries} active LIH cost entry/entries")
+    return dependencies
+
+
+def _scope_retained_dependencies(
+    db: Session,
+    organization_id: str,
+    well: Well,
+    scope: str,
+    *,
+    ignore_sub_activity_ids: set[str] | None = None,
+) -> list[str]:
+    sub_activity_stmt = select(func.count(WellSubActivity.id)).where(
+        WellSubActivity.organization_id == organization_id,
+        WellSubActivity.well_id == well.id,
+        WellSubActivity.scope == scope,
+    )
+    if ignore_sub_activity_ids:
+        sub_activity_stmt = sub_activity_stmt.where(WellSubActivity.id.notin_(ignore_sub_activity_ids))
+    sub_activities = int(db.scalar(sub_activity_stmt) or 0)
+    afes = _count_children(db, Afe, organization_id, well_id=well.id, configuration_scope=scope)
+    daily_sheets = int(
+        db.scalar(
+            select(func.count(DailyCostEntry.id))
+            .join(Afe, DailyCostEntry.afe_id == Afe.id)
+            .where(
+                DailyCostEntry.organization_id == organization_id,
+                DailyCostEntry.well_id == well.id,
+                Afe.organization_id == organization_id,
+                Afe.configuration_scope == scope,
+            )
+        )
+        or 0
+    )
+    mud_entries = _count_children(
+        db, MudCostEntry, organization_id, well_id=well.id, section_scope=scope
+    )
+    lih_entries = int(
+        db.scalar(
+            select(func.count(LihCostEntry.id))
+            .join(Afe, LihCostEntry.afe_id == Afe.id)
+            .where(
+                LihCostEntry.organization_id == organization_id,
+                LihCostEntry.well_id == well.id,
+                Afe.organization_id == organization_id,
+                Afe.configuration_scope == scope,
+            )
+        )
+        or 0
+    )
+    plan_adjustments = _count_children(
+        db, WellPlanAdjustment, organization_id, well_id=well.id, configuration_scope=scope
+    )
+    dependencies: list[str] = []
+    if sub_activities:
+        dependencies.append(f"{sub_activities} sub activity record(s)")
+    if afes:
+        dependencies.append(f"{afes} AFE record(s)")
+    if daily_sheets:
+        dependencies.append(f"{daily_sheets} daily-cost sheet(s)")
+    if mud_entries:
+        dependencies.append(f"{mud_entries} Mud Cost entry/entries")
+    if lih_entries:
+        dependencies.append(f"{lih_entries} LIH cost entry/entries")
+    if plan_adjustments:
+        dependencies.append(f"{plan_adjustments} well-plan adjustment(s)")
+    return dependencies
+
+
+def _purge_well_scope_data(
+    db: Session,
+    organization_id: str,
+    well: Well,
+    scope: str,
+) -> str:
+    """Purge owned configuration rows for one well scope; remove the Well row if both scopes are purged."""
+    mud_settings = list(
+        db.scalars(
+            select(MudCostSectionSetting).where(
+                MudCostSectionSetting.organization_id == organization_id,
+                MudCostSectionSetting.well_id == well.id,
+                MudCostSectionSetting.section_scope == scope,
+            )
+        ).all()
+    )
+    for item in mud_settings:
+        db.delete(item)
+    for section in list(well.sections_for_scope(scope)):
+        db.delete(section)
+    db.flush()
+    well.set_scope_value(scope, "status", "active")
+    well.set_scope_value(scope, "config_status", "draft")
+    well.set_scope_value(scope, "depth_unit", "m")
+    if scope == "completion":
+        well.completion_spud_at = None
+        well.completion_progress_completed_at = None
+        well.completion_is_deleted = True
+        well.completion_purged = True
+    else:
+        well.drilling_spud_at = None
+        well.drilling_progress_completed_at = None
+        well.drilling_is_deleted = True
+        well.drilling_purged = True
+
+    other = _other_scope(scope)
+    if well.scope_is_purged(other):
+        assert_purgeable(
+            db,
+            organization_id,
+            well,
+            entity_label=f"well {well.well_code}",
+            next_step=(
+                "Permanently delete the dependent LIH cost entries and SOW/well-plan revisions from their own "
+                "module first."
+            ),
+        )
+        removed = purge_owned_snapshots(db, organization_id, well_ids=[well.id])
+        snapshot_note = snapshot_summary(removed)
+        db.delete(well)
+        return snapshot_note
+
+    well.sync_deleted_from_scopes()
+    return ""
+
+
 @router.get(
     "/wells",
     response_model=list[WellOut],
@@ -1476,6 +1733,7 @@ def list_wells(
             joinedload(Well.rig),
             joinedload(Well.block_record),
             selectinload(Well.sections).selectinload(WellSection.phases),
+            selectinload(Well.completion_sections).selectinload(WellSection.phases),
         )
         .join(Block, Well.block_id == Block.id)
         .where(
@@ -1515,18 +1773,19 @@ def list_wells(
     # Block-first ordering keeps each block's wells together in the register, so
     # the list reads as a block-by-block segregation by default.
     wells = db.scalars(statement.order_by(Block.block_code, Well.well_code)).all()
-    count_rows = db.execute(
-        select(WellSubActivity.well_id, func.count(WellSubActivity.id))
-        .where(
-            WellSubActivity.organization_id == user.organization_id,
-            WellSubActivity.is_deleted.is_(False),
-            WellSubActivity.well_id.in_([well.id for well in wells] or [""]),
+    well_ids = [well.id for well in wells]
+    scoped_counts = _scoped_sub_activity_counts(db, user.organization_id, well_ids)
+    plan_map = _effective_plan_map(db, user.organization_id, well_ids)
+    return [
+        _well_out(
+            well,
+            scoped_counts.get((well.id, "drilling"), 0) + scoped_counts.get((well.id, "completion"), 0),
+            drilling_sub_activity_count=scoped_counts.get((well.id, "drilling"), 0),
+            completion_sub_activity_count=scoped_counts.get((well.id, "completion"), 0),
+            plan_adjustment=plan_map.get(well.id),
         )
-        .group_by(WellSubActivity.well_id)
-    ).all()
-    activity_counts = {well_id: int(value) for well_id, value in count_rows}
-    plan_map = _effective_plan_map(db, user.organization_id, [well.id for well in wells])
-    return [_well_out(well, activity_counts.get(well.id, 0), plan_adjustment=plan_map.get(well.id)) for well in wells]
+        for well in wells
+    ]
 
 
 @router.post(
@@ -1538,6 +1797,8 @@ def list_wells(
 def create_well(data: WellCreate, request: Request, db: Db, user: Current) -> WellOut:
     rig = _rig_or_404(db, data.rig_id, user.organization_id, include_deleted=False)
     block = _block_or_404(db, data.block_id, user.organization_id, include_deleted=False)
+    include_drilling = "drilling" in data.scopes
+    include_completion = "completion" in data.scopes
     existing = db.scalar(
         select(Well).where(
             Well.organization_id == user.organization_id,
@@ -1553,6 +1814,12 @@ def create_well(data: WellCreate, request: Request, db: Db, user: Current) -> We
         existing.well_location = data.well_location
         existing.objective = data.objective
         existing.remarks = data.remarks
+        existing.drilling_is_deleted = not include_drilling
+        existing.drilling_deleted_at = None
+        existing.drilling_purged = not include_drilling
+        existing.completion_is_deleted = not include_completion
+        existing.completion_deleted_at = None
+        existing.completion_purged = not include_completion
         existing.is_deleted = False
         existing.deleted_at = None
         _record_audit(
@@ -1573,6 +1840,10 @@ def create_well(data: WellCreate, request: Request, db: Db, user: Current) -> We
         well_location=data.well_location,
         objective=data.objective,
         remarks=data.remarks,
+        drilling_is_deleted=not include_drilling,
+        drilling_purged=not include_drilling,
+        completion_is_deleted=not include_completion,
+        completion_purged=not include_completion,
     )
     db.add(well)
     db.flush()
@@ -1580,6 +1851,46 @@ def create_well(data: WellCreate, request: Request, db: Db, user: Current) -> We
         db, user=user, action="create", entity_type="well", record_id=well.id,
         entity_label=well.well_code,
         summary=f"Created well {well.well_code} — {well.well_name} under rig {rig.rig_code}",
+        request=request,
+    )
+    _commit(db)
+    db.refresh(well)
+    return _well_out_for(db, user.organization_id, well)
+
+
+@router.post(
+    "/wells/{well_id}/scopes/{scope}/activate",
+    response_model=WellOut,
+    dependencies=[Depends(require("rig-well:update"))],
+)
+def activate_well_scope(
+    well_id: str,
+    scope: Literal["drilling", "completion"],
+    request: Request,
+    db: Db,
+    user: Current,
+) -> WellOut:
+    well = _well_or_404(db, well_id, user.organization_id, include_deleted=False)
+    _rig_or_404(db, well.rig_id, user.organization_id, include_deleted=False)
+    if not well.scope_is_deleted(scope):
+        raise HTTPException(status_code=409, detail=f"The {_scope_label(scope)} scope is already active")
+    if scope == "completion":
+        well.completion_is_deleted = False
+        well.completion_deleted_at = None
+        well.completion_purged = False
+    else:
+        well.drilling_is_deleted = False
+        well.drilling_deleted_at = None
+        well.drilling_purged = False
+    well.sync_deleted_from_scopes()
+    _record_audit(
+        db,
+        user=user,
+        action="update",
+        entity_type="well",
+        record_id=well.id,
+        entity_label=well.well_code,
+        summary=f"Enabled {_scope_label(scope)} scope on well {well.well_code}",
         request=request,
     )
     _commit(db)
@@ -1643,7 +1954,7 @@ def update_well(well_id: str, data: WellUpdate, request: Request, db: Db, user: 
         )
         _commit(db)
         db.refresh(well)
-    return _well_out(well)
+    return _well_out_for(db, user.organization_id, well)
 
 
 @router.delete(
@@ -1651,8 +1962,53 @@ def update_well(well_id: str, data: WellUpdate, request: Request, db: Db, user: 
     response_model=WellOut,
     dependencies=[Depends(require("rig-well:delete"))],
 )
-def soft_delete_well(well_id: str, request: Request, db: Db, user: Current) -> WellOut:
+def soft_delete_well(
+    well_id: str,
+    request: Request,
+    db: Db,
+    user: Current,
+    scope: Literal["drilling", "completion"] | None = Query(default=None),
+) -> WellOut:
     well = _well_or_404(db, well_id, user.organization_id, include_deleted=False)
+    if scope is not None:
+        if well.scope_is_deleted(scope):
+            raise HTTPException(
+                status_code=404,
+                detail=f"{_scope_label(scope)} scope on well {well.well_code} is already deleted",
+            )
+        dependencies = _scope_active_dependencies(db, user.organization_id, well, scope)
+        if dependencies:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Well {well.well_code} ({_scope_label(scope)}) still has {', '.join(dependencies)}. "
+                    "Move dependent sub activities and costing records for this scope to their respective Deleted Entries first."
+                ),
+            )
+        ts = _now()
+        if scope == "completion":
+            well.completion_is_deleted = True
+            well.completion_deleted_at = ts
+            well.completion_purged = False
+        else:
+            well.drilling_is_deleted = True
+            well.drilling_deleted_at = ts
+            well.drilling_purged = False
+        well.sync_deleted_from_scopes(ts)
+        _record_audit(
+            db,
+            user=user,
+            action="soft_delete",
+            entity_type="well",
+            record_id=well.id,
+            entity_label=f"{well.well_code} ({_scope_label(scope)})",
+            summary=f"Moved {_scope_label(scope)} scope of well {well.well_code} to Deleted Entries",
+            request=request,
+        )
+        _commit(db)
+        db.refresh(well)
+        return _well_out_for(db, user.organization_id, well)
+
     active_children = _count_children(
         db, WellSubActivity, user.organization_id, well_id=well.id, is_deleted=False
     )
@@ -1694,13 +2050,61 @@ def soft_delete_well(well_id: str, request: Request, db: Db, user: Current) -> W
     response_model=WellOut,
     dependencies=[Depends(require("rig-well:restore"))],
 )
-def restore_well(well_id: str, request: Request, db: Db, user: Current) -> WellOut:
+def restore_well(
+    well_id: str,
+    request: Request,
+    db: Db,
+    user: Current,
+    scope: Literal["drilling", "completion"] | None = Query(default=None),
+) -> WellOut:
     well = _well_or_404(db, well_id, user.organization_id)
+    if scope is not None:
+        if not well.scope_is_deleted(scope) or well.scope_is_purged(scope):
+            raise HTTPException(status_code=409, detail="Only a deleted well scope can be restored")
+        _rig_or_404(db, well.rig_id, user.organization_id, include_deleted=False)
+        other = _other_scope(scope)
+        if well.is_deleted and not well.drilling_is_deleted and not well.completion_is_deleted:
+            # Whole-well soft-deleted row where one scope is restored individually.
+            if other == "completion":
+                well.completion_is_deleted = True
+                well.completion_deleted_at = well.deleted_at or _now()
+            else:
+                well.drilling_is_deleted = True
+                well.drilling_deleted_at = well.deleted_at or _now()
+        if scope == "completion":
+            well.completion_is_deleted = False
+            well.completion_deleted_at = None
+            well.completion_purged = False
+        else:
+            well.drilling_is_deleted = False
+            well.drilling_deleted_at = None
+            well.drilling_purged = False
+        well.sync_deleted_from_scopes()
+        _record_audit(
+            db,
+            user=user,
+            action="restore",
+            entity_type="well",
+            record_id=well.id,
+            entity_label=f"{well.well_code} ({_scope_label(scope)})",
+            summary=f"Restored {_scope_label(scope)} scope of well {well.well_code}",
+            request=request,
+        )
+        _commit(db)
+        db.refresh(well)
+        return _well_out_for(db, user.organization_id, well)
+
     if not well.is_deleted:
         raise HTTPException(status_code=409, detail="Only a deleted well can be restored")
     _rig_or_404(db, well.rig_id, user.organization_id, include_deleted=False)
     well.is_deleted = False
     well.deleted_at = None
+    if not well.drilling_purged:
+        well.drilling_is_deleted = False
+        well.drilling_deleted_at = None
+    if not well.completion_purged:
+        well.completion_is_deleted = False
+        well.completion_deleted_at = None
     _record_audit(
         db, user=user, action="restore", entity_type="well", record_id=well.id,
         entity_label=well.well_code,
@@ -1717,8 +2121,45 @@ def restore_well(well_id: str, request: Request, db: Db, user: Current) -> WellO
     status_code=204,
     dependencies=[Depends(require("rig-well:permanent-delete"))],
 )
-def permanently_delete_well(well_id: str, request: Request, db: Db, user: Current) -> None:
+def permanently_delete_well(
+    well_id: str,
+    request: Request,
+    db: Db,
+    user: Current,
+    scope: Literal["drilling", "completion"] | None = Query(default=None),
+) -> None:
     well = _well_or_404(db, well_id, user.organization_id)
+    if scope is not None:
+        if not well.scope_is_deleted(scope) or well.scope_is_purged(scope):
+            raise HTTPException(status_code=409, detail="Move the well scope to Deleted Entries before permanent deletion")
+        dependencies = _scope_retained_dependencies(db, user.organization_id, well, scope)
+        if dependencies:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Well {well.well_code} ({_scope_label(scope)}) retains {', '.join(dependencies)}. "
+                    "Move them to Deleted Entries if they are still active, then permanently delete them there first."
+                ),
+            )
+        well_code = well.well_code
+        well_id_copy = well.id
+        snapshot_note = _purge_well_scope_data(db, user.organization_id, well, scope)
+        _record_audit(
+            db,
+            user=user,
+            action="permanent_delete",
+            entity_type="well",
+            record_id=well_id_copy,
+            entity_label=f"{well_code} ({_scope_label(scope)})",
+            summary=(
+                f"Permanently deleted {_scope_label(scope)} scope of well {well_code}"
+                + (f", together with {snapshot_note}" if snapshot_note else "")
+            ),
+            request=request,
+        )
+        _commit(db)
+        return
+
     if not well.is_deleted:
         raise HTTPException(status_code=409, detail="Move the well to Deleted Entries before permanent deletion")
     sub_activities = _count_children(db, WellSubActivity, user.organization_id, well_id=well.id)
@@ -1776,7 +2217,76 @@ def permanently_delete_well(well_id: str, request: Request, db: Db, user: Curren
     response_model=RigWellBulkActionResponse,
     dependencies=[Depends(require("rig-well:delete"))],
 )
-def bulk_delete_wells(data: RigWellIDs, request: Request, db: Db, user: Current) -> RigWellBulkActionResponse:
+def bulk_delete_wells(
+    data: WellBulkDeleteRequest,
+    request: Request,
+    db: Db,
+    user: Current,
+) -> RigWellBulkActionResponse:
+    if data.items:
+        pairs = [(item.id, item.scope) for item in data.items]
+        if len(pairs) != len(set(pairs)):
+            raise HTTPException(status_code=422, detail="Duplicate well scope selections are not allowed")
+        unique_ids = list({item.id for item in data.items})
+        wells_by_id = {
+            well.id: well
+            for well in db.scalars(
+                select(Well).where(
+                    Well.organization_id == user.organization_id,
+                    Well.id.in_(unique_ids),
+                )
+            ).all()
+        }
+        if len(wells_by_id) != len(unique_ids):
+            raise HTTPException(status_code=404, detail="One or more records do not belong to this workspace")
+        for item in data.items:
+            well = wells_by_id[item.id]
+            if well.scope_is_deleted(item.scope):
+                raise HTTPException(status_code=409, detail="This bulk action requires only active well scopes")
+            dependencies = _scope_active_dependencies(db, user.organization_id, well, item.scope)
+            if dependencies:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Well {well.well_code} ({_scope_label(item.scope)}) still has {', '.join(dependencies)}. "
+                        "Delete or move each dependent record for this scope first."
+                    ),
+                )
+        deleted_at = _now()
+        for item in data.items:
+            well = wells_by_id[item.id]
+            if item.scope == "completion":
+                well.completion_is_deleted = True
+                well.completion_deleted_at = deleted_at
+                well.completion_purged = False
+            else:
+                well.drilling_is_deleted = True
+                well.drilling_deleted_at = deleted_at
+                well.drilling_purged = False
+            well.sync_deleted_from_scopes(deleted_at)
+            _record_audit(
+                db,
+                user=user,
+                action="soft_delete",
+                entity_type="well",
+                record_id=well.id,
+                entity_label=f"{well.well_code} ({_scope_label(item.scope)})",
+                summary=f"Moved {_scope_label(item.scope)} scope of well {well.well_code} to Deleted Entries (bulk action)",
+                request=request,
+            )
+        _record_audit(
+            db,
+            user=user,
+            action="delete",
+            entity_type="well",
+            record_id=None,
+            entity_label="Well register",
+            summary=f"Moved {len(data.items)} well scope(s) to Deleted Entries",
+            request=request,
+        )
+        _commit(db)
+        return RigWellBulkActionResponse(affected_count=len(data.items))
+
     wells = _records_for_ids(db, Well, data.ids, user.organization_id, deleted=False)
     well_ids = [well.id for well in wells]
     sub_activity_counts = _counts_by_parent(
@@ -1949,7 +2459,13 @@ def import_wells(data: RigWellImportRequest, request: Request, db: Db, user: Cur
     dependencies=[Depends(require("rig-well:read"))],
 )
 def get_well_configuration(well_id: str, db: Db, user: Current, scope: Literal["drilling", "completion"] = "drilling") -> WellConfigurationOut:
-    return _well_configuration_out(_well_or_404(db, well_id, user.organization_id, include_deleted=False), scope)
+    well = _well_or_404(db, well_id, user.organization_id, include_deleted=False)
+    if well.scope_is_deleted(scope):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Restore or add the {_scope_label(scope)} scope on well {well.well_code} before viewing or editing its configuration",
+        )
+    return _well_configuration_out(well, scope)
 
 
 @router.put(
@@ -1965,6 +2481,11 @@ def save_well_configuration(
     user: Current,
 ) -> WellConfigurationOut:
     well = _well_or_404(db, well_id, user.organization_id, include_deleted=False)
+    if well.scope_is_deleted(data.scope):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Restore or add the {_scope_label(data.scope)} scope on well {well.well_code} before editing its configuration",
+        )
     if well.scope_value(data.scope, "status") == "completed":
         raise HTTPException(status_code=409, detail="Reactivate the completed well before editing its configuration")
     if well.scope_value(data.scope, "config_status") != "draft":
@@ -2055,6 +2576,11 @@ def transition_well(
     user: Current,
 ) -> WellOut:
     well = _well_or_404(db, well_id, user.organization_id, include_deleted=False)
+    if well.scope_is_deleted(data.scope):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Restore or add the {_scope_label(data.scope)} scope on well {well.well_code} before changing its lifecycle state",
+        )
     action = data.action
     if action == "configure":
         if well.scope_value(data.scope, "status") != "active":
@@ -2149,9 +2675,10 @@ def list_sub_activities(
     db: Db,
     user: Current,
     well_id: str = Query(min_length=1, max_length=36),
+    scope: Literal["drilling", "completion"] | None = Query(default=None),
     search: str | None = Query(default=None, max_length=200),
 ) -> list[WellSubActivityOut]:
-    _well_for_sub_activity(db, well_id, user.organization_id)
+    well = _well_for_sub_activity(db, well_id, user.organization_id, scope=scope)
     statement = (
         select(WellSubActivity)
         .options(joinedload(WellSubActivity.well).joinedload(Well.rig), joinedload(WellSubActivity.activity))
@@ -2161,6 +2688,11 @@ def list_sub_activities(
             WellSubActivity.is_deleted.is_(False),
         )
     )
+    if scope is not None:
+        statement = statement.where(WellSubActivity.scope == scope)
+    else:
+        active_scopes = [item for item in ("drilling", "completion") if not well.scope_is_deleted(item)]
+        statement = statement.where(WellSubActivity.scope.in_(active_scopes or [""]))
     if search and search.strip():
         pattern = f"%{search.strip()}%"
         statement = statement.where(
@@ -2184,6 +2716,7 @@ def list_deleted_sub_activities(
     db: Db,
     user: Current,
     well_id: str | None = Query(default=None, max_length=36),
+    scope: Literal["drilling", "completion"] | None = Query(default=None),
 ) -> list[WellSubActivityOut]:
     statement = (
         select(WellSubActivity)
@@ -2196,6 +2729,8 @@ def list_deleted_sub_activities(
     if well_id:
         _well_or_404(db, well_id, user.organization_id)
         statement = statement.where(WellSubActivity.well_id == well_id)
+    if scope is not None:
+        statement = statement.where(WellSubActivity.scope == scope)
     records = db.scalars(statement.order_by(WellSubActivity.deleted_at.desc())).all()
     return [_sub_activity_out(record) for record in records]
 
@@ -2226,7 +2761,7 @@ def create_sub_activity(
     db: Db,
     user: Current,
 ) -> WellSubActivityOut:
-    well = _well_for_sub_activity(db, data.well_id, user.organization_id)
+    well = _well_for_sub_activity(db, data.well_id, user.organization_id, scope=data.scope)
     activity = _master_record_or_422(db, Activity, data.activity_id, user.organization_id, "Activity")
     classification = classify_activity(activity)
     responsible_party = (data.responsible_party or "").strip()
@@ -2244,6 +2779,7 @@ def create_sub_activity(
         select(WellSubActivity).where(
             WellSubActivity.organization_id == user.organization_id,
             WellSubActivity.well_id == well.id,
+            WellSubActivity.scope == data.scope,
             WellSubActivity.sub_activity_code == data.sub_activity_code,
         )
     )
@@ -2251,7 +2787,10 @@ def create_sub_activity(
         if not existing.is_deleted:
             raise HTTPException(
                 status_code=409,
-                detail=f"Sub activity code '{data.sub_activity_code}' already exists for well {well.well_code}",
+                detail=(
+                    f"Sub activity code '{data.sub_activity_code}' already exists for well "
+                    f"{well.well_code} ({_scope_label(data.scope)})"
+                ),
             )
         existing.sub_activity_name = data.sub_activity_name
         existing.activity_id = activity.id
@@ -2261,8 +2800,11 @@ def create_sub_activity(
         existing.deleted_at = None
         _record_audit(
             db, user=user, action="restore", entity_type="well_sub_activity", record_id=existing.id,
-            entity_label=f"{well.well_code} / {existing.sub_activity_code}",
-            summary=f"Restored and updated sub activity {existing.sub_activity_code} for well {well.well_code} on create",
+            entity_label=f"{well.well_code} ({_scope_label(data.scope)}) / {existing.sub_activity_code}",
+            summary=(
+                f"Restored and updated sub activity {existing.sub_activity_code} for well "
+                f"{well.well_code} ({_scope_label(data.scope)}) on create"
+            ),
             request=request,
         )
         _commit(db)
@@ -2270,6 +2812,7 @@ def create_sub_activity(
     record = WellSubActivity(
         organization_id=user.organization_id,
         well_id=well.id,
+        scope=data.scope,
         sub_activity_code=data.sub_activity_code,
         sub_activity_name=data.sub_activity_name,
         activity_id=activity.id,
@@ -2280,8 +2823,11 @@ def create_sub_activity(
     db.flush()
     _record_audit(
         db, user=user, action="create", entity_type="well_sub_activity", record_id=record.id,
-        entity_label=f"{well.well_code} / {record.sub_activity_code}",
-        summary=f"Created sub activity {record.sub_activity_code} — {record.sub_activity_name} under Activity {activity.activity_code} for well {well.well_code}",
+        entity_label=f"{well.well_code} ({_scope_label(data.scope)}) / {record.sub_activity_code}",
+        summary=(
+            f"Created sub activity {record.sub_activity_code} — {record.sub_activity_name} "
+            f"under Activity {activity.activity_code} for well {well.well_code} ({_scope_label(data.scope)})"
+        ),
         request=request,
     )
     _commit(db)
@@ -2301,10 +2847,10 @@ def update_sub_activity(
     user: Current,
     well_id: str = Query(min_length=1, max_length=36),
 ) -> WellSubActivityOut:
-    well = _well_for_sub_activity(db, well_id, user.organization_id)
     record = _sub_activity_or_404(
-        db, record_id, user.organization_id, well_id=well.id, include_deleted=False
+        db, record_id, user.organization_id, well_id=well_id, include_deleted=False
     )
+    well = _well_for_sub_activity(db, well_id, user.organization_id, scope=record.scope)
     payload = data.model_dump(exclude_unset=True)
     changed: list[str] = []
     for field, value in payload.items():
@@ -2332,6 +2878,7 @@ def update_sub_activity(
                 select(WellSubActivity).where(
                     WellSubActivity.organization_id == user.organization_id,
                     WellSubActivity.well_id == well.id,
+                    WellSubActivity.scope == record.scope,
                     WellSubActivity.sub_activity_code == value,
                     WellSubActivity.id != record.id,
                 )
@@ -2339,15 +2886,21 @@ def update_sub_activity(
             if duplicate:
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Sub activity code '{value}' is already retained for well {well.well_code}; restore or permanently delete it first",
+                    detail=(
+                        f"Sub activity code '{value}' is already retained for well "
+                        f"{well.well_code} ({_scope_label(record.scope)}); restore or permanently delete it first"
+                    ),
                 )
         setattr(record, field, value)
         changed.append(field)
     if changed:
         _record_audit(
             db, user=user, action="update", entity_type="well_sub_activity", record_id=record.id,
-            entity_label=f"{well.well_code} / {record.sub_activity_code}",
-            summary=f"Updated sub activity {record.sub_activity_code} for well {well.well_code}: {', '.join(changed)}",
+            entity_label=f"{well.well_code} ({_scope_label(record.scope)}) / {record.sub_activity_code}",
+            summary=(
+                f"Updated sub activity {record.sub_activity_code} for well "
+                f"{well.well_code} ({_scope_label(record.scope)}): {', '.join(changed)}"
+            ),
             request=request,
         )
         _commit(db)
@@ -2366,10 +2919,10 @@ def soft_delete_sub_activity(
     user: Current,
     well_id: str = Query(min_length=1, max_length=36),
 ) -> WellSubActivityOut:
-    well = _well_for_sub_activity(db, well_id, user.organization_id)
     record = _sub_activity_or_404(
-        db, record_id, user.organization_id, well_id=well.id, include_deleted=False
+        db, record_id, user.organization_id, well_id=well_id, include_deleted=False
     )
+    well = _well_for_sub_activity(db, well_id, user.organization_id, scope=record.scope)
     costing_lines = _daily_cost_line_counts_by_sub_activity(
         db, user.organization_id, [record.id], active_entries_only=True
     ).get(record.id, 0)
@@ -2385,8 +2938,11 @@ def soft_delete_sub_activity(
     record.deleted_at = _now()
     _record_audit(
         db, user=user, action="soft_delete", entity_type="well_sub_activity", record_id=record.id,
-        entity_label=f"{well.well_code} / {record.sub_activity_code}",
-        summary=f"Moved sub activity {record.sub_activity_code} for well {well.well_code} to Deleted Entries",
+        entity_label=f"{well.well_code} ({_scope_label(record.scope)}) / {record.sub_activity_code}",
+        summary=(
+            f"Moved sub activity {record.sub_activity_code} for well "
+            f"{well.well_code} ({_scope_label(record.scope)}) to Deleted Entries"
+        ),
         request=request,
     )
     _commit(db)
@@ -2402,14 +2958,14 @@ def restore_sub_activity(record_id: str, request: Request, db: Db, user: Current
     record = _sub_activity_or_404(db, record_id, user.organization_id)
     if not record.is_deleted:
         raise HTTPException(status_code=409, detail="Only a deleted sub activity can be restored")
-    well = _well_for_sub_activity(db, record.well_id, user.organization_id)
+    well = _well_for_sub_activity(db, record.well_id, user.organization_id, scope=record.scope)
     _master_record_or_422(db, Activity, record.activity_id, user.organization_id, "Activity")
     record.is_deleted = False
     record.deleted_at = None
     _record_audit(
         db, user=user, action="restore", entity_type="well_sub_activity", record_id=record.id,
-        entity_label=f"{well.well_code} / {record.sub_activity_code}",
-        summary=f"Restored sub activity {record.sub_activity_code} for well {well.well_code}",
+        entity_label=f"{well.well_code} ({_scope_label(record.scope)}) / {record.sub_activity_code}",
+        summary=f"Restored sub activity {record.sub_activity_code} for well {well.well_code} ({_scope_label(record.scope)})",
         request=request,
     )
     _commit(db)
@@ -2458,22 +3014,22 @@ def bulk_delete_sub_activities(
     db: Db,
     user: Current,
     well_id: str = Query(min_length=1, max_length=36),
+    scope: Literal["drilling", "completion"] | None = Query(default=None),
 ) -> RigWellBulkActionResponse:
-    well = _well_for_sub_activity(db, well_id, user.organization_id)
-    records = list(
-        db.scalars(
-            select(WellSubActivity).where(
-                WellSubActivity.organization_id == user.organization_id,
-                WellSubActivity.well_id == well.id,
-                WellSubActivity.id.in_(data.ids),
-                WellSubActivity.is_deleted.is_(False),
-            )
-        ).all()
+    well = _well_for_sub_activity(db, well_id, user.organization_id, scope=scope)
+    statement = select(WellSubActivity).where(
+        WellSubActivity.organization_id == user.organization_id,
+        WellSubActivity.well_id == well.id,
+        WellSubActivity.id.in_(data.ids),
+        WellSubActivity.is_deleted.is_(False),
     )
+    if scope is not None:
+        statement = statement.where(WellSubActivity.scope == scope)
+    records = list(db.scalars(statement).all())
     if len(data.ids) != len(set(data.ids)):
         raise HTTPException(status_code=422, detail="Duplicate record IDs are not allowed")
     if len(records) != len(data.ids):
-        raise HTTPException(status_code=404, detail="One or more sub activities do not belong to the selected well")
+        raise HTTPException(status_code=404, detail="One or more sub activities do not belong to the selected well scope")
     costing_line_counts = _daily_cost_line_counts_by_sub_activity(
         db, user.organization_id, [record.id for record in records], active_entries_only=True
     )
@@ -2493,8 +3049,11 @@ def bulk_delete_sub_activities(
         record.deleted_at = deleted_at
         _record_audit(
             db, user=user, action="soft_delete", entity_type="well_sub_activity", record_id=record.id,
-            entity_label=f"{well.well_code} / {record.sub_activity_code}",
-            summary=f"Moved sub activity {record.sub_activity_code} for well {well.well_code} to Deleted Entries (bulk action)",
+            entity_label=f"{well.well_code} ({_scope_label(record.scope)}) / {record.sub_activity_code}",
+            summary=(
+                f"Moved sub activity {record.sub_activity_code} for well "
+                f"{well.well_code} ({_scope_label(record.scope)}) to Deleted Entries (bulk action)"
+            ),
             request=request,
         )
     _record_audit(
@@ -2518,21 +3077,35 @@ def import_sub_activities(
     db: Db,
     user: Current,
     well_id: str = Query(min_length=1, max_length=36),
+    scope: Literal["drilling", "completion"] = Query(default="drilling"),
 ) -> RigWellImportResponse:
-    well = _well_for_sub_activity(db, well_id, user.organization_id)
+    well = _well_for_sub_activity(db, well_id, user.organization_id, scope=scope)
     imported = 0
     errors: list[str] = []
-    seen_codes: set[str] = set()
+    seen_codes: set[tuple[str, str]] = set()
     for row_number, row in enumerate(data.rows, start=1):
         code = _string(_row_value(row, "sub_activity_code", "code", "sub_activity")).upper()
         name = _string(_row_value(row, "sub_activity_name", "name"))
         responsible_party = _string(_row_value(row, "responsible_party", "responsible", "company"))
         description = _string(_row_value(row, "description", "remarks", "remark"))
         activity_ref = _row_value(row, "activity", "activity_code", "activity_name")
+        raw_scope = _string(_row_value(row, "scope", "well_scope", "configuration_scope")).lower()
+        row_scope = raw_scope if raw_scope else scope
+        if row_scope not in ("drilling", "completion"):
+            errors.append(
+                f"Row {row_number} ({code or '—'}): scope must be 'drilling' or 'completion'"
+            )
+            continue
+        if well.scope_is_deleted(row_scope):
+            errors.append(
+                f"Row {row_number} ({code or '—'}): {_scope_label(row_scope)} scope on well {well.well_code} is deleted"
+            )
+            continue
         try:
             payload = WellSubActivityCreate.model_validate(
                 {
                     "well_id": well.id,
+                    "scope": row_scope,
                     "sub_activity_code": code,
                     "sub_activity_name": name,
                     "activity_id": "pending",
@@ -2543,10 +3116,13 @@ def import_sub_activities(
         except ValidationError as error:
             errors.append(f"Row {row_number}: {_validation_message(error)}")
             continue
-        if payload.sub_activity_code in seen_codes:
-            errors.append(f"Row {row_number} ({payload.sub_activity_code}): duplicate sub_activity_code in this import")
+        key = (payload.scope, payload.sub_activity_code)
+        if key in seen_codes:
+            errors.append(
+                f"Row {row_number} ({payload.sub_activity_code}): duplicate sub_activity_code in {_scope_label(payload.scope)} import"
+            )
             continue
-        seen_codes.add(payload.sub_activity_code)
+        seen_codes.add(key)
         activity = _activity_from_import(db, activity_ref, user.organization_id)
         if activity is None:
             errors.append(f"Row {row_number} ({payload.sub_activity_code}): Activity '{_string(activity_ref) or '—'}' is missing, ambiguous, or inactive in Master Data")
@@ -2563,6 +3139,7 @@ def import_sub_activities(
             select(WellSubActivity).where(
                 WellSubActivity.organization_id == user.organization_id,
                 WellSubActivity.well_id == well.id,
+                WellSubActivity.scope == payload.scope,
                 WellSubActivity.sub_activity_code == payload.sub_activity_code,
             )
         )
@@ -2570,6 +3147,7 @@ def import_sub_activities(
             existing = WellSubActivity(
                 organization_id=user.organization_id,
                 well_id=well.id,
+                scope=payload.scope,
                 sub_activity_code=payload.sub_activity_code,
                 sub_activity_name=payload.sub_activity_name,
                 activity_id=activity.id,
@@ -2578,7 +3156,7 @@ def import_sub_activities(
             )
             db.add(existing)
             action = "create"
-            summary = f"Created sub activity {payload.sub_activity_code} for well {well.well_code} from import"
+            summary = f"Created sub activity {payload.sub_activity_code} for well {well.well_code} ({_scope_label(payload.scope)}) from import"
         else:
             action = "restore" if existing.is_deleted else "update"
             existing.sub_activity_name = payload.sub_activity_name
@@ -2587,18 +3165,21 @@ def import_sub_activities(
             existing.description = payload.description
             existing.is_deleted = False
             existing.deleted_at = None
-            summary = f"{'Restored and updated' if action == 'restore' else 'Updated'} sub activity {payload.sub_activity_code} for well {well.well_code} from import"
+            summary = (
+                f"{'Restored and updated' if action == 'restore' else 'Updated'} sub activity "
+                f"{payload.sub_activity_code} for well {well.well_code} ({_scope_label(payload.scope)}) from import"
+            )
         db.flush()
         _record_audit(
             db, user=user, action=action, entity_type="well_sub_activity", record_id=existing.id,
-            entity_label=f"{well.well_code} / {payload.sub_activity_code}",
+            entity_label=f"{well.well_code} ({_scope_label(payload.scope)}) / {payload.sub_activity_code}",
             summary=summary, request=request,
         )
         imported += 1
     _record_audit(
         db, user=user, action="import", entity_type="well_sub_activity", record_id=None,
-        entity_label=f"Well {well.well_code}",
-        summary=f"Imported {imported} sub activities for well {well.well_code} with {len(errors)} row error(s)",
+        entity_label=f"Well {well.well_code} ({_scope_label(scope)})",
+        summary=f"Imported {imported} sub activities for well {well.well_code} ({_scope_label(scope)}) with {len(errors)} row error(s)",
         request=request,
     )
     _commit(db)
@@ -2656,20 +3237,45 @@ def list_deleted_entries(db: Db, user: Current) -> list[DeletedRigWellRecord]:
     wells = db.scalars(
         select(Well)
         .options(joinedload(Well.rig))
-        .where(Well.organization_id == organization_id, Well.is_deleted.is_(True))
+        .where(
+            Well.organization_id == organization_id,
+            or_(
+                Well.is_deleted.is_(True),
+                Well.drilling_is_deleted.is_(True),
+                Well.completion_is_deleted.is_(True),
+            ),
+        )
     ).all()
     for well in wells:
-        output.append(
-            DeletedRigWellRecord(
-                id=well.id,
-                entity_type="well",
-                code=well.well_code,
-                name=well.well_name,
-                parent_label=(f"{well.rig.rig_code} — {well.rig.rig_name}" if well.rig else "Unknown rig"),
-                deleted_at=well.deleted_at or well.updated_at,
-                created_at=well.created_at,
+        rig_label = f"{well.rig.rig_code} — {well.rig.rig_name}" if well.rig else "Unknown rig"
+        if well.drilling_is_deleted or well.completion_is_deleted:
+            for item_scope in ("drilling", "completion"):
+                if well.scope_is_deleted(item_scope) and not well.scope_is_purged(item_scope):
+                    output.append(
+                        DeletedRigWellRecord(
+                            id=well.id,
+                            entity_type="well",
+                            scope=item_scope,
+                            code=well.well_code,
+                            name=f"{well.well_name} — {_scope_label(item_scope)}",
+                            parent_label=f"{rig_label} · {_scope_label(item_scope)} scope",
+                            deleted_at=well.scope_deleted_at(item_scope) or well.deleted_at or well.updated_at,
+                            created_at=well.created_at,
+                        )
+                    )
+        elif well.is_deleted:
+            output.append(
+                DeletedRigWellRecord(
+                    id=well.id,
+                    entity_type="well",
+                    scope=None,
+                    code=well.well_code,
+                    name=well.well_name,
+                    parent_label=rig_label,
+                    deleted_at=well.deleted_at or well.updated_at,
+                    created_at=well.created_at,
+                )
             )
-        )
     sub_activities = db.scalars(
         select(WellSubActivity)
         .options(joinedload(WellSubActivity.well).joinedload(Well.rig))
@@ -2683,10 +3289,13 @@ def list_deleted_entries(db: Db, user: Current) -> list[DeletedRigWellRecord]:
         parent = f"{well.well_code} — {well.well_name}" if well else "Unknown well"
         if well and well.rig:
             parent = f"{well.rig.rig_code} / {parent}"
+        item_scope = item.scope if item.scope in ("drilling", "completion") else "drilling"
+        parent = f"{parent} · {_scope_label(item_scope)}"
         output.append(
             DeletedRigWellRecord(
                 id=item.id,
                 entity_type="well_sub_activity",
+                scope=item_scope,
                 code=item.sub_activity_code,
                 name=item.sub_activity_name,
                 parent_label=parent,
@@ -2703,14 +3312,18 @@ def _selected_deleted_records(
     selections: list[Any],
     organization_id: str,
 ) -> dict[str, list[Any]]:
-    pairs = [(item.entity_type, item.id) for item in selections]
-    if len(pairs) != len(set(pairs)):
+    keys = [(item.entity_type, item.id, item.scope if item.entity_type == "well" else None) for item in selections]
+    if len(keys) != len(set(keys)):
         raise HTTPException(status_code=422, detail="Duplicate entity and record selections are not allowed")
-    grouped: dict[str, list[str]] = defaultdict(list)
-    for entity_type, record_id in pairs:
-        grouped[entity_type].append(record_id)
+    grouped: dict[str, list[Any]] = defaultdict(list)
+    for item in selections:
+        grouped[item.entity_type].append(item)
     result: dict[str, list[Any]] = {}
-    for entity_type, ids in grouped.items():
+    for entity_type in ("block", "rig", "well_sub_activity"):
+        items = grouped.get(entity_type, [])
+        if not items:
+            continue
+        ids = [item.id for item in items]
         model = ENTITY_MODELS[entity_type]
         records = list(
             db.scalars(
@@ -2725,6 +3338,43 @@ def _selected_deleted_records(
         if any(not record.is_deleted for record in records):
             raise HTTPException(status_code=409, detail="Only records already in Deleted Entries can be changed here")
         result[entity_type] = records
+
+    well_items = grouped.get("well", [])
+    if well_items:
+        well_ids = list({item.id for item in well_items})
+        wells_by_id = {
+            well.id: well
+            for well in db.scalars(
+                select(Well)
+                .options(
+                    joinedload(Well.rig),
+                    selectinload(Well.sections).selectinload(WellSection.phases),
+                    selectinload(Well.completion_sections).selectinload(WellSection.phases),
+                )
+                .where(
+                    Well.organization_id == organization_id,
+                    Well.id.in_(well_ids),
+                )
+            ).all()
+        }
+        if len(wells_by_id) != len(well_ids):
+            raise HTTPException(status_code=404, detail="One or more selected records do not belong to this workspace")
+        resolved_wells: list[tuple[Well, str | None]] = []
+        for item in well_items:
+            well = wells_by_id[item.id]
+            if item.scope is not None:
+                if not well.scope_is_deleted(item.scope) or well.scope_is_purged(item.scope):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Only records already in Deleted Entries can be changed here",
+                    )
+            elif not well.is_deleted:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Only records already in Deleted Entries can be changed here",
+                )
+            resolved_wells.append((well, item.scope))
+        result["well"] = resolved_wells
     return result
 
 
@@ -2745,22 +3395,72 @@ def bulk_restore_deleted(
 ) -> RigWellBulkActionResponse:
     records = _selected_deleted_records(db, data.records, user.organization_id)
     selected_rigs = _selected_ids(records, "rig")
-    selected_wells = _selected_ids(records, "well")
+    selected_whole_wells = {well.id for well, item_scope in records.get("well", []) if item_scope is None}
+    selected_well_scopes = {
+        (well.id, item_scope) for well, item_scope in records.get("well", []) if item_scope is not None
+    }
 
-    for well in records.get("well", []):
+    for well, _item_scope in records.get("well", []):
         rig = _rig_or_404(db, well.rig_id, user.organization_id)
         if rig.is_deleted and rig.id not in selected_rigs:
             raise HTTPException(status_code=409, detail=f"Restore rig {rig.rig_code} before restoring well {well.well_code}")
     for item in records.get("well_sub_activity", []):
         well = _well_or_404(db, item.well_id, user.organization_id)
-        if well.is_deleted and well.id not in selected_wells:
-            raise HTTPException(status_code=409, detail=f"Restore well {well.well_code} before restoring sub activity {item.sub_activity_code}")
+        item_scope = item.scope if item.scope in ("drilling", "completion") else "drilling"
+        if (
+            well.scope_is_deleted(item_scope)
+            and well.id not in selected_whole_wells
+            and (well.id, item_scope) not in selected_well_scopes
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Restore well {well.well_code} ({_scope_label(item_scope)}) before restoring sub activity {item.sub_activity_code}",
+            )
         if well.rig.is_deleted and well.rig.id not in selected_rigs:
             raise HTTPException(status_code=409, detail=f"Restore rig {well.rig.rig_code} before restoring sub activity {item.sub_activity_code}")
         _master_record_or_422(db, Activity, item.activity_id, user.organization_id, "Activity")
 
     restored_count = 0
     for entity_type in ("block", "rig", "well", "well_sub_activity"):
+        if entity_type == "well":
+            for well, item_scope in records.get("well", []):
+                if item_scope is not None:
+                    other = _other_scope(item_scope)
+                    if well.is_deleted and not well.drilling_is_deleted and not well.completion_is_deleted:
+                        if other == "completion":
+                            well.completion_is_deleted = True
+                            well.completion_deleted_at = well.deleted_at or _now()
+                        else:
+                            well.drilling_is_deleted = True
+                            well.drilling_deleted_at = well.deleted_at or _now()
+                    if item_scope == "completion":
+                        well.completion_is_deleted = False
+                        well.completion_deleted_at = None
+                        well.completion_purged = False
+                    else:
+                        well.drilling_is_deleted = False
+                        well.drilling_deleted_at = None
+                        well.drilling_purged = False
+                    well.sync_deleted_from_scopes()
+                    label = f"{well.well_code} ({_scope_label(item_scope)})"
+                    summary = f"Restored {_scope_label(item_scope)} scope of well {well.well_code} (bulk action)"
+                else:
+                    well.is_deleted = False
+                    well.deleted_at = None
+                    if not well.drilling_purged:
+                        well.drilling_is_deleted = False
+                        well.drilling_deleted_at = None
+                    if not well.completion_purged:
+                        well.completion_is_deleted = False
+                        well.completion_deleted_at = None
+                    label = well.well_code
+                    summary = f"Restored well {well.well_code} (bulk action)"
+                _record_audit(
+                    db, user=user, action="restore", entity_type="well", record_id=well.id,
+                    entity_label=label, summary=summary, request=request,
+                )
+                restored_count += 1
+            continue
         for record in records.get(entity_type, []):
             record.is_deleted = False
             record.deleted_at = None
@@ -2770,12 +3470,12 @@ def bulk_restore_deleted(
             elif entity_type == "rig":
                 label = record.rig_code
                 summary = f"Restored rig {record.rig_code} (bulk action)"
-            elif entity_type == "well":
-                label = record.well_code
-                summary = f"Restored well {record.well_code} (bulk action)"
             else:
-                label = f"{record.well.well_code} / {record.sub_activity_code}"
-                summary = f"Restored sub activity {record.sub_activity_code} for well {record.well.well_code} (bulk action)"
+                label = f"{record.well.well_code} ({_scope_label(record.scope)}) / {record.sub_activity_code}"
+                summary = (
+                    f"Restored sub activity {record.sub_activity_code} for well "
+                    f"{record.well.well_code} ({_scope_label(record.scope)}) (bulk action)"
+                )
             _record_audit(
                 db, user=user, action="restore", entity_type=entity_type, record_id=record.id,
                 entity_label=label, summary=summary, request=request,
@@ -2803,29 +3503,47 @@ def bulk_permanently_delete(
     user: Current,
 ) -> RigWellBulkActionResponse:
     records = _selected_deleted_records(db, data.records, user.organization_id)
-    block_well_counts = _counts_by_parent(
-        db, Well, Well.block_id, user.organization_id,
-        [record.id for record in records.get("block", [])],
-    )
-    blocked_blocks = [
-        (record, block_well_counts[record.id])
-        for record in records.get("block", [])
-        if block_well_counts.get(record.id)
-    ]
-    if blocked_blocks:
-        record, count = blocked_blocks[0]
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Block {record.block_code} retains {count} well record(s). "
-                "Permanently delete those wells first."
-            ),
-        )
-    selected_rigs = _selected_ids(records, "rig")
-    selected_wells = _selected_ids(records, "well")
     selected_sub_activities = _selected_ids(records, "well_sub_activity")
     selected_rig_ids = [record.id for record in records.get("rig", [])]
-    selected_well_ids = [record.id for record in records.get("well", [])]
+    well_entries: list[tuple[Well, str | None]] = records.get("well", [])
+
+    scopes_being_purged_by_well: dict[str, set[str]] = defaultdict(set)
+    whole_wells_being_purged: set[str] = set()
+    wells_seen: dict[str, Well] = {}
+    for well, item_scope in well_entries:
+        wells_seen[well.id] = well
+        if item_scope is None:
+            whole_wells_being_purged.add(well.id)
+        else:
+            scopes_being_purged_by_well[well.id].add(item_scope)
+
+    completely_purged_well_ids: set[str] = set(whole_wells_being_purged)
+    for well_id, scopes_to_purge in scopes_being_purged_by_well.items():
+        well = wells_seen[well_id]
+        drilling_gone = "drilling" in scopes_to_purge or well.drilling_purged
+        completion_gone = "completion" in scopes_to_purge or well.completion_purged
+        if drilling_gone and completion_gone:
+            completely_purged_well_ids.add(well_id)
+
+    for block_record in records.get("block", []):
+        remaining_block_wells = list(
+            db.scalars(
+                select(Well.id).where(
+                    Well.organization_id == user.organization_id,
+                    Well.block_id == block_record.id,
+                )
+            ).all()
+        )
+        unpurged_block_wells = [wid for wid in remaining_block_wells if wid not in completely_purged_well_ids]
+        if unpurged_block_wells:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Block {block_record.block_code} retains {len(unpurged_block_wells)} well record(s). "
+                    "Permanently delete those wells first."
+                ),
+            )
+
     rig_afe_counts = _counts_by_parent(db, Afe, Afe.rig_id, user.organization_id, selected_rig_ids)
     rig_daily_counts = _counts_by_parent(
         db, DailyCostEntry, DailyCostEntry.rig_id, user.organization_id, selected_rig_ids
@@ -2833,12 +3551,13 @@ def bulk_permanently_delete(
     rig_mud_counts = _counts_by_parent(
         db, MudCostEntry, MudCostEntry.rig_id, user.organization_id, selected_rig_ids
     )
-    well_afe_counts = _counts_by_parent(db, Afe, Afe.well_id, user.organization_id, selected_well_ids)
+    whole_well_ids = list(whole_wells_being_purged)
+    well_afe_counts = _counts_by_parent(db, Afe, Afe.well_id, user.organization_id, whole_well_ids)
     well_daily_counts = _counts_by_parent(
-        db, DailyCostEntry, DailyCostEntry.well_id, user.organization_id, selected_well_ids
+        db, DailyCostEntry, DailyCostEntry.well_id, user.organization_id, whole_well_ids
     )
     well_mud_counts = _counts_by_parent(
-        db, MudCostEntry, MudCostEntry.well_id, user.organization_id, selected_well_ids
+        db, MudCostEntry, MudCostEntry.well_id, user.organization_id, whole_well_ids
     )
     sub_activity_line_counts = _daily_cost_line_counts_by_sub_activity(
         db,
@@ -2886,7 +3605,7 @@ def bulk_permanently_delete(
                 )
             ).all()
         )
-        if any(well_id not in selected_wells for well_id in remaining_wells):
+        if any(well_id not in completely_purged_well_ids for well_id in remaining_wells):
             raise HTTPException(status_code=409, detail=f"Permanently delete every well under rig {rig.rig_code} first")
         assert_purgeable(
             db, user.organization_id, rig,
@@ -2896,7 +3615,24 @@ def bulk_permanently_delete(
                 "Permanently delete the dependent fuel, LIH and SOW adjustment records from their own module first."
             ),
         )
-    for well in records.get("well", []):
+    for well, item_scope in well_entries:
+        if item_scope is not None:
+            dependencies = _scope_retained_dependencies(
+                db,
+                user.organization_id,
+                well,
+                item_scope,
+                ignore_sub_activity_ids=selected_sub_activities,
+            )
+            if dependencies:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Well {well.well_code} ({_scope_label(item_scope)}) retains {', '.join(dependencies)}. "
+                        "Permanently delete the linked records for this scope in their own Deleted Entries first."
+                    ),
+                )
+            continue
         if (
             well_afe_counts.get(well.id)
             or well_daily_counts.get(well.id)
@@ -2941,26 +3677,47 @@ def bulk_permanently_delete(
     for record in records.get("well_sub_activity", []):
         _record_audit(
             db, user=user, action="permanent_delete", entity_type="well_sub_activity", record_id=record.id,
-            entity_label=f"{record.well.well_code} / {record.sub_activity_code}",
-            summary=f"Permanently deleted sub activity {record.sub_activity_code} for well {record.well.well_code} (bulk action)",
+            entity_label=f"{record.well.well_code} ({_scope_label(record.scope)}) / {record.sub_activity_code}",
+            summary=(
+                f"Permanently deleted sub activity {record.sub_activity_code} for well "
+                f"{record.well.well_code} ({_scope_label(record.scope)}) (bulk action)"
+            ),
             request=request,
         )
         db.delete(record)
         purged_count += 1
     db.flush()
-    # The immutable snapshots belong to the wells being purged: remove them now
-    # that every sheet (and every AFE) that priced from them is gone.
-    removed_snapshots = purge_owned_snapshots(db, user.organization_id, well_ids=selected_well_ids)
-    snapshot_note = snapshot_summary(removed_snapshots)
-    for record in records.get("well", []):
-        _record_audit(
-            db, user=user, action="permanent_delete", entity_type="well", record_id=record.id,
-            entity_label=record.well_code,
-            summary=f"Permanently deleted well {record.well_code} (bulk action)",
-            request=request,
-        )
-        db.delete(record)
-        purged_count += 1
+
+    snapshot_notes: list[str] = []
+    if whole_well_ids:
+        removed_snapshots = purge_owned_snapshots(db, user.organization_id, well_ids=whole_well_ids)
+        whole_note = snapshot_summary(removed_snapshots)
+        if whole_note:
+            snapshot_notes.append(whole_note)
+
+    for well, item_scope in well_entries:
+        if item_scope is not None:
+            well_code = well.well_code
+            well_id_copy = well.id
+            scoped_note = _purge_well_scope_data(db, user.organization_id, well, item_scope)
+            if scoped_note:
+                snapshot_notes.append(scoped_note)
+            _record_audit(
+                db, user=user, action="permanent_delete", entity_type="well", record_id=well_id_copy,
+                entity_label=f"{well_code} ({_scope_label(item_scope)})",
+                summary=f"Permanently deleted {_scope_label(item_scope)} scope of well {well_code} (bulk action)",
+                request=request,
+            )
+            purged_count += 1
+        else:
+            _record_audit(
+                db, user=user, action="permanent_delete", entity_type="well", record_id=well.id,
+                entity_label=well.well_code,
+                summary=f"Permanently deleted well {well.well_code} (bulk action)",
+                request=request,
+            )
+            db.delete(well)
+            purged_count += 1
     db.flush()
     for record in records.get("rig", []):
         _record_audit(
@@ -2981,6 +3738,7 @@ def bulk_permanently_delete(
         )
         db.delete(record)
         purged_count += 1
+    snapshot_note = "; ".join(snapshot_notes)
     _record_audit(
         db, user=user, action="permanent_delete", entity_type="rig_well_deleted", record_id=None,
         entity_label="Deleted Entries",

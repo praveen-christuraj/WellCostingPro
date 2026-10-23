@@ -163,6 +163,8 @@ def reference_data(db: Session, organization_id: str) -> MudCostReference:
     section_options: dict[str, dict[str, MudCostSectionOption]] = defaultdict(dict)
     for section in current_sections:
         well_obj = well_by_id.get(section.well_id)
+        if well_obj is not None and well_obj.scope_is_deleted(section.scope):
+            continue
         unit = well_obj.scope_value(section.scope, "depth_unit") if well_obj else "m"
         section_options[section.well_id][section.id] = _section_option(section, depth_unit=unit)
 
@@ -262,6 +264,8 @@ def _scope_or_404(
             if require_current_section:
                 raise HTTPException(status_code=422, detail="Choose a section configured for this well")
             # Historical section IDs are intentionally independent snapshots. Callers
+        elif not allow_deleted and well.scope_is_deleted(section.scope):
+            raise HTTPException(status_code=409, detail="Restore this well scope before entering active Mud Cost data")
             # that filter old entries validate them against the retained entry rows.
         elif require_current_section and section.hole_section and section.hole_section.is_deleted:
             raise HTTPException(status_code=409, detail="Restore the section in Master Data before entering new Mud Cost data")

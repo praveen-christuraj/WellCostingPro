@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.precision import Decimal10, Decimal10Days
 
@@ -166,6 +166,9 @@ class WellCreate(BaseModel):
     well_location: str = Field(min_length=1, max_length=300)
     objective: str = Field(min_length=1, max_length=500)
     remarks: str = Field(default="", max_length=1000)
+    scopes: list[Literal["drilling", "completion"]] = Field(
+        default_factory=lambda: ["drilling", "completion"], min_length=1, max_length=2
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -183,6 +186,15 @@ class WellCreate(BaseModel):
     @classmethod
     def trim_remarks(cls, value: Any) -> Any:
         return _trim_optional(value)
+
+    @field_validator("scopes", mode="after")
+    @classmethod
+    def unique_scopes(cls, value: list[Literal["drilling", "completion"]]) -> list[Literal["drilling", "completion"]]:
+        ordered: list[Literal["drilling", "completion"]] = []
+        for item in value:
+            if item not in ordered:
+                ordered.append(item)
+        return ordered
 
 
 class WellUpdate(BaseModel):
@@ -243,6 +255,14 @@ class WellOut(BaseModel):
     completion_total_days: Decimal = Decimal("0")
     section_count: int = 0
     sub_activity_count: int = 0
+    drilling_sub_activity_count: int = 0
+    completion_sub_activity_count: int = 0
+    drilling_is_deleted: bool = False
+    drilling_deleted_at: datetime | None = None
+    drilling_purged: bool = False
+    completion_is_deleted: bool = False
+    completion_deleted_at: datetime | None = None
+    completion_purged: bool = False
     is_deleted: bool
     deleted_at: datetime | None = None
     created_at: datetime
@@ -347,6 +367,7 @@ class WellTransitionIn(BaseModel):
 
 class WellSubActivityCreate(BaseModel):
     well_id: str = Field(min_length=1, max_length=36)
+    scope: Literal["drilling", "completion"] = "drilling"
     sub_activity_code: str = Field(min_length=1, max_length=50)
     sub_activity_name: str = Field(min_length=1, max_length=150)
     activity_id: str = Field(min_length=1, max_length=36)
@@ -409,6 +430,7 @@ class WellSubActivityUpdate(BaseModel):
 class WellSubActivityOut(BaseModel):
     id: str
     well_id: str
+    scope: Literal["drilling", "completion"] = "drilling"
     sub_activity_code: str
     sub_activity_name: str
     activity_id: str
@@ -449,9 +471,32 @@ class RigWellIDs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class WellScopeSelectionItem(BaseModel):
+    id: str = Field(min_length=1, max_length=36)
+    scope: Literal["drilling", "completion"]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class WellBulkDeleteRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=5000)
+    items: list[WellScopeSelectionItem] = Field(default_factory=list, max_length=5000)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def require_selection(self) -> "WellBulkDeleteRequest":
+        if not self.ids and not self.items:
+            raise ValueError("Select at least one well or well scope to move to Deleted Entries")
+        if self.ids and self.items:
+            raise ValueError("Specify either ids or scoped items, not both")
+        return self
+
+
 class DeletedSelectionItem(BaseModel):
     entity_type: Literal["block", "rig", "well", "well_sub_activity"]
     id: str = Field(min_length=1, max_length=36)
+    scope: Literal["drilling", "completion"] | None = None
 
 
 class DeletedSelection(BaseModel):
@@ -527,6 +572,7 @@ class RigWellOverview(BaseModel):
 class DeletedRigWellRecord(BaseModel):
     id: str
     entity_type: Literal["block", "rig", "well", "well_sub_activity"]
+    scope: Literal["drilling", "completion"] | None = None
     code: str
     name: str
     parent_label: str = ""
