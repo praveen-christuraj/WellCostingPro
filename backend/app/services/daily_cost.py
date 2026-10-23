@@ -2261,6 +2261,7 @@ def _entry_out(
     *,
     day_depth: DailyCostSectionDepthOut | None = None,
     section_depths: list[DailyCostSectionDepthOut] | None = None,
+    cumulative_cost: Decimal | None = None,
 ) -> DailyCostEntryOut:
     return DailyCostEntryOut(
         id=entry.id,
@@ -2278,6 +2279,8 @@ def _entry_out(
         cost_date=entry.cost_date,
         standard_currency=entry.standard_currency,
         remarks=entry.remarks,
+        lead_lag_kind=entry.lead_lag_kind or "",
+        lead_lag_days=Decimal(entry.lead_lag_days) if entry.lead_lag_days is not None else None,
         status=entry.status,
         submitted_at=entry.submitted_at,
         submitted_by=entry.submitted_by,
@@ -2307,6 +2310,9 @@ def _entry_out(
         rate_baseline_locked_at=entry.rate_baseline.locked_at,
         budget_baseline_locked_at=entry.baseline.locked_at,
         warning_count=entry.warning_count,
+        # Filled by the register listing, which knows the running well/AFE total
+        # through each sheet date. A single-sheet response leaves it unknown.
+        cumulative_cost=_money(cumulative_cost if cumulative_cost is not None else Decimal("0")),
         is_deleted=entry.is_deleted,
         deleted_at=entry.deleted_at,
         created_by=entry.created_by,
@@ -2347,7 +2353,18 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
             )
         ).all()
     )
+    entry_dates = {
+        entry_id: cost_date
+        for entry_id, cost_date in db.execute(
+            select(DailyCostEntry.id, DailyCostEntry.cost_date).where(DailyCostEntry.id.in_(entries))
+        ).all()
+    }
     actual_by_group: dict[str, Decimal] = {key: Decimal("0") for key in group_names}
+    # The same actuals cut by whether they were recorded on the report date or
+    # before it, so a cost report can print "up to last day", "cost on this
+    # day" and the cumulative total as separate columns.
+    actual_by_group_today: dict[str, Decimal] = {key: Decimal("0") for key in group_names}
+    actual_by_key_today: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     actual_by_key: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     # The same actuals cut by the activity classification of each line, so the
     # service-wise report can print planned / UPA / NPT actuals per budget line.
@@ -2369,8 +2386,12 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
             ).all()
             for row in rows:
                 amount = Decimal(row.standard_amount)
+                on_report_date = entry_dates.get(row.entry_id) == as_of
                 actual_by_group[group] += amount
                 actual_by_key[(group, row.budget_key)] += amount
+                if on_report_date:
+                    actual_by_group_today[group] += amount
+                    actual_by_key_today[(group, row.budget_key)] += amount
                 actual_by_class[(group, row.budget_key, row.classification)] += amount
                 actual_by_group_class[(group, row.classification)] += amount
                 actual_all.append((group, row))
@@ -2416,6 +2437,9 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
                 service_group=service_group,
                 planned=planned,
                 actual_to_date=actual,
+                actual_prior=_money(actual - _money(actual_by_key_today[(group, key)])),
+                actual_today=_money(actual_by_key_today[(group, key)]),
+                sort_order=metadata.sort_order if metadata else 9999,
                 balance=_money(planned - actual),
                 is_planned=(group, key) in planned_keys,
                 actual_planned=_money(actual_by_class[(group, key, "Planned")]),
@@ -2429,6 +2453,8 @@ def _comparison(db: Session, entry: DailyCostEntry, effective_on: date | None = 
             cost_group=group,
             planned=_money(planned_by_group[group]),
             actual_to_date=_money(actual_by_group[group]),
+            actual_prior=_money(actual_by_group[group] - actual_by_group_today[group]),
+            actual_today=_money(actual_by_group_today[group]),
             balance=_money(planned_by_group[group] - actual_by_group[group]),
             actual_planned=_money(actual_by_group_class[(group, "Planned")]),
             actual_upa=_money(actual_by_group_class[(group, "UPA")]),
@@ -2607,6 +2633,9 @@ def save_day(
                 raise HTTPException(status_code=409, detail="Submitted daily cost sheets are read-only. Reopen the sheet with the authorized workflow first.")
             service_rows, consumable_rows, tangible_rows, other_rows, extra_rates, entry_usd_fx = _normalize_payload(db, entry, payload)
             entry.remarks = payload.remarks
+            # Lead / lag belongs to the sheet, entered once with the register.
+            entry.lead_lag_kind = payload.lead_lag_kind
+            entry.lead_lag_days = _rate(payload.lead_lag_days) if payload.lead_lag_days is not None else None
             other_before = Decimal(entry.other_expenses_total)
             _upsert_lines(
                 db, entry, service_rows, consumable_rows, tangible_rows, other_rows,
@@ -2783,6 +2812,29 @@ def preview_day(
 # ---------------------------------------------------------------------------
 
 
+def _cumulative_cost_index(db: Session, organization_id: str) -> dict[tuple[str, str, date], Decimal]:
+    """Running total cost per well + AFE through each cost date (active sheets)."""
+    totals = db.execute(
+        select(
+            DailyCostEntry.well_id, DailyCostEntry.afe_id, DailyCostEntry.cost_date,
+            func.sum(DailyCostEntry.total_cost),
+        )
+        .where(
+            DailyCostEntry.organization_id == organization_id,
+            DailyCostEntry.is_deleted.is_(False),
+        )
+        .group_by(DailyCostEntry.well_id, DailyCostEntry.afe_id, DailyCostEntry.cost_date)
+        .order_by(DailyCostEntry.well_id, DailyCostEntry.afe_id, DailyCostEntry.cost_date)
+    ).all()
+    running: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    index: dict[tuple[str, str, date], Decimal] = {}
+    for well_id, afe_id, cost_date, total in totals:
+        key = (str(well_id), str(afe_id))
+        running[key] += Decimal(total or 0)
+        index[(key[0], key[1], cost_date)] = _money(running[key])
+    return index
+
+
 def list_entries(
     db: Session,
     organization_id: str,
@@ -2829,11 +2881,17 @@ def list_entries(
     sections_for_key: dict[tuple[str, date], list[DailyCostSectionDepthOut]] = defaultdict(list)
     for (w_id, c_date, _sec), val in by_section.items():
         sections_for_key[(w_id, c_date)].append(val)
+    cumulative = _cumulative_cost_index(db, organization_id)
     return [
         _entry_out(
             row,
             day_depth=by_day.get((row.well_id, row.cost_date)),
             section_depths=sections_for_key.get((row.well_id, row.cost_date), []),
+            # The day's own cost stays on the row; this is the running total of
+            # the same well + AFE through that date, shown beside it.
+            cumulative_cost=cumulative.get(
+                (row.well_id, row.afe_id, row.cost_date), Decimal(row.total_cost)
+            ),
         )
         for row in rows
     ]
@@ -3491,6 +3549,7 @@ def _well_progress_row(
     """One scope's milestones counted to its last cost sheet (or exact completion)."""
     spud: datetime | None = getattr(well, f"{scope}_spud_at")
     completed: datetime | None = getattr(well, f"{scope}_progress_completed_at")
+    milestone_label: str = getattr(well, f"{scope}_milestone_label", "") or ""
     planned_days = _progress_planned_days(db, organization_id, well, scope, cache)
     actual_days: Decimal | None = None
     days_variance: Decimal | None = None
@@ -3510,6 +3569,7 @@ def _well_progress_row(
         progress_label=PROGRESS_COMPLETED_LABELS[scope],
         spud_at=spud,
         progress_completed_at=completed,
+        milestone_label=milestone_label,
         is_completed=completed is not None,
         planned_days=planned_days,
         actual_days=actual_days,
@@ -3590,9 +3650,11 @@ def update_well_progress(
             _lock_row_id(db, Well, Well.id == well.id, Well.organization_id == organization_id)
             attr_spud = f"{data.scope}_spud_at"
             attr_completed = f"{data.scope}_progress_completed_at"
+            attr_label = f"{data.scope}_milestone_label"
             scope_label = PROGRESS_SCOPE_LABELS[data.scope]
             current_spud: datetime | None = getattr(well, attr_spud)
             current_completed: datetime | None = getattr(well, attr_completed)
+            current_label: str = getattr(well, attr_label, "") or ""
             fields_set = data.model_fields_set
 
             new_spud = current_spud
@@ -3607,7 +3669,9 @@ def update_well_progress(
                 _reject_future_milestone(data.spud_at, "Well Spud Date & Time")
                 new_spud = data.spud_at.replace(second=0, microsecond=0)
                 spud_changed = new_spud != current_spud
-            elif current_spud is None:
+            elif current_spud is None and data.progress_completed_at is not None:
+                # The label can be saved before the spud date; a completion
+                # instant cannot, because there would be nothing to count from.
                 raise HTTPException(
                     status_code=422,
                     detail="Enter the Well Spud Date & Time first — actual days count from the spud instant, "
@@ -3633,11 +3697,20 @@ def update_well_progress(
                     detail="The Progress Completed Date & Time cannot be before the Well Spud Date & Time.",
                 )
 
-            if not spud_changed and not completed_changed:
+            # The printed report wording is saved once here, so it never has to
+            # be retyped for every print. Blank restores the default wording.
+            new_label = current_label
+            label_changed = False
+            if data.milestone_label is not None:
+                new_label = data.milestone_label.strip()[:80]
+                label_changed = new_label != current_label
+
+            if not spud_changed and not completed_changed and not label_changed:
                 return _progress_report_for_well(db, organization_id, well, as_of=as_of)
 
             setattr(well, attr_spud, new_spud)
             setattr(well, attr_completed, new_completed)
+            setattr(well, attr_label, new_label)
             db.flush()
 
             label = f"{well.well_code} · {scope_label.lower()} progress"
@@ -3655,9 +3728,14 @@ def update_well_progress(
                            f"{_progress_datetime_text(new_completed)}; the day count stopped at "
                            f"{row.actual_days} actual days against {row.planned_days} planned days "
                            f"(difference {row.days_variance})")
-            else:
+            elif completed_changed:
                 summary = (f"Removed the {PROGRESS_COMPLETED_LABELS[data.scope]} for {well.well_code}; "
                            "the day count resumed from the spud instant")
+            else:
+                summary = (f"Set the {scope_label.lower()} milestone label printed on the daily cost report for "
+                           f"{well.well_code} to \"{new_label or 'Spud date & time'}\"; the milestone date & time is unchanged")
+            if label_changed and (spud_changed or completed_changed):
+                summary += f"; printed milestone label is \"{new_label or 'Spud date & time'}\""
             _audit(
                 db, user=user, action="update", entity_type="well_progress", entity_id=well.id,
                 label=label, summary=summary, request=request,
@@ -4179,6 +4257,16 @@ def well_cost_summary(
         .select_from(lines).group_by(lines.c.budget_key, lines.c.cost_group)
     ).all()
     actual_by_key = {str(row[0] or ""): Decimal(row[2] or 0) for row in budget_rows}
+    # Cost recorded on the last report day, split out of the cumulative column so
+    # the printed report shows "up to last day", "this day" and the total.
+    report_day = max((row.cost_date for row in windowed), default=None)
+    today_rows = db.execute(
+        select(lines.c.budget_key, func.sum(lines.c.standard_amount))
+        .select_from(lines)
+        .where(lines.c.cost_date == report_day)
+        .group_by(lines.c.budget_key)
+    ).all() if report_day is not None else []
+    actual_today_by_key = {str(row[0] or ""): _money(row[1] or 0) for row in today_rows}
     class_by_key = {
         str(row[0] or ""): (
             Decimal(row[3] or 0), Decimal(row[4] or 0), Decimal(row[5] or 0),
@@ -4232,6 +4320,9 @@ def well_cost_summary(
             service_group=service_group,
             planned=_money(planned_value) if planned_value is not None else Decimal("0.00"),
             actual_to_date=actual_value,
+            actual_today=actual_today_by_key.get(key, Decimal("0")),
+            actual_prior=_money(actual_value - actual_today_by_key.get(key, Decimal("0"))),
+            sort_order=budget_line.sort_order if budget_line is not None else 9999,
             balance=_money((planned_value or Decimal("0")) - actual_value),
             is_planned=key in planned_by_key,
             actual_planned=_money(split_planned),
@@ -4782,6 +4873,10 @@ def import_daily_cost(
     current_services, current_consumables, current_tangibles, current_others = _saved_inputs(entry)
     payload = DailyCostSaveIn(
         remarks=entry.remarks,
+        # An import appends lines; it must not reset the report lead / lag that
+        # was already saved with this sheet.
+        lead_lag_kind=entry.lead_lag_kind or "",
+        lead_lag_days=Decimal(entry.lead_lag_days) if entry.lead_lag_days is not None else None,
         services=[*current_services, *service_inputs],
         consumables=[*current_consumables, *consumable_inputs],
         tangibles=[*current_tangibles, *tangible_inputs],

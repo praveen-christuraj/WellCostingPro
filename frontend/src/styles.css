@@ -420,6 +420,10 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
     break-after: page;
   }
   .daily-cost-print-sheet .daily-report-details { break-before: page; }
+  /* Bulk printing: every selected report contributes its first page only. */
+  .daily-cost-print-sheet--bulk .dcr-report-unit { break-after: page; }
+  .daily-cost-print-sheet--bulk .dcr-report-unit:last-child,
+  .daily-cost-print-sheet--bulk .dcr-report-unit:last-child .daily-report-cover { break-after: auto; }
   .daily-cost-print-sheet .dcr-titlebar {
     min-height: 11mm;
     display: flex;
@@ -440,12 +444,12 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-side { min-width: 0; display: grid; grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1fr); gap: 1.05mm; }
   .daily-cost-print-sheet .dcr-panel { min-width: 0; border: .55pt solid #B9CCE0; break-inside: avoid; overflow: hidden; }
   .daily-cost-print-sheet .dcr-panel h2 {
-    font-size: 6.6pt;
-    line-height: 1.05;
+    font-size: 6.3pt;
+    line-height: 1.02;
     letter-spacing: .25pt;
     text-transform: uppercase;
     margin: 0;
-    padding: 1mm 1.2mm;
+    padding: .55mm 1mm;
     border: 0;
     border-bottom: .55pt solid #B9CCE0;
     background: #E8EEF6 !important;
@@ -475,55 +479,78 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-loss-matrix .dcr-matrix-grand td { font-weight: 800; background: #E8EEF6 !important; border-top-width: .8pt; }
   .daily-cost-print-sheet .dcr-panel tfoot th,
   .daily-cost-print-sheet .dcr-panel tfoot td { font-weight: 800; background: #F3F6FA !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .daily-cost-print-sheet .dcr-cost-panel table th:first-child { width: 45%; }
-  .daily-cost-print-sheet .dcr-cost-panel table th:not(:first-child) { width: 13.75%; }
-  .daily-cost-print-sheet .dcr-cost-panel tbody tr:nth-child(n+9) { display: none; }
+  /* AFE | up to last day | cost on the report day | cumulative | balance | used. */
+  .daily-cost-print-sheet .dcr-cost-panel table { font-size: 5.55pt; line-height: 1.05; }
+  .daily-cost-print-sheet .dcr-cost-panel th,
+  .daily-cost-print-sheet .dcr-cost-panel td { padding: .26mm .34mm; }
+  .daily-cost-print-sheet .dcr-cost-panel thead th { font-size: 4.6pt; line-height: 1.02; padding-top: .2mm; padding-bottom: .2mm; }
+  .daily-cost-print-sheet .dcr-cost-panel table th:first-child { width: 27%; }
+  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(2) { width: 12.5%; }
+  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(3),
+  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(4),
+  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(5) { width: 13.5%; }
+  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(6) { width: 12.5%; }
+  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(7) { width: 7%; }
   /* Group caption prints once at the start of each reporting group. */
-  .daily-cost-print-sheet .dcr-group { font-size: 4.45pt; font-weight: 800; letter-spacing: .2pt; text-transform: uppercase; color: #4A6F96; }
-  .daily-cost-print-sheet .dcr-cost-panel--split .dcr-group { font-size: 4.2pt; }
-  /* The services table alone also prints the actual cost by activity
-     classification (Planned / UPA / NPT), so it is compacted — smaller type,
-     tighter cells and eight narrower columns — while every other cost table
-     keeps the five-column layout above. */
-  .daily-cost-print-sheet .dcr-cost-panel--split table { font-size: 5.15pt; line-height: 1.05; }
-  .daily-cost-print-sheet .dcr-cost-panel--split th,
-  .daily-cost-print-sheet .dcr-cost-panel--split td { padding: .3mm .32mm; }
-  .daily-cost-print-sheet .dcr-cost-panel--split thead th { font-size: 4.7pt; line-height: 1.02; }
-  .daily-cost-print-sheet .dcr-cost-panel--split thead tr:first-child th { padding-top: .22mm; padding-bottom: .22mm; }
-  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:first-child { width: 26%; }
-  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:nth-child(2),
-  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:nth-child(4),
-  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:nth-child(5) { width: 11.5%; }
-  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:nth-child(3) { width: 30%; }
-  .daily-cost-print-sheet .dcr-cost-panel--split table thead tr:first-child th:nth-child(6) { width: 9%; }
+  .daily-cost-print-sheet .dcr-group { font-size: 4.2pt; font-weight: 800; letter-spacing: .2pt; text-transform: uppercase; color: #4A6F96; }
+  /* Long AFE schedules stay on page one by stepping the density down. */
+  .daily-cost-print-sheet .dcr-density-2 .dcr-cost-panel table { font-size: 5.15pt; line-height: 1; }
+  .daily-cost-print-sheet .dcr-density-2 .dcr-cost-panel th,
+  .daily-cost-print-sheet .dcr-density-2 .dcr-cost-panel td { padding: .19mm .3mm; }
+  .daily-cost-print-sheet .dcr-density-3 .dcr-cost-panel table { font-size: 4.7pt; line-height: .98; }
+  .daily-cost-print-sheet .dcr-density-3 .dcr-cost-panel th,
+  .daily-cost-print-sheet .dcr-density-3 .dcr-cost-panel td { padding: .13mm .24mm; }
+  .daily-cost-print-sheet .dcr-density-3 .dcr-cost-panel thead th { font-size: 4.1pt; }
+  .daily-cost-print-sheet .dcr-density-4 .dcr-cost-panel table { font-size: 4.15pt; line-height: .95; }
+  .daily-cost-print-sheet .dcr-density-4 .dcr-cost-panel th,
+  .daily-cost-print-sheet .dcr-density-4 .dcr-cost-panel td { padding: .08mm .18mm; }
+  .daily-cost-print-sheet .dcr-density-4 .dcr-cost-panel thead th { font-size: 3.8pt; }
+  /* A dense schedule also compresses the lower panels so the page still fits. */
+  .daily-cost-print-sheet .dcr-density-3 .dcr-bottomline .dcr-panel table { font-size: 4.8pt; }
+  .daily-cost-print-sheet .dcr-density-4 .dcr-bottomline .dcr-panel table { font-size: 4.4pt; }
+  .daily-cost-print-sheet .dcr-density-4 .dcr-loss-matrix table { font-size: 3.6pt; }
   .daily-cost-print-sheet .dcr-milestone dl,
-  .daily-cost-print-sheet .dcr-time dl { margin: 0; padding: 1mm 1.2mm; display: grid; grid-template-columns: 1fr auto; gap: .65mm 1mm; }
+  .daily-cost-print-sheet .dcr-time dl { margin: 0; padding: .55mm .9mm; display: grid; grid-template-columns: 1fr auto; gap: .2mm 1mm; font-size: 6.1pt; }
+  /* The reporting milestone, time position and depth tables are compact so the
+     cost schedules keep the room they need. */
+  .daily-cost-print-sheet .dcr-depth table { font-size: 5.3pt; }
+  .daily-cost-print-sheet .dcr-depth th,
+  .daily-cost-print-sheet .dcr-depth td { padding: .2mm .4mm; }
+  .daily-cost-print-sheet .dcr-tangibles span { font-size: 5.2pt; }
   .daily-cost-print-sheet .dcr-milestone dt,
   .daily-cost-print-sheet .dcr-time dt { color: #4A6F96; font-weight: 700; }
   .daily-cost-print-sheet .dcr-milestone dd,
   .daily-cost-print-sheet .dcr-time dd { margin: 0; font-weight: 700; text-align: right; }
-  .daily-cost-print-sheet .dcr-tangibles div { min-height: 8mm; display: grid; grid-template-columns: repeat(4, 1fr); align-items: center; }
+  .daily-cost-print-sheet .dcr-tangibles div { min-height: 5mm; display: grid; grid-template-columns: repeat(6, 1fr); align-items: center; }
+  .daily-cost-print-sheet .dcr-tangibles strong { font-size: 6.2pt; margin-top: .2mm; }
   .daily-cost-print-sheet .dcr-lih div { display: grid; grid-template-columns: repeat(4, 1fr); align-items: center; }
   .daily-cost-print-sheet .dcr-lih span { padding: .8mm 1.2mm; border-right: .5pt solid #B9CCE0; color: #4A6F96; }
   .daily-cost-print-sheet .dcr-lih span:last-child { border-right: 0; }
   .daily-cost-print-sheet .dcr-lih strong { display: block; margin-top: .35mm; color: #0B2A47; font-size: 6.6pt; }
   .daily-cost-print-sheet .dcr-lih .dcr-lih-deduct { color: #9B2C2C; }
   .daily-cost-print-sheet .dcr-lih .dcr-lih-deduct strong { color: #9B2C2C; }
-  .daily-cost-print-sheet .dcr-lih-note { margin: 0; padding: .7mm 1.2mm; border-top: .5pt solid #B9CCE0; color: #4A6F96; font-size: 5.4pt; }
+  .daily-cost-print-sheet .dcr-lih-note { margin: 0; padding: .45mm 1mm; border-top: .5pt solid #B9CCE0; color: #4A6F96; font-size: 5pt; }
+  .daily-cost-print-sheet .dcr-lih span { padding: .45mm 1mm; font-size: 5.2pt; }
+  .daily-cost-print-sheet .dcr-lih strong { font-size: 5.9pt; margin-top: .2mm; }
   .daily-cost-print-sheet .dcr-tangibles span { padding: 0 1.5mm; border-right: .5pt solid #B9CCE0; color: #4A6F96; }
   .daily-cost-print-sheet .dcr-tangibles span:last-child { border-right: 0; }
   .daily-cost-print-sheet .dcr-tangibles strong { display: block; margin-top: .6mm; color: #0B2A47; font-size: 7pt; }
-  .daily-cost-print-sheet .dcr-overall p { margin: 1mm; font-weight: 800; text-align: right; color: #0B2A47; }
+  .daily-cost-print-sheet .dcr-overall p { margin: .5mm .8mm; font-weight: 800; text-align: right; color: #0B2A47; font-size: 5.4pt; }
+  .daily-cost-print-sheet .dcr-overall table { font-size: 5.3pt; }
+  .daily-cost-print-sheet .dcr-overall th,
+  .daily-cost-print-sheet .dcr-overall td { padding: .2mm .4mm; }
   .daily-cost-print-sheet .dcr-total th,
   .daily-cost-print-sheet .dcr-total td { font-weight: 800; border-top: 1pt solid #123A63; }
-  .daily-cost-print-sheet .dcr-mud-analysis table { font-size: 4.8pt; }
+  .daily-cost-print-sheet .dcr-mud-analysis table { font-size: 4.4pt; }
   .daily-cost-print-sheet .dcr-mud-analysis th,
-  .daily-cost-print-sheet .dcr-mud-analysis td { padding: .42mm .32mm; }
+  .daily-cost-print-sheet .dcr-mud-analysis td { padding: .22mm .26mm; }
   .daily-cost-print-sheet .dcr-mud-analysis thead th { font-size: 4.55pt; }
   .daily-cost-print-sheet .dcr-mud-analysis thead th:first-child { width: 34%; }
   .daily-cost-print-sheet .dcr-mud-analysis thead th span { display: block; margin-top: .25mm; color: #4A6F96; font-size: 4.2pt; }
   .daily-cost-print-sheet .dcr-mud-analysis tbody th { text-align: left; }
-  .daily-cost-print-sheet .dcr-incident table { font-size: 5.2pt; }
+  .daily-cost-print-sheet .dcr-incident table { font-size: 4.7pt; }
+  .daily-cost-print-sheet .dcr-incident th,
+  .daily-cost-print-sheet .dcr-incident td { padding: .22mm .3mm; }
   .daily-cost-print-sheet .dcr-incident th:nth-child(1) { width: 21%; }
   .daily-cost-print-sheet .dcr-incident th:nth-child(2) { width: 9%; }
   .daily-cost-print-sheet .dcr-incident th:nth-child(3) { width: 17%; }

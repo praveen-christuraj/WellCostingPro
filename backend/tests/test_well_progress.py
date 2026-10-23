@@ -355,3 +355,50 @@ def test_permissions_and_tenant_scope_guard_the_milestones():
         progress_audits = [row for row in entries if row.get("entity_type") == "well_progress"]
         assert progress_audits, "the spud entry must be audited"
         assert "spud" in progress_audits[0]["summary"].lower()
+
+
+def test_milestone_label_is_saved_once_with_the_register():
+    """The printed milestone wording is register data, not a print-time entry."""
+    with TestClient(app) as client:
+        headers = login(client)
+        well, afe, *_ = setup_well(client, headers)
+        path = f"/api/v1/daily-cost/wells/{well['id']}/progress"
+
+        # The label can be saved before the spud instant, and the default stays empty.
+        labelled = client.put(path, headers=headers, json={
+            "scope": "drilling", "milestone_label": "Side track on date / time",
+        })
+        assert labelled.status_code == 200, labelled.text
+        row = labelled.json()["scopes"][0]
+        assert row["milestone_label"] == "Side track on date / time"
+        assert row["spud_at"] is None and row["actual_days"] is None
+
+        # The spud instant keeps driving the actual days exactly as before.
+        spudded = client.put(path, headers=headers, json={
+            "scope": "drilling", "spud_at": "2026-10-19T10:00:00",
+        })
+        assert spudded.status_code == 200, spudded.text
+        row = spudded.json()["scopes"][0]
+        assert row["milestone_label"] == "Side track on date / time"
+        assert row["spud_at"].startswith("2026-10-19T10:00")
+
+        # The label is read back by the day sheet that prints the report.
+        created = client.post("/api/v1/daily-cost/entries", headers=headers, json={
+            "well_id": well["id"], "afe_id": afe["id"], "cost_date": "2026-10-19", "remarks": "",
+        })
+        assert created.status_code == 201, created.text
+        day = client.get(f"/api/v1/daily-cost/entries/{created.json()['entry']['id']}", headers=headers)
+        assert day.status_code == 200, day.text
+        assert day.json()["progress"]["milestone_label"] == "Side track on date / time"
+        assert Decimal(day.json()["progress"]["actual_days"]) == Decimal("0.583")
+
+        # Editing it is audited and applies to every report for this well scope.
+        edited = client.put(path, headers=headers, json={
+            "scope": "drilling", "milestone_label": "Spud date & time",
+        })
+        assert edited.status_code == 200, edited.text
+        assert edited.json()["scopes"][0]["milestone_label"] == "Spud date & time"
+        audits = client.get("/api/v1/audit", headers=headers).json()
+        entries = audits.get("items", audits) if isinstance(audits, dict) else audits
+        summaries = [str(item.get("summary", "")) for item in entries]
+        assert any("milestone label" in summary.lower() for summary in summaries)

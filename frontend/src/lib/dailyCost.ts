@@ -97,10 +97,16 @@ export type DailyCostSectionDepth = {
   daily_cost_code: string
 }
 
+export type DailyLeadLagKind = '' | 'LEAD' | 'LAG'
 export type DailyCostEntry = {
   id: string; daily_cost_code: string; rig_id: string; rig_code: string; rig_name: string
   well_id: string; well_code: string; well_name: string; afe_id: string; afe_code: string; afe_name: string
   afe_status: string; cost_date: string; standard_currency: string; remarks: string; status: DailyCostStatus
+  /** Report lead / lag saved with this sheet, printed without retyping. */
+  lead_lag_kind?: DailyLeadLagKind
+  lead_lag_days?: string | null
+  /** Running actual cost of this well + AFE through the sheet date. */
+  cumulative_cost?: string
   submitted_at: string | null; submitted_by: string; status_remarks: string
   services_count: number; consumables_count: number; tangibles_count: number; other_expenses_count: number
   services_total: string; consumables_total: string; tangibles_total: string; other_expenses_total: string
@@ -144,6 +150,8 @@ export type DailyCostOtherExpenseInput = DailyCostLineBase & {
 export type DailyCostSavePayload = {
   remarks: string
   usd_exchange_rate?: string | null
+  lead_lag_kind: DailyLeadLagKind
+  lead_lag_days: string | null
   services: DailyCostServiceInput[]
   consumables: DailyCostConsumableInput[]; tangibles: DailyCostTangibleInput[]
   other_expenses: DailyCostOtherExpenseInput[]
@@ -184,6 +192,8 @@ export type AnyDailyCostLine =
 
 export type DailyCostComparisonGroup = {
   cost_group: DailyCostGroup; planned: string; actual_to_date: string; balance: string
+  /** `actual_to_date` split into the cost before the report date and on it. */
+  actual_prior?: string; actual_today?: string
   /** `actual_to_date` split by the lines' activity classification; the three add up to it. */
   actual_planned?: string; actual_upa?: string; actual_npt?: string
 }
@@ -191,6 +201,10 @@ export type DailyCostComparisonLine = {
   budget_key: string; cost_group: DailyCostGroup; budget_kind: string
   item_code: string; item_name: string; service_group?: string
   planned: string; actual_to_date: string; balance: string; is_planned: boolean
+  /** Cumulative actual up to the previous day, and the cost on the report date. */
+  actual_prior?: string; actual_today?: string
+  /** AFE estimate line order; keeps the printed grouping and sequence. */
+  sort_order?: number
   /** Cumulative actual under Planned / UPA / NPT; `actual_planned` is the default case. */
   actual_planned?: string; actual_upa?: string; actual_npt?: string
 }
@@ -218,7 +232,10 @@ export type DailyCostWarning = { code: string; severity: 'info' | 'warning' | 'e
  */
 export type WellProgressScope = {
   scope: 'drilling' | 'completion'; scope_label: string; progress_label: string
-  spud_at: string | null; progress_completed_at: string | null; is_completed: boolean
+  spud_at: string | null; progress_completed_at: string | null
+  /** Printed wording for the spud milestone, saved once per well scope. */
+  milestone_label?: string
+  is_completed: boolean
   planned_days: string; actual_days: string | null; days_variance: string | null
   as_of_date: string | null
 }
@@ -300,6 +317,20 @@ export function dailyMoney(value: string | number | null | undefined, currency =
   return currency ? `${currency} ${formatted}` : formatted
 }
 
+/** A saved lead / lag is valid when a kind has a non-negative decimal value. */
+export function validLeadLagDays(kind: DailyLeadLagKind, days: string | null | undefined): boolean {
+  if (!kind) return true
+  return /^\d+(?:\.\d{1,10})?$/.test((days ?? '').trim())
+}
+
+/** Printed lead / lag wording, e.g. "LEAD: 2.75 days", or "LEAD/LAG: 0 days". */
+export function leadLagText(kind: DailyLeadLagKind | undefined, days: string | null | undefined): string {
+  const value = (days ?? '').trim()
+  if (!kind || !validLeadLagDays(kind, value)) return 'LEAD/LAG: 0 days'
+  const trimmed = value.includes('.') ? value.replace(/0+$/, '').replace(/\.$/, '') : value
+  return `${kind}: ${trimmed} days`
+}
+
 export function localToday(): string {
   const now = new Date()
   const offset = now.getTimezoneOffset()
@@ -345,6 +376,8 @@ export function saveFromDay(day: DailyCostDay): DailyCostSavePayload {
   })
   return {
     remarks: day.entry.remarks,
+    lead_lag_kind: day.entry.lead_lag_kind ?? '',
+    lead_lag_days: day.entry.lead_lag_days ? String(day.entry.lead_lag_days) : null,
     usd_exchange_rate: day.entry.standard_currency && day.entry.standard_currency.toUpperCase() !== 'USD'
       ? (day.entry.usd_exchange_rate ?? null)
       : null,

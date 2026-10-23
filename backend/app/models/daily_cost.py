@@ -40,6 +40,8 @@ from app.models.rig_well import now, uid
 
 COST_CLASSIFICATIONS = ("Planned", "UPA", "NPT")
 DAILY_COST_STATUSES = ("draft", "submitted")
+# Report lead / lag recorded with the daily sheet: empty, Lead or Lag.
+DAILY_LEAD_LAG_KINDS = ("", "LEAD", "LAG")
 DAILY_CHARGING_BASES = ("Day Rate", "Per Service Rate", "Per Section Rate")
 DAILY_CHARGE_CATEGORIES = (
     "Mobilization",
@@ -365,6 +367,8 @@ class DailyCostEntry(Base):
         UniqueConstraint("organization_id", "well_id", "cost_date", "afe_id", name="uq_daily_cost_entries_org_well_date_afe"),
         UniqueConstraint("organization_id", "daily_cost_code", name="uq_daily_cost_entries_org_code"),
         CheckConstraint(_in("status", DAILY_COST_STATUSES), name="ck_daily_cost_entries_status"),
+        CheckConstraint(_in("lead_lag_kind", DAILY_LEAD_LAG_KINDS), name="ck_daily_cost_entries_lead_lag_kind"),
+        CheckConstraint("lead_lag_days IS NULL OR lead_lag_days >= 0", name="ck_daily_cost_entries_lead_lag_days"),
         Index("ix_daily_cost_entries_org_date", "organization_id", "cost_date"),
         Index("ix_daily_cost_entries_org_status", "organization_id", "status"),
         Index("ix_daily_cost_entries_org_deleted", "organization_id", "is_deleted"),
@@ -394,6 +398,10 @@ class DailyCostEntry(Base):
     cost_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     standard_currency: Mapped[str] = mapped_column(String(10), nullable=False)
     remarks: Mapped[str] = mapped_column(String(1000), default="", server_default="", nullable=False)
+    # Report lead / lag for this day's cost report, entered once with the sheet
+    # instead of on every print. Empty kind means the report prints no lead/lag.
+    lead_lag_kind: Mapped[str] = mapped_column(String(10), default="", server_default="", nullable=False)
+    lead_lag_days: Mapped[Decimal | None] = mapped_column(Numeric(28, 10), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft", server_default="draft", nullable=False)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     submitted_by: Mapped[str] = mapped_column(String(255), default="", server_default="", nullable=False)

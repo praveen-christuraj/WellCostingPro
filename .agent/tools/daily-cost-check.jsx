@@ -52,14 +52,15 @@ const day = {
 const second = { ...day, entry: { ...day.entry, id: 'd2', afe_id: 'afe2', afe_code: 'AFE-2', daily_cost_code: 'DC-2', standard_currency: 'EUR', services_total: '0', total_cost: '100', consumables_total: '100', other_expenses_total: '0', npt_total: '0' },
   comparison: { ...day.comparison, tracked_actual_to_date: '100', other_expenses_to_date: '0', actual_to_date: '100', balance: '6900', npt_to_date: '0',
     groups: [
-      { cost_group: 'Services', planned: '3000', actual_to_date: '700', balance: '2300', actual_planned: '650', actual_upa: '50', actual_npt: '0' },
+      { cost_group: 'Services', planned: '3000', actual_to_date: '700', balance: '2300', actual_prior: '500', actual_today: '200', actual_planned: '650', actual_upa: '50', actual_npt: '0' },
       { cost_group: 'Consumables', planned: '5000', actual_to_date: '100', balance: '4900', actual_planned: '100', actual_upa: '0', actual_npt: '0' }],
     budget_lines: [
       { budget_key: 'service:20', budget_kind: 'service', item_code: 'SVC-20', item_name: 'Directional drilling', service_group: 'Rig Operations', cost_group: 'Services', planned: '2000', actual_to_date: '400', balance: '1600', is_planned: true,
-        actual_planned: '400', actual_upa: '0', actual_npt: '0' },
+        actual_prior: '250', actual_today: '150', actual_planned: '400', actual_upa: '0', actual_npt: '0' },
       { budget_key: 'service:03', budget_kind: 'service', item_code: 'SVC-03', item_name: 'Mud logging', service_group: 'Supervisions', cost_group: 'Services', planned: '1000', actual_to_date: '300', balance: '700', is_planned: true,
-        actual_planned: '250', actual_upa: '50', actual_npt: '0' },
-      { budget_key: 'consumable:Fuel', budget_kind: 'consumable_category', item_code: 'Fuel', item_name: 'Fuel allowance', cost_group: 'Consumables', planned: '7000', actual_to_date: '100', balance: '6900', is_planned: true },
+        actual_prior: '250', actual_today: '50', actual_planned: '250', actual_upa: '50', actual_npt: '0' },
+      { budget_key: 'consumable:Fuel', budget_kind: 'consumable_category', item_code: 'Fuel', item_name: 'Fuel allowance', cost_group: 'Consumables', planned: '7000', actual_to_date: '100', balance: '6900', is_planned: true,
+        actual_prior: '0', actual_today: '100' },
       { budget_key: 'consumable:Mud Chemicals', budget_kind: 'consumable_category', item_code: 'Mud Chemicals', item_name: 'Mud Chemicals allowance', cost_group: 'Consumables', planned: '2000', actual_to_date: '250', balance: '1750', is_planned: true },
       { budget_key: 'consumable:Cement Additives', budget_kind: 'consumable_category', item_code: 'Cement Additives', item_name: 'Cement Additives allowance', cost_group: 'Consumables', planned: '1500', actual_to_date: '125', balance: '1375', is_planned: true },
       { budget_key: 'drill-bit:BIT-A', budget_kind: 'drill_bit', item_code: 'BIT-A', item_name: 'Bit Alpha', cost_group: 'Consumables', planned: '3000', actual_to_date: '800', balance: '2200', is_planned: true },
@@ -93,29 +94,30 @@ const consumableNames = consumableRows.map(row => row.cells[0].textContent)
 assert.deepEqual(consumableNames, ['Mud Chemicals', 'Cement Additives', 'Fuel', 'Drill Bits'], 'consumables print the four fixed category totals only')
 assert.equal(consumableNames.filter(name => name === 'Drill Bits').length, 1, 'drill bits print as one cumulative row')
 
-// The services table alone splits the cumulative actual by activity
-// classification between the AFE and the total actual.
+// Every cost table prints AFE, cumulative up to the previous day, the cost on
+// the report day, the cumulative total, the balance and the used percentage.
 const servicePanel = coverPanels[0]
-assert.ok(servicePanel.classList.contains('dcr-cost-panel--split'), 'only the services table opts into the compacted split layout')
-const serviceHeaderRows = servicePanel.querySelectorAll('thead tr')
-assert.equal(serviceHeaderRows.length, 2, 'the services table groups its three classification columns')
-assert.deepEqual([...serviceHeaderRows[0].cells].map(cell => cell.textContent),
-  ['Cost item', 'AFE', 'Actual cost by activity', 'Total actual', 'Balance', 'Used'], 'services print AFE, the activity split and the total actual')
-assert.deepEqual([...serviceHeaderRows[1].cells].map(cell => cell.textContent), ['Planned', 'UPA', 'NPT'])
+const serviceHeaders = [...servicePanel.querySelectorAll('thead th')].map(cell => cell.textContent)
+assert.equal(serviceHeaders.length, 7, 'a cost table prints AFE, last day, this day, cumulative, balance and used')
+assert.ok(serviceHeaders[0] === 'Cost item' && serviceHeaders[1] === 'AFE' && serviceHeaders[4] === 'Cumulative',
+  'the cost table keeps the item, AFE and cumulative columns')
+assert.ok(serviceHeaders[2].startsWith('Up to') && serviceHeaders[3].startsWith('Cost on'),
+  'the last-day and report-day columns are labelled with their dates')
 const serviceBodyRows = [...servicePanel.querySelectorAll('tbody tr')]
-assert.equal(serviceBodyRows[0].cells.length, 8, 'a service row prints eight compacted cells')
+assert.equal(serviceBodyRows[0].cells.length, 7, 'a service row prints seven cells')
 const mudLoggingSplit = serviceBodyRows.find(row => row.cells[0].textContent === 'Supervisions · Mud logging')
 assert.deepEqual([...mudLoggingSplit.cells].map(cell => cell.textContent),
-  ['Supervisions · Mud logging', 'EUR 1,000.00', 'EUR 250.00', 'EUR 50.00', 'EUR 0.00', 'EUR 300.00', 'EUR 700.00', '30.00%'],
-  'a service row prints planned, UPA and NPT actuals before the total actual')
+  ['Supervisions · Mud logging', '€1,000.00', '€250.00', '€50.00', '€300.00', '€700.00', '30.00%'],
+  'a service row prints the AFE, cost up to last day, cost on the report day and the cumulative total')
 const serviceFooter = [...servicePanel.querySelectorAll('tfoot tr:last-child th')].map(cell => cell.textContent)
 assert.deepEqual(serviceFooter,
-  ['Group total', 'EUR 3,000.00', 'EUR 650.00', 'EUR 50.00', 'EUR 0.00', 'EUR 700.00', 'EUR 2,300.00', '23.33%'],
-  'the services footer totals each classification and the total actual')
-for (const otherPanel of [...coverPanels].slice(1)) {
-  assert.ok(!otherPanel.classList.contains('dcr-cost-panel--split'), 'other cost tables keep their five columns')
-}
-assert.equal(coverPanels[1].querySelectorAll('thead th').length, 5, 'consumables keep five columns')
+  ['Group total', '€3,000.00', '€500.00', '€200.00', '€700.00', '€2,300.00', '23.33%'],
+  'the services footer totals the last day, the report day and the cumulative cost')
+assert.equal(coverPanels[1].querySelectorAll('thead th').length, 7, 'consumables print the same seven columns')
+const fuelRow = [...coverPanels[1].querySelectorAll('tbody tr')].find(row => row.cells[0].textContent === 'Fuel')
+assert.deepEqual([...fuelRow.cells].map(cell => cell.textContent).slice(2, 5), ['€0.00', '€100.00', '€100.00'],
+  'a consumable with no earlier cost prints zero up to the last day and its full cost on the report day')
+assert.ok(!sheet.textContent.includes('USD '), 'the printed report uses the $ symbol instead of the USD code')
 
 // The report title names the well scope it costs.
 assert.equal(costReportTitle('well', ['drilling'], 'WELL-1'), 'Well Cost Report - Drilling · WELL-1')
@@ -123,13 +125,13 @@ assert.equal(costReportTitle('daily', ['completion'], 'WELL-1'), 'Daily Cost Rep
 assert.equal(costReportTitle('well', ['completion', 'drilling'], 'WELL-1'), 'Well Cost Report - Drilling & Completions · WELL-1')
 assert.equal(costReportTitle('daily', [], 'WELL-1'), 'Daily Cost Report · WELL-1', 'no scope keeps the plain title')
 const drillBitsRow = consumableRows.find(row => row.cells[0].textContent === 'Drill Bits')
-assert.ok(drillBitsRow.textContent.includes('EUR 5,500.00') && drillBitsRow.textContent.includes('EUR 1,500.00'), 'drill bit AFE and actual values are cumulative')
+assert.ok(drillBitsRow.textContent.includes('€5,500.00') && drillBitsRow.textContent.includes('€1,500.00'), 'drill bit AFE and actual values are cumulative')
 for (const hidden of ['SVC-03', 'SVC-20', 'Bit Alpha', 'Bit Beta', 'Mud Chemicals allowance', 'Cement Additives allowance']) {
   assert.ok(!sheet.querySelector('.daily-report-cover').textContent.includes(hidden), `${hidden} is hidden from the summary`)
 }
 for (const heading of [
-  'Reporting milestone', 'Section-wise planned depth & current depth', 'Services cost · AFE vs cumulative actual by activity',
-  'Consumables cost · AFE vs cumulative actual', 'Tangibles cost · AFE vs actual', 'AFE vs actual summary',
+  'Reporting milestone', 'Section-wise planned depth & current depth', 'Services cost · AFE vs last day, this day and cumulative',
+  'Consumables cost · AFE vs last day, this day and cumulative', 'Tangibles cost · AFE vs actual', 'AFE vs actual summary',
   'Mud chemical cost · section-wise', 'Consumption / losses · cumulative', 'Mud cost analysis · section / mud type',
   'NPT summary', 'UPA summary',
 ]) assert.ok(sheet.textContent.includes(heading), `cover prints ${heading}`)
@@ -141,7 +143,7 @@ for (const heading of ['Service-wise cumulative cost', 'Consumables cumulative c
   assert.ok(sheet.textContent.includes(heading), `cumulative pages print ${heading}`)
 }
 const matrix = sheet.querySelector('.dcr-mud-analysis')
-for (const text of ['Surface hole', 'OBM', 'Opening Stock', 'Receipt', 'Additions', 'Total Mud', 'Losses', 'Closing Stock', 'Meterage (current depth)', 'Cost / BBL', 'Reconciled Cost', '20.00', '30.00', '60.00', '90.00', '15.00', '95.00', '1,234.57 m', 'EUR 12.50', 'EUR 187.50']) {
+for (const text of ['Surface hole', 'OBM', 'Opening Stock', 'Receipt', 'Additions', 'Total Mud', 'Losses', 'Closing Stock', 'Meterage (current depth)', 'Cost / BBL', 'Reconciled Cost', '20.00', '30.00', '60.00', '90.00', '15.00', '95.00', '1,234.57 m', '€12.50', '€187.50']) {
   assert.ok(matrix.textContent.includes(text), `mud matrix prints ${text}`)
 }
 const lossMatrix = sheet.querySelector('.dcr-loss-matrix')
@@ -154,7 +156,7 @@ for (const code of ['DC-1', 'DC-2', 'AFE-1', 'AFE-2', 'WELL-1', 'RIG-1', 'SVC', 
   assert.ok(!sheet.textContent.includes(code), `${code} is omitted in favour of its name`)
 }
 assert.ok(sheet.textContent.includes('1,234.57 m'), 'printed depth rounds to two decimals')
-assert.ok(sheet.textContent.includes('Casing') && sheet.textContent.includes('EUR 900.00'), 'tangible items and cumulative prices print')
+assert.ok(sheet.textContent.includes('Casing') && sheet.textContent.includes('€900.00'), 'tangible items and cumulative prices print')
 assert.equal(sheet.querySelector('script'), null, 'remarks remain escaped')
 let trigger
 function PrintHarness() { const hook = useCostPrint(); trigger = hook.print; return hook.printSheet }
@@ -175,6 +177,18 @@ await act(async () => trigger({ title: 'Daily sheet', period: 'Today', days: [da
 assert.ok(printCalled)
 await act(async () => window.dispatchEvent(new Event('afterprint')))
 assert.equal(document.querySelector('.afe-print-sheet'), null, 'afterprint removes stale output')
+
+// Bulk printing keeps the first page of each selected report and drops the
+// cumulative schedules, so the pages form one printable file.
+await act(async () => root.render(<DailyCostPrintSheet coversOnly reports={[
+  { title: 'Daily sheet A', period: 'Oct 10, 2026', days: [day] },
+  { title: 'Daily sheet B', period: 'Oct 11, 2026', days: [second] },
+]}/>))
+const bulkSheet = document.querySelector('.afe-print-sheet')
+assert.ok(bulkSheet.classList.contains('daily-cost-print-sheet--bulk'), 'bulk print opts into one-page-per-report output')
+assert.equal(bulkSheet.querySelectorAll('.daily-report-cover').length, 2, 'every selected report contributes its first page')
+assert.equal(bulkSheet.querySelectorAll('.daily-report-details').length, 0, 'bulk print omits the cumulative schedules')
+assert.equal(bulkSheet.querySelectorAll('.dcr-titlebar h1').length, 2, 'each selected report keeps its own title bar')
 await act(async () => root.unmount())
 
 // The shared advanced selector collects many priced items at once, refuses a checked
@@ -306,16 +320,31 @@ const register = readFileSync('../frontend/src/pages/DailyCostManagement.tsx', '
 for (const forbidden of ['daily-cost/overview', 'StatCard', 'ReactECharts', 'cumulativeById', 'ACTUAL TO DATE']) {
   assert.ok(!register.includes(forbidden), `register does not contain ${forbidden}`)
 }
-for (const retained of ['New daily sheet', 'Well cost analysis', 'Filter by well', 'Filter by AFE', '<DataTable', 'Print well costing sheet', 'exportAudit', 'Deleted entries']) {
+for (const retained of ['New daily sheet', 'Well cost analysis', 'Filter by well', 'Filter by AFE', '<DataTable', 'Print well costing sheet', 'exportAudit', 'Deleted entries', "headerName: 'CUMULATIVE TO DATE'", "field: 'cumulative_cost'"]) {
   assert.ok(register.includes(retained), `register retains ${retained}`)
 }
 const sheetPage = readFileSync('../frontend/src/pages/DailyCostSheet.tsx', 'utf8')
-for (const retained of ["'other_expenses'", 'Less other expenses', 'Other Expenses', 'Assign scope / depth / quantity', 'Milestone label in report', 'Lead / Lag days', 'validLeadLagDays', 'MudCostMaterialBalance']) {
+for (const retained of ["'other_expenses'", 'Less other expenses', 'Other Expenses', 'Assign scope / depth / quantity', 'Cost report lead / lag', 'Lead / lag days', 'validLeadLagDays', 'MudCostMaterialBalance', 'label="Cost on this date"', 'Cumulative cost to date']) {
   assert.ok(sheetPage.includes(retained), `day sheet retains ${retained}`)
 }
+// The report settings are saved in the register, not typed into the print dialogs.
+for (const retired of ['Milestone label in report', 'leadLagKind']) {
+  assert.ok(!sheetPage.includes(retired), `day sheet no longer asks for ${retired} at print time`)
+}
 const wellPrintDialog = readFileSync('../frontend/src/components/daily-cost/WellCostPrintDialog.tsx', 'utf8')
-for (const retained of ['Lead / Lag', 'Lead / Lag days', 'LEAD/LAG: 0 days', 'validLeadLagDays']) {
-  assert.ok(wellPrintDialog.includes(retained), `well print dialog retains ${retained}`)
+for (const retired of ['Milestone label in report', 'Lead / Lag days', 'leadLagKind']) {
+  assert.ok(!wellPrintDialog.includes(retired), `well print dialog no longer asks for ${retired}`)
+}
+const bulkPrintDialog = readFileSync('../frontend/src/components/daily-cost/BulkDailyCostPrintDialog.tsx', 'utf8')
+for (const retained of ['printMany', 'cost-report', 'daily-cost/export-audit', 'first page']) {
+  assert.ok(bulkPrintDialog.includes(retained), `bulk print dialog uses ${retained}`)
+}
+for (const retained of ['BulkDailyCostPrintDialog', 'Print selected first pages', "'cumulative_cost'", "can('daily-cost:export')"]) {
+  assert.ok(register.includes(retained), `register offers ${retained}`)
+}
+const progressPanel = readFileSync('../frontend/src/components/daily-cost/WellProgressPanel.tsx', 'utf8')
+for (const retained of ['Milestone label printed on the report', 'milestone_label']) {
+  assert.ok(progressPanel.includes(retained), `well progress panel saves ${retained}`)
 }
 const bulkDialog = readFileSync('../frontend/src/components/daily-cost/DailyCostBulkScopeDialog.tsx', 'utf8')
 for (const retained of ['Set one depth for all', 'Actual depth', 'Depth unit', 'Set one quantity and unit for all', 'Charged quantity', 'Quantity unit']) {
@@ -395,7 +424,7 @@ const rigWellDeletedPage = readFileSync('../frontend/src/pages/RigWellDeleted.ts
 for (const required of ['row => `${row.entity_type}:${row.id}:${row.scope ?? \'all\'}`', '? `?scope=${encodeURIComponent(target.scope)}`']) {
   assert.ok(rigWellDeletedPage.includes(required), `rig-well deleted page retains ${required}`)
 }
-console.log('Daily cost checks passed: advanced consumable/tangible bulk selection with required usage, locked prices and show-selected-only review, the same selector reused by the AFE tangible estimate, bulk depth/quantity/unit controls, editable milestone and lead/lag title suffix, planned-activity days, scope-aware report titles, service-wise Planned/UPA/NPT actual columns with an unchanged five-column layout elsewhere, transposed mud and loss matrices, group-ordered/name-only services, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
+console.log('Daily cost checks passed: advanced consumable/tangible bulk selection with required usage, locked prices and show-selected-only review, the same selector reused by the AFE tangible estimate, bulk depth/quantity/unit controls, AFE / last day / report day / cumulative cost columns with currency symbols, the milestone label and lead/lag read from the register, bulk first-page-only printing, scope-aware report titles, transposed mud and loss matrices, group-ordered/name-only services with every AFE allowance listed, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
 
 dom.window.close()
 process.exit(0)

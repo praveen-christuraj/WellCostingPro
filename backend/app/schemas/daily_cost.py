@@ -25,6 +25,8 @@ ChargeCategory = Literal[
     "Others",
 ]
 ConsumableCategory = Literal["Mud Chemicals", "Cement Additives", "Fuel", "Drill Bits"]
+# Report lead / lag, chosen once on the daily sheet and printed with the report.
+LeadLagKind = Literal["", "LEAD", "LAG"]
 ConsumableKind = Literal["mud_chemical", "cement_additive", "fuel", "drill_bit"]
 # Unexpected charges that have no AFE allowance. The code is what is persisted;
 # the label lives in OTHER_EXPENSE_TYPE_LABELS and is snapshotted per line.
@@ -229,6 +231,10 @@ class DailyCostOtherExpenseLineIn(DailyCostLineInput):
 class DailyCostSaveIn(_Strict):
     remarks: str = Field(default="", max_length=1000)
     usd_exchange_rate: Decimal10 | None = Field(default=None, gt=0, le=Decimal("999999"))
+    # Lead / lag for this day's printed cost report. Entered and saved with the
+    # register so it never has to be retyped at print time.
+    lead_lag_kind: LeadLagKind = ""
+    lead_lag_days: Decimal10 | None = Field(default=None, ge=0, le=Decimal("1000000"))
     services: list[DailyCostServiceLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
     consumables: list[DailyCostConsumableLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
     tangibles: list[DailyCostTangibleLineIn] = Field(default_factory=list, max_length=DAILY_COST_MAX_LINES)
@@ -239,10 +245,25 @@ class DailyCostSaveIn(_Strict):
     def trim_remarks(cls, value: Any) -> Any:
         return _trim(value)
 
-    @field_validator("usd_exchange_rate", mode="before")
+    @field_validator("lead_lag_kind", mode="before")
     @classmethod
-    def blank_usd_rate(cls, value: Any) -> Any:
+    def normalize_lead_lag_kind(cls, value: Any) -> Any:
+        return _upper(value) if isinstance(value, str) else value
+
+    @field_validator("usd_exchange_rate", "lead_lag_days", mode="before")
+    @classmethod
+    def blank_number(cls, value: Any) -> Any:
         return _blank_to_none(value)
+
+    @model_validator(mode="after")
+    def validate_lead_lag(self):
+        if not self.lead_lag_kind and self.lead_lag_days is not None:
+            raise ValueError(
+                "Choose Lead or Lag before entering lead / lag days. Choose neither to clear both."
+            )
+        if self.lead_lag_kind and self.lead_lag_days is None:
+            raise ValueError("Enter the number of lead / lag days for the printed report.")
+        return self
 
     @model_validator(mode="after")
     def unique_line_ids(self):
@@ -589,6 +610,12 @@ class DailyCostComparisonGroup(BaseModel):
     planned: Decimal
     actual_to_date: Decimal
     balance: Decimal
+    # ``actual_to_date`` split into everything recorded before the report date
+    # and the cost recorded on the report date itself. The report prints
+    # "cumulative up to the last day", "cost on this day" and the cumulative
+    # total, so both halves are delivered by the API rather than derived twice.
+    actual_prior: Decimal = Decimal("0")
+    actual_today: Decimal = Decimal("0")
     # The same actuals split by the activity classification each daily line was
     # recorded under, so a report can show planned, UPA and NPT side by side.
     # The three add up to ``actual_to_date``.
@@ -610,6 +637,13 @@ class DailyCostBudgetComparison(BaseModel):
     actual_to_date: Decimal
     balance: Decimal
     is_planned: bool
+    # Cumulative cost before the report date and the cost recorded on the report
+    # date; ``actual_to_date`` is their sum and stays the cumulative column.
+    actual_prior: Decimal = Decimal("0")
+    actual_today: Decimal = Decimal("0")
+    # AFE line order, so the printed schedule keeps the estimate's grouping and
+    # sequence instead of sorting by cost.
+    sort_order: int = 0
     # ``actual_to_date`` split by the activity classification of the lines, so a
     # service-wise report can print actual under Planned / UPA / NPT. The three
     # always add up to ``actual_to_date``.
@@ -689,6 +723,9 @@ class DailyCostEntryOut(BaseModel):
     cost_date: date
     standard_currency: str
     remarks: str
+    # Lead / lag saved with this sheet and printed on its cost report.
+    lead_lag_kind: LeadLagKind = ""
+    lead_lag_days: Decimal | None = None
     status: Literal["draft", "submitted"]
     submitted_at: datetime | None
     submitted_by: str
@@ -718,6 +755,9 @@ class DailyCostEntryOut(BaseModel):
     rate_baseline_locked_at: datetime
     budget_baseline_locked_at: datetime
     warning_count: int
+    # Cumulative actual cost of this well + AFE through and including the sheet
+    # date, so the register shows the running total beside the day's own cost.
+    cumulative_cost: Decimal = Decimal("0")
     is_deleted: bool
     deleted_at: datetime | None
     created_by: str
@@ -748,6 +788,9 @@ class DailyCostWellProgress(BaseModel):
     progress_label: str
     spud_at: datetime | None
     progress_completed_at: datetime | None
+    # Wording the printed report uses for the spud milestone, saved with the
+    # register. Empty means "Spud date & time".
+    milestone_label: str = ""
     is_completed: bool
     planned_days: Decimal
     actual_days: Decimal | None
@@ -775,6 +818,12 @@ class DailyCostWellProgressUpdate(BaseModel):
     scope: Literal["drilling", "completion"]
     spud_at: datetime | None = None
     progress_completed_at: datetime | None = None
+    milestone_label: str | None = Field(default=None, max_length=80)
+
+    @field_validator("milestone_label", mode="before")
+    @classmethod
+    def trim_label(cls, value: Any) -> Any:
+        return _trim(value) if isinstance(value, str) else value
 
     model_config = ConfigDict(extra="forbid")
 
