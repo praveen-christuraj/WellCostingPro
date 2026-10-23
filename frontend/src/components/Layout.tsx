@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AppBar, Avatar, Box, Button, Divider, IconButton, Menu, MenuItem, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
-import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, GridViewOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined, SettingsOutlined, StorageOutlined, PlaylistAddCheckRounded, WaterDropOutlined, AssessmentOutlined, LocalGasStationOutlined } from '@mui/icons-material'
+import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, GridViewOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined, SettingsOutlined, StorageOutlined, PlaylistAddCheckRounded, WaterDropOutlined, AssessmentOutlined, LocalGasStationOutlined, ScienceOutlined, Inventory2Outlined, ScheduleRounded } from '@mui/icons-material'
 import Brand from './Brand'
 import { FormDialog, ErrorMessage } from './Common'
 import { api, body } from '../lib/api'
@@ -55,6 +55,12 @@ const modules: NavModule[] = [
     { label: 'Overview', path: '/reports', icon: AssessmentOutlined, anyOf: ['rig-well:read', 'afe:read', 'daily-cost:read'] },
     { label: 'Well-wise cost comparisons', path: '/reports/well-cost-comparison', icon: InsightsOutlined, requires: ['rig-well:read'], anyOf: ['afe:read', 'daily-cost:read'] },
     { label: 'Consumption and losses', path: '/reports/consumption-losses', icon: WaterDropOutlined, permission: 'daily-cost:read' },
+    { label: 'Mud chemicals usage', path: '/reports/mud-chemicals-usage', icon: ScienceOutlined, permission: 'daily-cost:read' },
+    { label: 'Drill bits usage', path: '/reports/drill-bits-usage', icon: PrecisionManufacturingOutlined, permission: 'daily-cost:read' },
+    { label: 'Tangibles usage', path: '/reports/tangibles-usage', icon: Inventory2Outlined, permission: 'daily-cost:read' },
+    { label: 'Service-wise cost', path: '/reports/service-wise-cost', icon: BuildOutlined, permission: 'daily-cost:read' },
+    { label: 'Vendor/company-wise cost', path: '/reports/vendor-wise-cost', icon: StorefrontOutlined, permission: 'daily-cost:read' },
+    { label: 'NPT/UPA report', path: '/reports/npt-upa', icon: ScheduleRounded, permission: 'daily-cost:read' },
   ] },
   { label: 'Other Managements', icon: SettingsOutlined, items: [
     { label: 'Overview', path: '/other-management', icon: DashboardOutlined, anyOf: ['audit:read', 'database-browser:read'] },

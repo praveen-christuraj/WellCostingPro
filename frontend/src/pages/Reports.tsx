@@ -1,5 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { AssessmentOutlined, ArrowForwardRounded, HistoryOutlined, QueryStatsOutlined, WaterDropOutlined } from '@mui/icons-material'
+import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
+import {
+  AssessmentOutlined, ArrowForwardRounded, BuildOutlined, HistoryOutlined, Inventory2Outlined,
+  PrecisionManufacturingOutlined, QueryStatsOutlined, ScheduleRounded, ScienceOutlined,
+  StorefrontOutlined, WaterDropOutlined,
+} from '@mui/icons-material'
 import { Box, Button, CircularProgress, Paper, Typography } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
 import { ErrorMessage, PageHeading } from '../components/Common'
@@ -8,6 +12,48 @@ import { api } from '../lib/api'
 import type { AfeOverview } from '../lib/afe'
 import type { DailyCostOverview } from '../lib/dailyCost'
 import type { RigWellOverview } from '../lib/rigWell'
+
+const USAGE_REPORT_CARDS = [
+  {
+    path: '/reports/mud-chemicals-usage', title: 'Mud chemicals usage', icon: ScienceOutlined,
+    description: 'Matrix of chemicals by well and hole section, with usage quantities, costs and section sub headers.',
+  },
+  {
+    path: '/reports/drill-bits-usage', title: 'Drill bits usage', icon: PrecisionManufacturingOutlined,
+    description: 'Drill bit matrix with make, model, size and IADC details, section usage and costs per well.',
+  },
+  {
+    path: '/reports/tangibles-usage', title: 'Tangibles usage', icon: Inventory2Outlined,
+    description: 'Categorized tangible matrix with category and subcategory grouping, section usage and costs per well.',
+  },
+  {
+    path: '/reports/service-wise-cost', title: 'Service-wise cost', icon: BuildOutlined,
+    description: 'Total service costs per well and hole section across every daily cost sheet in the selected range.',
+  },
+  {
+    path: '/reports/vendor-wise-cost', title: 'Vendor/company-wise cost', icon: StorefrontOutlined,
+    description: 'Total costs booked per vendor or recorded company, with cost-group and section breakdowns per well.',
+  },
+  {
+    path: '/reports/npt-upa', title: 'NPT/UPA report', icon: ScheduleRounded,
+    description: 'NPT and UPA days and costs per well, alongside planned activity, for the selected filters.',
+  },
+]
+
+function ReportCard({ path, title, description, icon: Icon }: {
+  path: string; title: string; description: string; icon: ComponentType
+}) {
+  return <Paper variant="outlined" sx={{ p: 2.2, borderRadius: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Box display="flex" alignItems="center" gap={1.2} mb={1}>
+      <Box className="table-icon"><Icon /></Box>
+      <Typography fontWeight={800} fontSize={14}>{title}</Typography>
+    </Box>
+    <Typography color="text.secondary" fontSize={12} sx={{ flex: 1 }}>{description}</Typography>
+    <Button component={RouterLink} to={path} variant="contained" size="small" endIcon={<ArrowForwardRounded />} sx={{ mt: 1.7, alignSelf: 'flex-start' }}>
+      Open report
+    </Button>
+  </Paper>
+}
 
 type Activity = { id: string; action: string; entity_type: string; entity_label: string; summary: string; created_at: string }
 type Dashboard = { wells: RigWellOverview | null; afes: AfeOverview | null; daily: DailyCostOverview | null; activity: Activity[] }
@@ -59,7 +105,7 @@ export default function Reports() {
     return () => { active = false }
   }, [canReadRig, canReadAfe, canReadDaily])
 
-  const reportCount = Number(canReadRig && (canReadAfe || canReadDaily)) + Number(canReadDaily)
+  const reportCount = Number(canReadRig && (canReadAfe || canReadDaily)) + Number(canReadDaily) * 7
 
   return <>
     <PageHeading
@@ -114,6 +160,17 @@ export default function Reports() {
           </Box>
         </Box>
       </Paper>}
+      {canReadDaily && <>
+        <Box display="flex" alignItems="center" gap={1} mt={2.5} mb={1.2}>
+          <AssessmentOutlined sx={{ color: 'text.secondary', fontSize: 19 }}/>
+          <Typography variant="h5">Usage, cost and NPT/UPA reports</Typography>
+        </Box>
+        <Box display="grid" gap={1.6} gridTemplateColumns={{ xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(3, minmax(0, 1fr))' }}>
+          {USAGE_REPORT_CARDS.map(card => (
+            <ReportCard key={card.path} path={card.path} title={card.title} description={card.description} icon={card.icon}/>
+          ))}
+        </Box>
+      </>}
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2, mt: 2 }}>
         <Box display="flex" alignItems="center" gap={1} mb={1.2}>
           <HistoryOutlined sx={{ color: 'text.secondary', fontSize: 18 }}/>

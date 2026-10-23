@@ -1,4 +1,4 @@
-.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check mud-cost-reconciliation-check lih-worksheet-check fuel-cost-check
+.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check mud-cost-reconciliation-check lih-worksheet-check fuel-cost-check usage-reports-check
 
 test:
 	cd backend && ../.venv/bin/python -m pytest -q
@@ -55,3 +55,11 @@ fuel-cost-check:
 		--bundle --platform=node --format=esm --jsx=automatic --log-level=error \
 		--outfile=node_modules/.cache/fuel-cost-check.mjs --external:jsdom && \
 		node node_modules/.cache/fuel-cost-check.mjs
+
+# Reports module: usage/cost matrix, NPT/UPA matrix and the shared filter panel.
+usage-reports-check:
+	cd frontend && npm install --no-save jsdom && \
+		NODE_PATH="$$PWD/node_modules" ./node_modules/.bin/esbuild ../.agent/tools/usage-reports-check.jsx \
+		--bundle --platform=node --format=esm --jsx=automatic \
+		--outfile=node_modules/.cache/usage-reports-check.mjs --loader:.jsx=jsx --log-level=error \
+		--external:jsdom && node node_modules/.cache/usage-reports-check.mjs

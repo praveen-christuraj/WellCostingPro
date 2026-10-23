@@ -43,6 +43,12 @@ const CostingSets = lazy(() => import('./pages/CostingSets'))
 const Reports = lazy(() => import('./pages/Reports'))
 const WellCostComparisonReport = lazy(() => import('./pages/WellCostComparisonReport'))
 const ConsumptionLossesReport = lazy(() => import('./pages/ConsumptionLossesReport'))
+const MudChemicalsUsageReport = lazy(() => import('./pages/reports/MudChemicalsUsageReport'))
+const DrillBitsUsageReport = lazy(() => import('./pages/reports/DrillBitsUsageReport'))
+const TangiblesUsageReport = lazy(() => import('./pages/reports/TangiblesUsageReport'))
+const ServiceWiseCostReport = lazy(() => import('./pages/reports/ServiceWiseCostReport'))
+const VendorWiseCostReport = lazy(() => import('./pages/reports/VendorWiseCostReport'))
+const NptUpaReport = lazy(() => import('./pages/reports/NptUpaReport'))
 
 // Every listed permission is required (AND).
 function Guard({ permission, children }: { permission: string | string[]; children: ReactNode }) {
@@ -119,6 +125,12 @@ export default function App() {
           <Route path="reports" element={<GuardAny permissions={['rig-well:read', 'afe:read', 'daily-cost:read']}><Reports/></GuardAny>}/>
           <Route path="reports/well-cost-comparison" element={<Guard permission="rig-well:read"><GuardAny permissions={['afe:read', 'daily-cost:read']}><WellCostComparisonReport/></GuardAny></Guard>}/>
           <Route path="reports/consumption-losses" element={<Guard permission="daily-cost:read"><ConsumptionLossesReport/></Guard>}/>
+          <Route path="reports/mud-chemicals-usage" element={<Guard permission="daily-cost:read"><MudChemicalsUsageReport/></Guard>}/>
+          <Route path="reports/drill-bits-usage" element={<Guard permission="daily-cost:read"><DrillBitsUsageReport/></Guard>}/>
+          <Route path="reports/tangibles-usage" element={<Guard permission="daily-cost:read"><TangiblesUsageReport/></Guard>}/>
+          <Route path="reports/service-wise-cost" element={<Guard permission="daily-cost:read"><ServiceWiseCostReport/></Guard>}/>
+          <Route path="reports/vendor-wise-cost" element={<Guard permission="daily-cost:read"><VendorWiseCostReport/></Guard>}/>
+          <Route path="reports/npt-upa" element={<Guard permission="daily-cost:read"><NptUpaReport/></Guard>}/>
           <Route path="*" element={<Navigate to="/" replace/>}/>
         </Route>
       </>}
