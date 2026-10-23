@@ -164,6 +164,7 @@ for (const text of ['Surface hole', 'OBM', 'Surface losses', 'Verti-G/Mud on Cut
 assert.equal(lossMatrix.querySelectorAll('thead th').length, 2, 'loss matrix uses sections and mud types as columns')
 assert.equal(lossMatrix.querySelector('thead th:nth-child(2)').textContent, 'Surface holeOBM', 'loss header prints only section and mud type')
 assert.equal(sheet.querySelector('.dcr-mud-cost tbody tr td').textContent, 'Surface hole · OBM', 'mud chemical row prints only section and mud type')
+assert.equal(sheet.querySelector('.dcr-tangibles span:first-child strong').textContent, '€4,000.00', 'daily report reads the tangible AFE amount from its locked budget line')
 const afeSummaryNote = sheet.querySelector('.dcr-overall p').textContent
 assert.equal(afeSummaryNote, 'AFE available = €6,900.00 · 1.43% used', 'AFE summary labels the final balance as the available amount')
 assert.ok(!afeSummaryNote.includes('after LIH') && !afeSummaryNote.includes('Balance'), 'AFE summary removes the old after-LIH and duplicate balance wording')
@@ -173,6 +174,29 @@ for (const code of ['DC-1', 'DC-2', 'AFE-1', 'AFE-2', 'WELL-1', 'RIG-1', 'SVC', 
 assert.ok(sheet.textContent.includes('1,234.57 m'), 'printed depth rounds to two decimals')
 assert.ok(sheet.textContent.includes('Casing') && sheet.textContent.includes('€900.00'), 'tangible items and cumulative prices print')
 assert.equal(sheet.querySelector('script'), null, 'remarks remain escaped')
+
+// A well summary's factor rows are actual-driven, so a planned tangible with
+// no recorded daily actual may be absent there. Its locked AFE budget line must
+// still supply the printed AFE value instead of silently becoming zero.
+const summaryWithoutTangibleFactor = {
+  as_of: '2026-10-10',
+  totals: {
+    currency: 'EUR', planned: '23000', comparison_actual: '800', services: '700', consumables: '100', tangibles: '0',
+    other_expenses: '0', lih_cost: '0', npt: '0', upa: '0',
+  },
+  factors: [{ dimension: 'cost_group', rows: [
+    { code: 'Services', planned: '3000' }, { code: 'Consumables', planned: '16000' },
+  ] }],
+  budget_lines: second.comparison.budget_lines,
+  progress: [], mud_cost: { sections: [] },
+}
+await act(async () => root.render(<DailyCostPrintSheet coversOnly report={{
+  title: 'Daily Cost Report', period: '10 Oct 2026', days: [second], overviewDays: [second],
+  summary: summaryWithoutTangibleFactor,
+}}/>))
+const summarySheet = document.querySelector('.afe-print-sheet')
+assert.equal(summarySheet.querySelector('.dcr-tangibles span:first-child strong').textContent, '€4,000.00',
+  'well-summary printing falls back to the locked tangible AFE budget when its actual factor is absent')
 let trigger
 function PrintHarness() { const hook = useCostPrint(); trigger = hook.print; return hook.printSheet }
 await act(async () => root.render(<PrintHarness/>))

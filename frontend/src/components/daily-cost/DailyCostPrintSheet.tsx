@@ -310,13 +310,18 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   const consumables = costRows.consumables
   const densityStep = services.length > 26 ? 4 : services.length > 18 ? 3 : services.length > 12 ? 2 : 1
   const groupPosition = (group: 'Services' | 'Consumables' | 'Tangibles') => {
+    // Planned values come from the locked AFE budget schedule. Summary factor
+    // rows are driven by recorded actuals and can omit a planned-only group
+    // (most visibly Tangibles), which previously made its printed AFE value 0.
+    const planned = budgetLines
+      .filter(line => line.cost_group === group)
+      .reduce((total, line) => total + asNumber(line.planned), 0)
     if (summary) {
-      const factor = summary.factors.find(item => item.dimension === 'cost_group')?.rows.find(row => row.code === group)
       const actual = group === 'Services' ? summary.totals.services : group === 'Consumables' ? summary.totals.consumables : summary.totals.tangibles
-      return { planned: asNumber(factor?.planned), actual: asNumber(actual) }
+      return { planned, actual: asNumber(actual) }
     }
     const groupRow = latestComparison.groups?.find(item => item.cost_group === group)
-    return { planned: asNumber(groupRow?.planned), actual: asNumber(groupRow?.actual_to_date) }
+    return { planned, actual: asNumber(groupRow?.actual_to_date) }
   }
   /** Day split for a cost group, taken from the report day's own comparison. */
   const groupSplit = (group: 'Services' | 'Consumables' | 'Tangibles') => {
