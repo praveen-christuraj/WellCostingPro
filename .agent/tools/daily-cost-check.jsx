@@ -402,7 +402,12 @@ assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margi
 assert.ok(styles.includes('--dcr-lower-row-height: 58mm'), 'the four lower columns share one compact physical height')
 assert.ok(styles.includes('grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr) var(--dcr-lower-row-height)'), 'UPA resolves to the shared lower-row height')
 assert.ok(styles.includes('height: var(--dcr-lower-row-height); display: grid; grid-template-columns: 1fr 1fr 1.18fr'), 'LIH/AFE, mud cost and losses resolve to the same lower-row height')
-assert.ok(styles.includes('.dcr-cost-panel table { height: 100%; }'), 'service and consumable table rows absorb the released vertical space')
+assert.ok(styles.includes('.dcr-cost-panel table { align-self: start; height: auto; font-size: 6.4pt'), 'service and consumable tables use the same intrinsic row and font sizing')
+assert.ok(styles.includes('.dcr-cost-panel td { padding: .57mm .34mm; }'), 'normal cost rows use 1.5x their previous vertical padding')
+assert.ok(styles.includes('.dcr-density-2 .dcr-cost-panel td { padding: .285mm .3mm; }'), 'density-2 cost rows retain the same 1.5x increase')
+assert.ok(styles.includes('.dcr-density-3 .dcr-cost-panel td { padding: .195mm .24mm; }'), 'density-3 cost rows retain the same 1.5x increase')
+assert.ok(styles.includes('.dcr-density-4 .dcr-cost-panel td { padding: .12mm .18mm; }'), 'density-4 cost rows retain the same 1.5x increase')
+assert.ok(!styles.includes('.dcr-cost-panel table { height: 100%; }'), 'short consumable schedules are not stretched into oversized rows')
 
 // Verify scoped Well Sub Activities and per-scope Well lifecycle across UI sources and live dialog rendering.
 const { MemoryRouter } = await import('react-router-dom')
