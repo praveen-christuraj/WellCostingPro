@@ -11,6 +11,7 @@ import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
 import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common'
 import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
+import { BulkDailyCostPrintDialog } from '../components/daily-cost/BulkDailyCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
 import {
@@ -59,6 +60,7 @@ export default function DailyCostManagement() {
   const [actionError, setActionError] = useState('')
   const [actionBusy, setActionBusy] = useState(false)
   const [printOpen, setPrintOpen] = useState(false)
+  const [bulkPrintOpen, setBulkPrintOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
@@ -254,7 +256,12 @@ export default function DailyCostManagement() {
     { headerName: 'AFE', field: 'afe_code', minWidth: 165, valueGetter: params => `${params.data?.afe_code ?? ''} · ${params.data?.afe_name ?? ''}` },
     { headerName: 'SCOPE', field: 'id', minWidth: 115, maxWidth: 130, valueGetter: params => params.data ? rowScope(params.data) : '', cellRenderer: (params: ICellRendererParams<DailyCostEntry>) => <Box display="flex" alignItems="center" height="100%"><Tag tone="info">{params.value === 'completion' ? 'Completion' : 'Drilling'}</Tag></Box> },
     { headerName: 'ACTUAL DEPTH (m)', field: 'actual_depth', minWidth: 140, valueFormatter: params => formatDepthMeters(params.data?.actual_depth, 'm') },
-    { headerName: 'DAILY TOTAL', field: 'total_cost', minWidth: 155, valueFormatter: params => dailyMoney(String(params.value ?? '0'), params.data?.standard_currency) },
+    { headerName: 'DAILY TOTAL', field: 'total_cost', minWidth: 150, valueFormatter: params => dailyMoney(String(params.value ?? '0'), params.data?.standard_currency) },
+    {
+      headerName: 'CUMULATIVE TO DATE', field: 'cumulative_cost', minWidth: 175,
+      headerTooltip: 'Running actual cost of this well and AFE through and including the sheet date.',
+      valueFormatter: params => dailyMoney(String(params.value ?? params.data?.total_cost ?? '0'), params.data?.standard_currency),
+    },
     { headerName: 'USD TOTAL', field: 'total_cost_usd', minWidth: 150, valueFormatter: params => dailyMoney(String(params.value ?? params.data?.total_cost ?? '0'), 'USD') },
     {
       headerName: 'OTHER EXPENSES', field: 'other_expenses_total', minWidth: 160,
@@ -367,6 +374,10 @@ export default function DailyCostManagement() {
       {loading && !rows.length ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26} /></Box> : <>
         {selected.length > 0 && <Paper variant="outlined" sx={{ p: 1.4, borderRadius: 2, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           <Typography fontSize={12} fontWeight={700} mr="auto">{selected.length} sheet{selected.length === 1 ? '' : 's'} selected</Typography>
+          {!deletedView && can('daily-cost:export') && <Button
+            size="small" variant="contained" startIcon={<PrintOutlined/>}
+            onClick={() => setBulkPrintOpen(true)}
+          >Print selected first pages</Button>}
           {deletedView ? <>
             {can('daily-cost:restore') && <Button size="small" startIcon={<RestoreRounded/>} onClick={() => { setActionError(''); setPending({ kind: 'restore', rows: selected }) }}>Restore selected</Button>}
             {can('daily-cost:permanent-delete') && <Button size="small" color="error" startIcon={<DeleteForeverOutlined/>} onClick={() => { setActionError(''); setPending({ kind: 'purge', rows: selected }) }}>Delete permanently</Button>}
@@ -385,7 +396,9 @@ export default function DailyCostManagement() {
           exportName={deletedView ? 'daily-cost-deleted' : `daily-cost-${active}`}
           canExport={can('daily-cost:export')}
           onExport={can('daily-cost:export') ? exportAudit : undefined}
-          selectable={deletedView ? can('daily-cost:restore') || can('daily-cost:permanent-delete') : can('daily-cost:delete')}
+          selectable={deletedView
+            ? can('daily-cost:restore') || can('daily-cost:permanent-delete')
+            : can('daily-cost:delete') || can('daily-cost:export')}
           onSelectionChange={setSelected}
         />
         {!loading && tabRows.length === 0 && <Typography color="text.secondary" fontSize={12} mt={1.2}>
@@ -395,6 +408,10 @@ export default function DailyCostManagement() {
     </Box>}
 
     <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={filterWell} />
+    <BulkDailyCostPrintDialog
+      open={bulkPrintOpen} onClose={() => setBulkPrintOpen(false)}
+      entries={selected} wells={reference?.wells ?? []}
+    />
 
     <FormDialog open={createOpen} title="Start a daily cost sheet" subtitle="The first sheet locks the AFE estimate, FX factors, well plan, service rates and Master Data catalogue prices for this well/AFE." onClose={() => setCreateOpen(false)} onSubmit={() => void createEntry()} busy={creating} submitLabel="Create daily sheet" submitDisabled={!selectedAfe || !selectedWell || !createDateValid || !usdRateValid || Boolean(selectedDuplicate) || missingSubActivities}>
       <Box display="grid" gap={1.6}>

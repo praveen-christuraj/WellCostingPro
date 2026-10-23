@@ -15,7 +15,7 @@ import { DailyCostLineDialog, type DailyCostLineKind, type EditableDailyCostLine
 import { DailyCostBulkScopeDialog } from '../components/daily-cost/DailyCostBulkScopeDialog'
 import { WellProgressPanel } from '../components/daily-cost/WellProgressPanel'
 import { CostingSetPickerDialog } from '../components/CostingSetPickerDialog'
-import { useCostPrint, validLeadLagDays, type LeadLagKind } from '../components/daily-cost/DailyCostPrintSheet'
+import { useCostPrint } from '../components/daily-cost/DailyCostPrintSheet'
 import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
@@ -23,11 +23,11 @@ import { listEntryAmendments, type DailyCostAmendment } from '../lib/sowAdjustme
 import { downloadTemplate, parseImportFile, type ImportRow } from '../lib/export'
 import {
   DAILY_COST_STATUSES, DAILY_ONE_TIME_CATEGORIES, costReportTitle, dailyMoney, deriveClassification, displayDate,
-  entryQuery, otherExpenseLabel, saveFromDay,
+  entryQuery, leadLagText, otherExpenseLabel, saveFromDay, validLeadLagDays,
   type DailyCostBaseline, type DailyCostComparisonLine, type DailyCostDay, type DailyCostGroup,
   type AnyDailyCostLine, type DailyCostImportResult, type DailyCostPreview, type DailyCostReference,
   type DailyCostSavePayload, type DailyCostServiceInput, type DailyQuantityUnit, type WellProgressScope,
-  type ConsumableCategory, type ConsumableKind, type DailyCostWellSummary,
+  type ConsumableCategory, type ConsumableKind, type DailyCostWellSummary, type DailyLeadLagKind,
 } from '../lib/dailyCost'
 import type { MudCostMaterialBalance, MudCostReconciliation } from '../lib/mudCost'
 import type { LihCostReport } from '../lib/lihCost'
@@ -66,10 +66,6 @@ function amountForRate(rate: string, quantity: string, unit: string, basis?: str
 
 export default function DailyCostSheet() {
   const { print, printSheet } = useCostPrint()
-  const [dailyPrintOpen, setDailyPrintOpen] = useState(false)
-  const [milestoneLabel, setMilestoneLabel] = useState('Spud date & time')
-  const [leadLagKind, setLeadLagKind] = useState<LeadLagKind>('')
-  const [leadLagDays, setLeadLagDays] = useState('')
   const [printOpen, setPrintOpen] = useState(false)
   const [printBusy, setPrintBusy] = useState(false)
   const [printError, setPrintError] = useState('')
@@ -83,7 +79,10 @@ export default function DailyCostSheet() {
   const progressSaveRef = useRef<(() => Promise<boolean>) | null>(null)
   const [baseline, setBaseline] = useState<DailyCostBaseline | null>(null)
   const [reference, setReference] = useState<DailyCostReference | null>(null)
-  const [payload, setPayload] = useState<DailyCostSavePayload>({ remarks: '', services: [], consumables: [], tangibles: [], other_expenses: [] })
+  const [payload, setPayload] = useState<DailyCostSavePayload>({
+    remarks: '', lead_lag_kind: '', lead_lag_days: null,
+    services: [], consumables: [], tangibles: [], other_expenses: [],
+  })
   const [preview, setPreview] = useState<DailyCostPreview | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
@@ -187,12 +186,14 @@ export default function DailyCostSheet() {
   const originalPayload = useMemo(() => day ? saveFromDay(day) : null, [day])
   const dirty = Boolean(originalPayload && JSON.stringify(payload) !== JSON.stringify(originalPayload))
   const editable = Boolean(day && day.entry.status === 'draft' && can('daily-cost:update'))
+  // Lead / lag is saved with the sheet, so it is validated with it.
+  const leadLagInvalid = Boolean(payload.lead_lag_kind) && !validLeadLagDays(payload.lead_lag_kind, payload.lead_lag_days)
   const hasPreviewForEdits = Boolean(preview && dirty)
   const canExport = can('daily-cost:export')
-  const saveDisabled = !dirty || saving || previewing || Boolean(previewError)
+  const saveDisabled = !dirty || saving || previewing || Boolean(previewError) || leadLagInvalid
 
   useEffect(() => {
-    if (!day || !dirty || !editable || loading) {
+    if (!day || !dirty || !editable || loading || leadLagInvalid) {
       setPreview(null)
       setPreviewError('')
       return
@@ -218,7 +219,7 @@ export default function DailyCostSheet() {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [day, dirty, editable, entryId, loading, payload, previewRetry])
+  }, [day, dirty, editable, entryId, leadLagInvalid, loading, payload, previewRetry])
 
   useEffect(() => {
     if (!dirty) return
@@ -350,6 +351,8 @@ export default function DailyCostSheet() {
       }
       setPayload(current => ({
         remarks: current.remarks,
+        lead_lag_kind: current.lead_lag_kind,
+        lead_lag_days: current.lead_lag_days,
         services: mode === 'replace' ? copied.services : [...current.services, ...copied.services],
         consumables: mode === 'replace' ? copied.consumables : [...current.consumables, ...copied.consumables],
         tangibles: mode === 'replace' ? copied.tangibles : [...current.tangibles, ...copied.tangibles],
@@ -880,7 +883,7 @@ export default function DailyCostSheet() {
   }
 
   const printDay = async () => {
-    if (dirty || !day || !validLeadLagDays(leadLagKind, leadLagDays)) return
+    if (dirty || !day) return
     setPrintBusy(true)
     setPrintError('')
     try {
@@ -913,10 +916,8 @@ export default function DailyCostSheet() {
         title: costReportTitle('daily', [saved.progress?.scope ?? progress?.scope], entry.well_name),
         period: displayDate(entry.cost_date), days: [saved],
         overviewDays, summary, mudReconciliation, mudBalance, lihReport, sections: well?.sections ?? baseline?.sections,
-        reportKind: 'daily', milestoneLabel: milestoneLabel.trim() || 'Spud date & time',
-        leadLagKind, leadLagDays,
+        reportKind: 'daily',
       })
-      setDailyPrintOpen(false)
     } catch (caught) {
       setPrintError(caught instanceof Error ? caught.message : 'The daily sheet could not be printed')
     } finally { setPrintBusy(false) }
@@ -934,7 +935,11 @@ export default function DailyCostSheet() {
       subtitle={`${entry.well_code} · ${entry.well_name} · ${entry.rig_code} · ${entry.afe_code} ${entry.afe_name} · ${displayDate(entry.cost_date)}`}
       action={<Box display="flex" gap={1} flexWrap="wrap">
         {canExport && <>
-          <Tooltip title={dirty ? 'Save or discard changes before printing the saved daily sheet.' : 'Prepare the saved daily report and enter any lead or lag days.'}><span><Button variant="outlined" startIcon={<PrintOutlined/>} disabled={dirty || saving || printBusy} onClick={() => { setMilestoneLabel('Spud date & time'); setLeadLagKind(''); setLeadLagDays(''); setDailyPrintOpen(true) }}>{printBusy ? 'Preparing print…' : 'Print daily sheet'}</Button></span></Tooltip>
+          <Tooltip title={dirty
+          ? 'Save or discard changes before printing the saved daily sheet.'
+          : `Prints the saved daily report with this sheet's milestone label and ${leadLagText(entry.lead_lag_kind, entry.lead_lag_days)}.`}>
+          <span><Button variant="outlined" startIcon={<PrintOutlined/>} disabled={dirty || saving || printBusy} onClick={() => void printDay()}>{printBusy ? 'Preparing print…' : 'Print daily sheet'}</Button></span>
+        </Tooltip>
           <Button variant="outlined" startIcon={<PrintOutlined/>} onClick={() => setPrintOpen(true)}>Print well costing sheet</Button>
         </>}
         <Button component={RouterLink} to="/daily-cost" variant="outlined" startIcon={<ArrowBackRounded/>}>Register</Button>
@@ -960,6 +965,41 @@ export default function DailyCostSheet() {
       onSaved={report => setProgress(report.scopes.find(scope => scope.scope === progress.scope) ?? progress)}
       onDirtyChange={setProgressDirty} saveRef={progressSaveRef}
     />}
+
+    <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 2, mb: 1.6 }}>
+      <Box display="grid" gap={1.2} alignItems="center" sx={{ gridTemplateColumns: { xs: '1fr', md: '1.4fr .7fr .7fr 1.2fr' } }}>
+        <Box>
+          <Typography fontWeight={800} fontSize={13.5}>Cost report lead / lag</Typography>
+          <Typography color="text.secondary" fontSize={11}>
+            Saved with this daily sheet and printed on its cost report — no need to enter it again at print time.
+            Choose neither when there is no lead or lag.
+          </Typography>
+        </Box>
+        <TextField
+          select size="small" label="Lead / Lag" value={payload.lead_lag_kind} disabled={!editable}
+          onChange={event => {
+            const next = event.target.value as DailyLeadLagKind
+            setPayload(current => ({ ...current, lead_lag_kind: next, lead_lag_days: next ? current.lead_lag_days : null }))
+          }}
+        >
+          <MenuItem value="">Neither</MenuItem><MenuItem value="LEAD">Lead</MenuItem><MenuItem value="LAG">Lag</MenuItem>
+        </TextField>
+        <TextField
+          size="small" type="number" label="Lead / lag days" value={payload.lead_lag_days ?? ''}
+          disabled={!editable || !payload.lead_lag_kind}
+          onChange={event => setPayload(current => ({ ...current, lead_lag_days: event.target.value === '' ? null : event.target.value }))}
+          error={leadLagInvalid}
+          inputProps={{ min: 0, step: '0.0000000001' }}
+          helperText={leadLagInvalid ? 'Enter a non-negative value.' : 'Decimals allowed.'}
+        />
+        <Box>
+          <Typography fontSize={10.5} fontWeight={800} letterSpacing={.6} color="text.secondary">REPORT TITLE</Typography>
+          <Typography fontSize={12} fontWeight={700} mt={.2} sx={{ overflowWrap: 'anywhere' }}>
+            {costReportTitle('daily', progress ? [progress.scope] : [], entry.well_name)} ({leadLagText(payload.lead_lag_kind, payload.lead_lag_days)})
+          </Typography>
+        </Box>
+      </Box>
+    </Paper>
 
     {notice && <Alert severity="success" sx={{ mb: 1.5 }} onClose={() => setNotice('')}>{notice}</Alert>}
     {costingSetError && <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setCostingSetError('')}>{costingSetError}</Alert>}
@@ -1010,7 +1050,7 @@ export default function DailyCostSheet() {
       </Paper>
     )}
 
-    <Box display="grid" gap={1.2} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: day.comparison.has_adjustment ? 'repeat(10, 1fr)' : 'repeat(8, 1fr)' } }}>
+    <Box display="grid" gap={1.2} mb={1.6} sx={{ gridTemplateColumns: { xs: '1fr 1fr', md: day.comparison.has_adjustment ? 'repeat(11, 1fr)' : 'repeat(9, 1fr)' } }}>
       <StatCard label="AFE planned" value={dailyMoney(day.comparison.planned_total, standard)} hint="Locked standard-currency budget"/>
       {day.comparison.has_adjustment && day.comparison.adjusted_planned_total != null && <>
         <StatCard label="Adjusted AFE" value={dailyMoney(day.comparison.adjusted_planned_total, standard)} hint="Latest approved SOW revision"/>
@@ -1021,7 +1061,12 @@ export default function DailyCostSheet() {
           tone={Number(day.comparison.adjusted_planned_total) - lihToDate - actualToDate < 0 ? 'bad' : 'good'}
         />
       </>}
-      <StatCard label="Actual to date" value={dailyMoney(actualToDate, standard)} hint={hasPreviewForEdits ? 'Includes the current unsaved preview' : 'All four cost groups through this day'}/>
+      <StatCard
+        label="Cost on this date"
+        value={dailyMoney(workingAmount, standard)}
+        hint={hasPreviewForEdits ? `Includes the unsaved preview · ${displayDate(entry.cost_date)}` : `Saved day total · ${displayDate(entry.cost_date)}`}
+      />
+      <StatCard label="Cumulative cost to date" value={dailyMoney(actualToDate, standard)} hint={hasPreviewForEdits ? 'Includes the current unsaved preview' : 'All four cost groups through this day'}/>
       <StatCard
         label="Actual depth"
         value={formatDepthMeters(hasPreviewForEdits ? preview?.actual_depth : entry.actual_depth, 'm')}
@@ -1174,29 +1219,6 @@ export default function DailyCostSheet() {
 
     <ErrorMessage message={printError}/>
     {printSheet}
-    <FormDialog
-      open={dailyPrintOpen}
-      title="Print daily cost report"
-      subtitle="The report uses saved data and cumulative schedules. Set Lead or Lag days when applicable; leaving the dropdown blank prints LEAD/LAG: 0 days."
-      onClose={() => setDailyPrintOpen(false)}
-      onSubmit={() => void printDay()}
-      submitLabel="Print daily report"
-      busy={printBusy}
-      submitDisabled={!validLeadLagDays(leadLagKind, leadLagDays)}
-    >
-      <Box display="grid" gap={2}>
-        <TextField fullWidth label="Milestone label in report" value={milestoneLabel} onChange={event => setMilestoneLabel(event.target.value)} inputProps={{ maxLength: 80 }} helperText="For example: Side track on date / time. The recorded date and time are not changed."/>
-        <TextField select label="Lead / Lag" value={leadLagKind} onChange={event => {
-          const next = event.target.value as LeadLagKind
-          setLeadLagKind(next)
-          if (!next) setLeadLagDays('')
-        }} helperText="Choose neither when the report has no lead or lag.">
-          <MenuItem value="">Neither</MenuItem><MenuItem value="LEAD">Lead</MenuItem><MenuItem value="LAG">Lag</MenuItem>
-        </TextField>
-        <TextField type="number" label="Lead / Lag days" required={Boolean(leadLagKind)} disabled={!leadLagKind} value={leadLagDays} onChange={event => setLeadLagDays(event.target.value)} inputProps={{ min: 0, step: '0.0000000001' }} error={!validLeadLagDays(leadLagKind, leadLagDays)} helperText={!validLeadLagDays(leadLagKind, leadLagDays) ? 'Enter a non-negative value with up to 10 decimal places.' : 'Decimals are allowed.'}/>
-        <ErrorMessage message={printError}/>
-      </Box>
-    </FormDialog>
     <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={entry.well_id}/>
 
     <DailyCostBulkScopeDialog

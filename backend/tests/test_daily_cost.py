@@ -1548,3 +1548,115 @@ def test_bulk_deleted_entries_purge_clears_owned_baselines_too():
             assert db.scalar(select(func.count()).select_from(DailyCostWellRateBaseline)) == 0
             assert db.scalar(select(func.count()).select_from(DailyCostBaseline)) == 0
         assert client.get("/api/v1/rig-well/deleted", headers=headers).json() == []
+
+
+def test_report_settings_and_day_split_live_in_the_register():
+    """Lead / lag is saved with the sheet; the report day is split from the total.
+
+    The printed daily report shows the AFE, the cost up to the previous day, the
+    cost on the report day and the cumulative cost. Those two halves and the
+    register's cumulative column must come from saved data — no print-time entry.
+    """
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        rate = setup["baseline"]["service_rates"][0]
+
+        def service_line(days: str) -> dict:
+            return {
+                "activity_id": setup["activity"]["id"], "hole_section_id": setup["hole"]["id"],
+                "phase_id": setup["phase"]["id"], "sub_activity_id": setup["sub1"]["id"],
+                "vendor_id": setup["vendor"]["id"], "quantity": days, "quantity_unit": "days",
+                "currency": "USD", "override_rate": None, "override_reason": "",
+                "remarks": "", "service_id": setup["service"]["id"],
+                "baseline_service_rate_id": rate["id"], "charging_basis": "Day Rate",
+                "charge_category": "Operation",
+            }
+
+        first = client.put(
+            f"/api/v1/daily-cost/entries/{setup['entry']['id']}", headers=headers,
+            json={
+                "remarks": "First day", "lead_lag_kind": "LEAD", "lead_lag_days": "2.75",
+                "services": [service_line("2")], "consumables": [], "tangibles": [],
+            },
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["entry"]["lead_lag_kind"] == "LEAD"
+        assert Decimal(first.json()["entry"]["lead_lag_days"]) == Decimal("2.75")
+        assert Decimal(first.json()["entry"]["total_cost"]) == Decimal("200.00")
+
+        second_day = _post(client, "/api/v1/daily-cost/entries", headers, {
+            "well_id": setup["well"]["id"], "afe_id": setup["afe"]["id"],
+            "cost_date": "2026-10-11", "remarks": "Second day",
+        })
+        second = client.put(
+            f"/api/v1/daily-cost/entries/{second_day['entry']['id']}", headers=headers,
+            json={
+                "remarks": "Second day", "lead_lag_kind": "LAG", "lead_lag_days": "0.5",
+                "services": [service_line("1")], "consumables": [], "tangibles": [],
+            },
+        )
+        assert second.status_code == 200, second.text
+        assert second.json()["entry"]["lead_lag_kind"] == "LAG"
+        assert Decimal(second.json()["entry"]["lead_lag_days"]) == Decimal("0.5")
+
+        # The comparison splits the report day from everything before it.
+        comparison = second.json()["comparison"]
+        service_row = next(row for row in comparison["budget_lines"] if row["cost_group"] == "Services")
+        assert Decimal(service_row["actual_prior"]) == Decimal("200.00")
+        assert Decimal(service_row["actual_today"]) == Decimal("100.00")
+        assert Decimal(service_row["actual_to_date"]) == Decimal("300.00")
+        assert (
+            Decimal(service_row["actual_prior"]) + Decimal(service_row["actual_today"])
+            == Decimal(service_row["actual_to_date"])
+        )
+        services_group = next(row for row in comparison["groups"] if row["cost_group"] == "Services")
+        assert Decimal(services_group["actual_prior"]) == Decimal("200.00")
+        assert Decimal(services_group["actual_today"]) == Decimal("100.00")
+
+        # The register shows the day's own cost beside the running cumulative cost.
+        rows = client.get("/api/v1/daily-cost/entries", headers=headers).json()
+        by_date = {row["cost_date"]: row for row in rows}
+        assert Decimal(by_date["2026-10-10"]["total_cost"]) == Decimal("200.00")
+        assert Decimal(by_date["2026-10-10"]["cumulative_cost"]) == Decimal("200.00")
+        assert Decimal(by_date["2026-10-11"]["total_cost"]) == Decimal("100.00")
+        assert Decimal(by_date["2026-10-11"]["cumulative_cost"]) == Decimal("300.00")
+
+        # A lead / lag kind without days (or days without a kind) is rejected.
+        assert client.put(
+            f"/api/v1/daily-cost/entries/{second_day['entry']['id']}", headers=headers,
+            json={"remarks": "", "lead_lag_kind": "LEAD", "services": [], "consumables": [], "tangibles": []},
+        ).status_code == 422
+        assert client.put(
+            f"/api/v1/daily-cost/entries/{second_day['entry']['id']}", headers=headers,
+            json={"remarks": "", "lead_lag_kind": "", "lead_lag_days": "3", "services": [], "consumables": [], "tangibles": []},
+        ).status_code == 422
+
+        # The well summary exposes the same split for the printed well report.
+        summary = client.get(
+            f"/api/v1/daily-cost/wells/{setup['well']['id']}/cost-summary", headers=headers,
+            params={"to": "2026-10-11"},
+        )
+        assert summary.status_code == 200, summary.text
+        summary_row = next(row for row in summary.json()["budget_lines"] if row["cost_group"] == "Services")
+        assert Decimal(summary_row["actual_prior"]) == Decimal("200.00")
+        assert Decimal(summary_row["actual_today"]) == Decimal("100.00")
+
+
+def test_report_lines_follow_the_afe_estimate_order():
+    """The printed schedule lists AFE allowances in the estimate's own sequence."""
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        day = client.get(f"/api/v1/daily-cost/entries/{setup['entry']['id']}", headers=headers).json()
+        service_lines = [
+            row for row in day["comparison"]["budget_lines"] if row["cost_group"] == "Services"
+        ]
+        assert service_lines, "the AFE service allowance is listed before any cost is recorded"
+        # Every allowance carries its estimate position so the print can keep the
+        # AFE's own sequence and still show 0 where nothing was spent.
+        assert all(row["sort_order"] >= 0 for row in service_lines)
+        ordered = sorted(service_lines, key=lambda row: row["sort_order"])
+        assert [row["budget_key"] for row in ordered] == [row["budget_key"] for row in service_lines]
+        assert all(Decimal(row["planned"]) > 0 for row in service_lines)
+        assert all(Decimal(row["actual_to_date"]) == Decimal("0") for row in service_lines)

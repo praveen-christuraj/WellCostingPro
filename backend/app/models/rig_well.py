@@ -145,6 +145,17 @@ class Well(RigWellRecord):
     completion_spud_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completion_progress_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # The wording the printed report uses for the spud milestone, saved once per
+    # scope inside the daily cost register ("Spud date & time", "Side track on
+    # date / time", …). Empty means the default wording. The milestone instant
+    # itself is unchanged by the label.
+    drilling_milestone_label: Mapped[str] = mapped_column(
+        String(80), default="", server_default="", nullable=False
+    )
+    completion_milestone_label: Mapped[str] = mapped_column(
+        String(80), default="", server_default="", nullable=False
+    )
+
     def sections_for_scope(self, scope: str) -> list["WellSection"]:
         return self.completion_sections if scope == "completion" else self.sections
 

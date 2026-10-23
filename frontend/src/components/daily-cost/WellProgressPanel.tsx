@@ -12,16 +12,20 @@ const fromInput = (value: string) => (value ? `${value}:00` : null)
 const formatDays = (value: string | null) =>
   value === null ? '—' : Number(value).toFixed(3)
 
-type ScopeDraft = { spud: string; completed: string }
+type ScopeDraft = { spud: string; completed: string; label: string }
 
 function draftFor(scope: WellProgressScope): ScopeDraft {
-  return { spud: toInput(scope.spud_at), completed: toInput(scope.progress_completed_at) }
+  return {
+    spud: toInput(scope.spud_at),
+    completed: toInput(scope.progress_completed_at),
+    label: scope.milestone_label ?? '',
+  }
 }
 
 function signature(scopes: WellProgressScope[]): string {
   return scopes.map(scope => {
     const draft = draftFor(scope)
-    return `${scope.scope}:${draft.spud}:${draft.completed}`
+    return `${scope.scope}:${draft.spud}:${draft.completed}:${draft.label}`
   }).join('|')
 }
 
@@ -56,7 +60,10 @@ export function WellProgressPanel({ wellId, scopes, canEdit, onSaved, asOfLabel,
     setDrafts(current => {
       const untouched = scopes.every(scope => {
         const draft = current[scope.scope]
-        return !draft || (draft.spud === toInput(scope.spud_at) && draft.completed === toInput(scope.progress_completed_at))
+        return !draft || (
+          draft.spud === toInput(scope.spud_at) && draft.completed === toInput(scope.progress_completed_at)
+          && draft.label === (scope.milestone_label ?? '')
+        )
       })
       if (!untouched) return current
       return Object.fromEntries(scopes.map(scope => [scope.scope, draftFor(scope)]))
@@ -67,7 +74,9 @@ export function WellProgressPanel({ wellId, scopes, canEdit, onSaved, asOfLabel,
   const dirtyScopes = scopes.filter(scope => {
     const draft = drafts[scope.scope]
     if (!draft) return false
-    return draft.spud !== toInput(scope.spud_at) || draft.completed !== toInput(scope.progress_completed_at)
+    return draft.spud !== toInput(scope.spud_at)
+      || draft.completed !== toInput(scope.progress_completed_at)
+      || draft.label !== (scope.milestone_label ?? '')
   })
   const dirty = dirtyScopes.length > 0
 
@@ -89,6 +98,8 @@ export function WellProgressPanel({ wellId, scopes, canEdit, onSaved, asOfLabel,
         const payload: Record<string, unknown> = { scope: scope.scope }
         if (draft.spud !== toInput(scope.spud_at)) payload.spud_at = fromInput(draft.spud)
         if (draft.completed !== toInput(scope.progress_completed_at)) payload.progress_completed_at = fromInput(draft.completed)
+        // The printed milestone wording is saved once here, not typed at print time.
+        if (draft.label !== (scope.milestone_label ?? '')) payload.milestone_label = draft.label
         const query = asOfDate ? `?as_of=${encodeURIComponent(asOfDate)}` : ''
         report = await api<WellProgressReport>(`/daily-cost/wells/${wellId}/progress${query}`, {
           method: 'PUT', body: body(payload),
@@ -113,12 +124,13 @@ export function WellProgressPanel({ wellId, scopes, canEdit, onSaved, asOfLabel,
           Actual days count from the Well Spud Date &amp; Time — not from the first daily cost sheet —
           to the end of {asOfLabel ?? 'the last cost sheet date'}{asOfLabel ? '' : ' (0.583 days for a well spudded at 10:00 hrs on that date)'}.
           Entering the Progress Completed Date &amp; Time ends the whole progress and stops the count.
+          The milestone label is the wording printed on every cost report for this well, so it is typed once here.
         </Typography>
       </Box>
       {canEdit && <Button
         size="small" variant="contained" startIcon={<SaveOutlined/>}
         onClick={() => void save()} disabled={!dirty || busy}
-      >{busy ? 'Saving…' : 'Save progress dates'}</Button>}
+      >{busy ? 'Saving…' : 'Save progress & label'}</Button>}
     </Box>
 
     <Box display="grid" gap={1.4} mt={1.5}>
@@ -133,6 +145,15 @@ export function WellProgressPanel({ wellId, scopes, canEdit, onSaved, asOfLabel,
               {scope.is_completed ? 'Completed — count stopped' : scope.spud_at ? 'Counting days' : 'Not spudded yet'}
             </Tag>
           </Box>
+          <TextField
+            size="small" fullWidth label="Milestone label printed on the report"
+            value={draft.label} disabled={!canEdit || busy}
+            onChange={event => setDraft(scope.scope, { label: event.target.value })}
+            placeholder="Spud date & time"
+            inputProps={{ maxLength: 80 }}
+            helperText="Saved once for this well and scope. Leave empty to print “Spud date & time”; edit it whenever the milestone wording changes."
+            sx={{ mt: 1.1 }}
+          />
           <Box display="grid" gap={1.2} mt={1.1} sx={{ gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(5, 1fr)' } }}>
             <TextField
               size="small" type="datetime-local" label="Well Spud Date & Time"
