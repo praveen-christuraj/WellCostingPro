@@ -64,6 +64,7 @@ export type DailyCostReference = {
 }
 
 export type DailyCostRateOption = {
+  is_current?: boolean
   id: string; service_id: string; source_afe_line_id: string; service_code: string; service_name: string
   charging_basis: ChargingBasis; rate_kind: 'day_rate' | 'per_service' | 'per_section'; charge_category: string
   hole_section_id: string | null; section_label: string; phase_id: string | null; phase_label: string

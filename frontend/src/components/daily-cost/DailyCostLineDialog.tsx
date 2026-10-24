@@ -5,6 +5,7 @@ import {
   Box,
   Button,
   Collapse,
+  Checkbox, FormControlLabel,
   Divider,
   ListSubheader,
   MenuItem,
@@ -13,6 +14,9 @@ import {
   Typography,
 } from '@mui/material'
 import { AddRounded, DeleteOutlineRounded, TuneRounded } from '@mui/icons-material'
+import { CreateWellSubActivity } from './CreateWellSubActivity'
+import { ActivityAllocationEditor } from './ActivityAllocationEditor'
+import { allocateService, allocationErrors, type ActivityAllocation } from '../../lib/dailyAllocations'
 import { FormDialog, Tag } from '../Common'
 import {
   AdvancedSelectorDialog,
@@ -22,6 +26,7 @@ import {
 import { groupServiceOptions } from '../../lib/serviceGroups'
 import {
   DAILY_CONSUMABLE_CATEGORIES,
+  DAILY_ONE_TIME_CATEGORIES,
   OTHER_EXPENSE_MIN_REMARKS,
   OTHER_EXPENSE_TYPES,
   dailyMoney,
@@ -53,6 +58,8 @@ type Props = {
   open: boolean
   kind: DailyCostLineKind | null
   initialLine: EditableDailyCostLine | null
+  serviceIds?: string[]
+  onSubActivityCreated?: (item: DailyCostReference['sub_activities'][number]) => void
   serviceLines: DailyCostServiceInput[]
   lineIndex: number | null
   baseline: DailyCostBaseline
@@ -81,6 +88,7 @@ const isConsumable = (line: EditableDailyCostLine): line is DailyCostConsumableI
 const isOther = (line: EditableDailyCostLine): line is DailyCostOtherExpenseInput => 'expense_type' in line
 
 type ServiceEntryRow = {
+  extra_categories?: string[]
   cost_items?: { description: string; amount: string }[]
   id: string
   service_id: string
@@ -152,6 +160,8 @@ export function DailyCostLineDialog({
   kind,
   initialLine,
   serviceLines,
+  serviceIds,
+  onSubActivityCreated,
   lineIndex,
   baseline,
   reference,
@@ -163,6 +173,7 @@ export function DailyCostLineDialog({
   // Services offered in report order, grouped for the picker.
   const serviceGroups = useMemo(() => groupServiceOptions(reference?.services ?? []), [reference])
   // Common Criteria State
+  const [allocations, setAllocations] = useState<ActivityAllocation[]>([])
   const [commonActivityId, setCommonActivityId] = useState('')
   const [commonSubActivityId, setCommonSubActivityId] = useState<string | null>(null)
   const [commonHoleSectionId, setCommonHoleSectionId] = useState<string | null>(null)
@@ -258,7 +269,7 @@ export function DailyCostLineDialog({
       } else {
         setCommonQuantity('24')
         setCommonQuantityUnit('hours')
-        const firstRate = baseline.service_rates[0]
+        const firstRate = baseline.service_rates.find(rate => rate.is_current !== false)
         const firstService = reference.services.find(s => s.id === firstRate?.service_id) || reference.services[0]
         const basis = (firstRate?.charging_basis || 'Day Rate') as ChargingBasis
         const category = (firstRate?.charge_category || 'Operation') as ChargeCategory
@@ -283,6 +294,17 @@ export function DailyCostLineDialog({
             custom_quantity_unit: 'hours',
           },
         ])
+      }
+      if (!initialLine && serviceIds?.length) {
+        setServiceRows(serviceIds.map((serviceId, index) => {
+          const rate = baseline.service_rates.find(rate => rate.service_id === serviceId && rate.is_current !== false)
+          const cur = rate?.currency ?? baseline.standard_currency
+          return { id: `set-${index}`, service_id: serviceId, baseline_service_rate_id: rate?.id ?? null,
+            charging_basis: rate?.charging_basis ?? 'Day Rate', charge_category: (rate?.charge_category || 'Operation') as ChargeCategory,
+            currency: cur, exchange_rate: defaultUsdRateForCurrency(cur, baseline), override_rate: null, override_reason: '', remarks: '',
+            customScope: Boolean(rate?.hole_section_id), custom_hole_section_id: rate?.hole_section_id ?? defaultSection?.hole_section_id ?? null,
+            custom_phase_id: rate?.phase_id ?? null, customQuantity: false, custom_quantity: '24', custom_quantity_unit: 'hours' as DailyQuantityUnit }
+        }))
       }
       setNonServiceForm(null)
     } else if (initialLine) {
@@ -359,10 +381,11 @@ export function DailyCostLineDialog({
       })
     }
 
+    setAllocations([])
     setError('')
     setSubmitted(false)
     setSaving(false)
-  }, [open, kind, initialLine, reference, baseline, wellId])
+  }, [open, kind, initialLine, baseline, wellId, serviceIds])
 
   useEffect(() => {
     if (open && baselineState === '') {
@@ -414,7 +437,7 @@ export function DailyCostLineDialog({
     serviceRows,
     nonServiceForm,
   })
-  const dirty = queuedLines.length > 0 || (baselineState !== '' && currentState !== baselineState)
+  const dirty = allocations.length > 0 || queuedLines.length > 0 || (baselineState !== '' && currentState !== baselineState)
 
   const sections = baseline.sections
   const selectedCommonSection = sections.find(section => section.hole_section_id === commonHoleSectionId)
@@ -522,7 +545,8 @@ export function DailyCostLineDialog({
       if (row.id !== rowId) return row
       const updated = { ...row, ...patch }
       if (patch.service_id && patch.service_id !== row.service_id) {
-        const rate = baseline.service_rates.find(r => r.service_id === patch.service_id)
+        updated.extra_categories = []
+        const rate = baseline.service_rates.find(r => r.service_id === patch.service_id && r.is_current !== false)
         if (rate) {
           updated.baseline_service_rate_id = rate.id
           updated.charging_basis = rate.charging_basis
@@ -545,19 +569,22 @@ export function DailyCostLineDialog({
     setServiceRows(prev => prev.filter(r => r.id !== rowId))
   }
 
+  const timeBased = serviceRows.some(row => row.charging_basis === 'Day Rate' && [row.charge_category ?? 'Operation', ...(row.extra_categories ?? [])].some(category => !DAILY_ONE_TIME_CATEGORIES.includes(category as ChargeCategory)))
+
   const validate = (): string[] => {
     const problems: string[] = []
 
-    if (!commonActivityId) problems.push('Select a Master Data Activity.')
-    if (!commonSubActivityId) problems.push('Select a well sub activity configured for this well.')
-    if (commonActualDepth.trim() !== '') {
+    if (kind === 'service' && allocations.length) problems.push(...allocationErrors(allocations, reference, wellId, scope, timeBased))
+    if (!allocations.length && !commonActivityId) problems.push('Select a Master Data Activity.')
+    if (!allocations.length && !commonSubActivityId) problems.push('Select a well sub activity configured for this well.')
+    if (!allocations.length && commonActualDepth.trim() !== '') {
       const depthVal = Number(commonActualDepth)
       if (!Number.isFinite(depthVal) || depthVal < 0) {
         problems.push('Enter a valid non-negative actual depth.')
       }
     }
 
-    if (derivedClassification !== 'Planned' && !commonVendorId && !commonPartyName.trim()) {
+    if (!allocations.length && derivedClassification !== 'Planned' && !commonVendorId && !commonPartyName.trim()) {
       problems.push('UPA and NPT lines require a responsible vendor or party.')
     }
 
@@ -565,10 +592,10 @@ export function DailyCostLineDialog({
       if (!serviceRows.length) problems.push('Add at least one service.')
 
       const commonQtyNum = Number(commonQuantity)
-      if (!commonQuantity || isNaN(commonQtyNum) || commonQtyNum <= 0) {
+      if (!allocations.length && timeBased && (!commonQuantity || isNaN(commonQtyNum) || commonQtyNum <= 0)) {
         problems.push('Common quantity must be greater than zero.')
       }
-      if (commonQuantityUnit === 'hours' && commonQtyNum > 24) {
+      if (!allocations.length && timeBased && commonQuantityUnit === 'hours' && commonQtyNum > 24) {
         problems.push('Hours cannot exceed 24 for a daily line; enter days instead.')
       }
 
@@ -582,7 +609,7 @@ export function DailyCostLineDialog({
         }
 
         const subId = commonSubActivityId || ''
-        const dupKey = `${row.service_id}:${subId}`
+        const dupKey = `${row.service_id}:${subId}:${row.charge_category}:${row.customScope ? row.custom_hole_section_id : commonHoleSectionId}:${row.customScope ? row.custom_phase_id : commonPhaseId}`
         if (duplicateCheck.has(dupKey)) {
           const sName = reference.services.find(s => s.id === row.service_id)?.service_code || row.service_id
           problems.push(`${rowLabel} (${sName}): Cannot add the same service twice under the same sub activity.`)
@@ -590,19 +617,19 @@ export function DailyCostLineDialog({
         duplicateCheck.add(dupKey)
 
         const existingDup = serviceLines.some(
-          (sLine, sIdx) => sIdx !== lineIndex && sLine.service_id === row.service_id && (sLine.sub_activity_id || '') === subId,
+          (sLine, sIdx) => sIdx !== lineIndex && sLine.service_id === row.service_id && (sLine.sub_activity_id || '') === subId && sLine.charge_category === row.charge_category && sLine.hole_section_id === (row.customScope ? row.custom_hole_section_id : commonHoleSectionId) && sLine.phase_id === (row.customScope ? row.custom_phase_id : commonPhaseId),
         )
-        if (existingDup) {
+        if (!allocations.length && existingDup) {
           const sName = reference.services.find(s => s.id === row.service_id)?.service_code || row.service_id
           problems.push(`${rowLabel} (${sName}): This service is already entered for this sub activity on this sheet.`)
         }
 
-        if (derivedClassification === 'Planned' && !row.baseline_service_rate_id) {
+        if ((allocations.length ? allocations.some(item => deriveClassification(reference.activities.find(activity => activity.id === item.activity_id)) === 'Planned') : derivedClassification === 'Planned') && !row.baseline_service_rate_id) {
           const sName = reference.services.find(s => s.id === row.service_id)?.service_code || row.service_id
           problems.push(`${rowLabel} (${sName}): Planned work requires a saved AFE rate. Select an AFE rate or use UPA/NPT Activity.`)
         }
 
-        if (derivedClassification !== 'Planned' && !row.baseline_service_rate_id && row.override_rate === null) {
+        if (!row.baseline_service_rate_id && row.override_rate === null) {
           const sName = reference.services.find(s => s.id === row.service_id)?.service_code || row.service_id
           problems.push(`${rowLabel} (${sName}): Unplanned service requires a manual override rate and reason.`)
         }
@@ -613,7 +640,7 @@ export function DailyCostLineDialog({
           if (row.override_reason.trim().length < 3) problems.push(`${rowLabel}: Explain the rate override (at least 3 characters).`)
         }
 
-        if (row.customQuantity) {
+        if (!allocations.length && timeBased && row.customQuantity) {
           const custQtyNum = Number(row.custom_quantity)
           if (!row.custom_quantity || isNaN(custQtyNum) || custQtyNum <= 0) {
             problems.push(`${rowLabel}: Custom quantity must be greater than zero.`)
@@ -665,13 +692,13 @@ export function DailyCostLineDialog({
 
   const openAdvancedSelector = () => {
     const problems: string[] = []
-    if (!commonActivityId) problems.push('Select a Master Data Activity before opening the advanced selector.')
-    if (!commonSubActivityId) problems.push('Select a well sub activity before opening the advanced selector.')
+    if (!allocations.length && !commonActivityId) problems.push('Select a Master Data Activity before opening the advanced selector.')
+    if (!allocations.length && !commonSubActivityId) problems.push('Select a well sub activity before opening the advanced selector.')
     if (kind === 'consumable' && !commonHoleSectionId) problems.push('Select a hole section before adding mud chemicals.')
     if (commonActualDepth.trim() && (!Number.isFinite(Number(commonActualDepth)) || Number(commonActualDepth) < 0)) {
       problems.push('Enter a valid non-negative actual depth before opening the advanced selector.')
     }
-    if (derivedClassification !== 'Planned' && !commonVendorId && !commonPartyName.trim()) {
+    if (!allocations.length && derivedClassification !== 'Planned' && !commonVendorId && !commonPartyName.trim()) {
       problems.push('UPA and NPT lines require a responsible vendor or party.')
     }
     if (!advancedItems.length) problems.push(`No ${kind === 'consumable' ? 'mud chemicals' : 'tangibles'} are available in the locked catalogue.`)
@@ -771,7 +798,17 @@ export function DailyCostLineDialog({
             remarks: row.remarks.trim(),
           }
         })
-        onSave(results)
+        const expanded = results.flatMap((line, index) => {
+          const row = serviceRows[index]
+          const extras = (row.extra_categories ?? []).filter(category => category !== line.charge_category).map(category => {
+            const selectedRate = baseline.service_rates.find(rate => rate.id === line.baseline_service_rate_id)
+            const rate = baseline.service_rates.find(rate => rate.is_current !== false && rate.service_id === line.service_id && rate.source_afe_line_id === selectedRate?.source_afe_line_id && rate.charge_category === category && rate.charging_basis === line.charging_basis && rate.hole_section_id === selectedRate?.hole_section_id && rate.phase_id === selectedRate?.phase_id)
+            if (!rate) throw new Error(`No current AFE rate exists for ${category}.`)
+            return { ...line, id: null, cost_items: [], override_rate: null, override_reason: '', baseline_service_rate_id: rate.id, charge_category: category as ChargeCategory, currency: rate.currency }
+          })
+          return [line, ...extras].flatMap(charge => allocations.length ? allocateService(charge, allocations, baseline, reference) : allocateService(charge, [], baseline, reference))
+        })
+        onSave(expanded)
       } else if (nonServiceForm) {
         const cur = (nonServiceForm.currency || baseline.standard_currency || 'USD').toUpperCase()
         const prepared: EditableDailyCostLine = {
@@ -796,6 +833,8 @@ export function DailyCostLineDialog({
           setError('')
         } else onSave([...queuedLines, prepared])
       }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not prepare the service allocations.')
     } finally {
       setSaving(false)
     }
@@ -835,8 +874,13 @@ export function DailyCostLineDialog({
       maxWidth="md"
     >
       <Box display="grid" gap={2}>
+        {onSubActivityCreated && <CreateWellSubActivity reference={reference} wellId={wellId} scope={scope} activityId={commonActivityId} onCreated={item => {
+          onSubActivityCreated(item)
+          if (item.activity_id === commonActivityId) { setCommonSubActivityId(item.id); if (derivedClassification !== 'Planned') setCommonPartyName(item.responsible_party) }
+        }}/>}
+        {kind === 'service' && <ActivityAllocationEditor value={allocations} onChange={setAllocations} baseline={baseline} reference={reference} wellId={wellId} scope={scope} timeBased={timeBased}/>}
         {/* COMMON CRITERIA SECTION */}
-        <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: 'background.paper' }}>
+        {!allocations.length && <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: 'background.paper' }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.2}>
             <Typography fontSize={11} fontWeight={800} letterSpacing={0.6} color="text.secondary" textTransform="uppercase">
               Common Activity &amp; Operational Criteria
@@ -895,7 +939,7 @@ export function DailyCostLineDialog({
                     </Button>
                   }
                 >
-                  No sub activity configured for this well and Activity. Configuring sub activities in Rig &amp; Well Management is mandatory.
+                  No sub activity configured for this well and Activity. Use “Create well sub activity here” or configure one in Rig &amp; Well Management.
                 </Alert>
               </Box>
             )}
@@ -957,7 +1001,7 @@ export function DailyCostLineDialog({
             </TextField>
 
             {/* Charged Quantity & Unit (Common) */}
-            {kind === 'service' && (
+            {kind === 'service' && timeBased && !allocations.length && (
               <>
                 <TextField
                   label="Charged quantity"
@@ -1025,7 +1069,7 @@ export function DailyCostLineDialog({
               </>
             )}
           </Box>
-        </Paper>
+        </Paper>}
 
         {/* SERVICES LIST */}
         {kind === 'service' && (
@@ -1045,7 +1089,7 @@ export function DailyCostLineDialog({
               {serviceRows.map((row, index) => {
                 const sObj = reference.services.find(s => s.id === row.service_id)
                 const rate = baseline.service_rates.find(r => r.id === row.baseline_service_rate_id)
-                const rateMatches = baseline.service_rates.filter(r => r.service_id === row.service_id)
+                const rateMatches = baseline.service_rates.filter(r => r.service_id === row.service_id && (r.is_current !== false || r.id === row.baseline_service_rate_id))
                 const rowCurrency = (row.currency || 'USD').toUpperCase()
                 const canChangeCurrency = row.override_rate !== null || !rate
                 return (
@@ -1099,8 +1143,11 @@ export function DailyCostLineDialog({
                               value={row.baseline_service_rate_id ?? ''}
                               onChange={e => {
                                 const pickedRate = baseline.service_rates.find(r => r.id === e.target.value)
+                                if (pickedRate?.charging_basis === 'Day Rate' && row.charging_basis !== 'Day Rate') { setCommonQuantity('24'); setCommonQuantityUnit('hours') }
                                 updateServiceRow(row.id, {
                                   baseline_service_rate_id: e.target.value || null,
+                                  extra_categories: [],
+                                  customQuantity: false,
                                   charging_basis: pickedRate?.charging_basis || row.charging_basis,
                                   charge_category: (pickedRate?.charge_category || row.charge_category) as ChargeCategory,
                                   currency: (pickedRate?.currency || row.currency).toUpperCase(),
@@ -1111,7 +1158,7 @@ export function DailyCostLineDialog({
                               {rateMatches.map(r => (
                                 <MenuItem key={r.id} value={r.id}>
                                   {dailyMoney(r.unit_rate, r.currency)} / {r.charging_basis} ({r.charge_category || 'Operation'})
-                                  {r.section_label ? ` · ${r.section_label}` : ''}
+                                  {r.section_label ? ` · ${r.section_label}` : ''}{r.is_current === false ? ' · Historical rate' : ''}
                                 </MenuItem>
                               ))}
                             </TextField>
@@ -1131,6 +1178,10 @@ export function DailyCostLineDialog({
                         </Box>
                       )}
 
+                      {rate && <Box sx={{ gridColumn: '1 / -1' }}>
+                        <Typography variant="subtitle2">Include other AFE charge categories</Typography>
+                        {rateMatches.filter(other => other.is_current !== false && other.source_afe_line_id === rate.source_afe_line_id && other.charging_basis === rate.charging_basis && other.charge_category !== row.charge_category && other.hole_section_id === rate.hole_section_id && other.phase_id === rate.phase_id).map(other => <FormControlLabel key={other.id} label={`${other.charge_category} · ${dailyMoney(other.unit_rate, other.currency)}`} control={<Checkbox checked={(row.extra_categories ?? []).includes(other.charge_category)} onChange={event => updateServiceRow(row.id, { extra_categories: event.target.checked ? [...(row.extra_categories ?? []), other.charge_category] : (row.extra_categories ?? []).filter(category => category !== other.charge_category) })}/>}/>)}
+                      </Box>}
                       <Box sx={{ gridColumn: '1 / -1' }} display="grid" gap={1}>
                         <Typography fontWeight={700}>Actual cost breakdown (optional)</Typography>
                         <Typography color="text.secondary" fontSize={12}>Amounts are in {row.currency}. Their total replaces the rate-based charge; descriptions are retained for reference.</Typography>

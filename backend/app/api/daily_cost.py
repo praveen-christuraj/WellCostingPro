@@ -207,3 +207,9 @@ def permanently_delete_entry(entry_id: str, request: Request, db: Db, user: Curr
 def export_audit(data: DailyCostExportAudit, request: Request, db: Db, user: Current) -> Response:
     service.record_export(db, user, data, request)
     return Response(status_code=204)
+
+
+@router.post("/entries/{entry_id}/refresh-service-rates", response_model=DailyCostBaselineOut,
+             dependencies=[Depends(require("daily-cost:update"))])
+def refresh_service_rates(entry_id: str, request: Request, db: Db, user: Current):
+    return service.refresh_service_rates(db, user.organization_id, entry_id, user, request)

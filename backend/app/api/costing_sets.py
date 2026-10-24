@@ -1,10 +1,10 @@
-"""Private, reusable costing sets and their catalogue options."""
+"""Private or workspace-shared costing sets and their catalogue options."""
 
 from collections import defaultdict
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -102,6 +102,8 @@ def _set_out(costing_set: UserCostingSet, available: set[tuple[str, str]]) -> di
     ]
     return CostingSetOut(
         id=costing_set.id,
+        is_global=costing_set.is_global,
+        owner_id=costing_set.user_id,
         name=costing_set.name,
         item_group=costing_set.item_group,
         description=costing_set.description,
@@ -217,13 +219,13 @@ def _audit_set(db: Session, *, user: Any, costing_set: UserCostingSet, action: s
 
 @router.get("", response_model=list[CostingSetOut], dependencies=[Depends(require("costing-sets:read"))])
 def list_costing_sets(db: Db, user: Current):
-    """Return only the current user's shortcuts, never another workspace member's."""
+    """Return owned shortcuts plus explicitly shared shortcuts in this workspace."""
     records = db.scalars(
         select(UserCostingSet)
         .options(selectinload(UserCostingSet.items))
         .where(
             UserCostingSet.organization_id == user.organization_id,
-            UserCostingSet.user_id == user.id,
+            or_(UserCostingSet.user_id == user.id, UserCostingSet.is_global.is_(True)),
         )
         .order_by(UserCostingSet.item_group, UserCostingSet.name_key, UserCostingSet.id)
     ).all()
@@ -282,6 +284,7 @@ def create_costing_set(data: CostingSetCreate, request: Request, db: Db, user: C
         name_key=data.name.casefold(),
         item_group=data.item_group,
         description=data.description,
+        is_global=data.is_global,
     )
     _replace_items(db, costing_set=costing_set, organization_id=user.organization_id, resolved_items=resolved)
     db.add(costing_set)
@@ -291,7 +294,7 @@ def create_costing_set(data: CostingSetCreate, request: Request, db: Db, user: C
         user=user,
         costing_set=costing_set,
         action="create",
-        summary=f"Created {data.item_group} costing set with {len(resolved)} catalogue items",
+        summary=f"Created {data.item_group} costing set with {len(resolved)} catalogue items; workspace global={data.is_global}",
         request=request,
     )
     _commit(db)
@@ -325,13 +328,14 @@ def update_costing_set(set_id: str, data: CostingSetUpdate, request: Request, db
     costing_set.name_key = data.name.casefold()
     costing_set.item_group = data.item_group
     costing_set.description = data.description
+    costing_set.is_global = data.is_global
     _replace_items(db, costing_set=costing_set, organization_id=user.organization_id, resolved_items=resolved)
     _audit_set(
         db,
         user=user,
         costing_set=costing_set,
         action="update",
-        summary=f"Updated costing set {old_name} ({old_group}; {old_count} items) to {data.name} ({data.item_group}; {len(resolved)} items)",
+        summary=f"Updated costing set {old_name} ({old_group}; {old_count} items) to {data.name} ({data.item_group}; {len(resolved)} items); workspace global={data.is_global}",
         request=request,
     )
     _commit(db)
@@ -482,7 +486,7 @@ def audit_export(data: CostingSetExportAuditIn, request: Request, db: Db, user: 
     count = db.scalar(
         select(func.count(UserCostingSet.id)).where(
             UserCostingSet.organization_id == user.organization_id,
-            UserCostingSet.user_id == user.id,
+            or_(UserCostingSet.user_id == user.id, UserCostingSet.is_global.is_(True)),
         )
     ) or 0
     audit.record(
@@ -492,7 +496,7 @@ def audit_export(data: CostingSetExportAuditIn, request: Request, db: Db, user: 
         action="export",
         entity_type="costing_set",
         entity_label="Reusable costing sets",
-        summary=f"Exported {data.record_count} of {count} private costing sets as {data.format.upper()}",
+        summary=f"Exported {data.record_count} of {count} visible costing sets as {data.format.upper()}",
         request=request,
     )
     db.commit()

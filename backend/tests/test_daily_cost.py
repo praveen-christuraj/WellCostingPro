@@ -1660,3 +1660,76 @@ def test_report_lines_follow_the_afe_estimate_order():
         assert [row["budget_key"] for row in ordered] == [row["budget_key"] for row in service_lines]
         assert all(Decimal(row["planned"]) > 0 for row in service_lines)
         assert all(Decimal(row["actual_to_date"]) == Decimal("0") for row in service_lines)
+
+
+def test_current_afe_rates_are_versioned_without_repricing_history():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers)
+        entry_id = setup['entry']['id']
+        original = setup['baseline']['service_rates'][0]
+        # AFE saves replace line identities; change to section rate first.
+        afe_id = setup['afe']['id']
+        source_id = original['source_afe_line_id']
+        def estimate(basis):
+            section = basis == 'Per Section Rate'
+            response = client.put(f'/api/v1/afe/afes/{afe_id}/estimate', headers=headers, json={
+                'services': [{'client_key': source_id, 'service_id': setup['service']['id'], 'charging_basis': basis,
+                    'currency': 'USD', 'service_amount': '0', 'hole_section_id': None, 'phase_id': None,
+                    'rates': [] if section else [{'category': 'Operation', 'unit_rate': '240'}, {'category': 'Mobilization', 'unit_rate': '500'}],
+                    'charges': [] if section else [{'category': 'Operation', 'quantity': '10', 'quantity_unit': 'days'}],
+                    'section_rates': [{'hole_section_id': setup['hole']['id'], 'phase_id': setup['phase']['id'], 'amount': '600'}] if section else []}],
+                'consumables': [], 'tangibles': [], 'standard_currency': 'USD', 'exchange_rates': []})
+            assert response.status_code == 200, response.text
+        estimate('Per Section Rate')
+        refreshed = client.post(f'/api/v1/daily-cost/entries/{entry_id}/refresh-service-rates', headers=headers)
+        assert refreshed.status_code == 200, refreshed.text
+        section_rate = next(row for row in refreshed.json()['service_rates'] if row['is_current'])
+        assert section_rate['charging_basis'] == 'Per Section Rate'
+        line = {'service_id': setup['service']['id'], 'baseline_service_rate_id': section_rate['id'],
+            'charging_basis': 'Per Section Rate', 'charge_category': 'Operation',
+            'activity_id': setup['activity']['id'], 'sub_activity_id': setup['sub1']['id'],
+            'hole_section_id': setup['hole']['id'], 'phase_id': setup['phase']['id'],
+            'quantity': '1', 'quantity_unit': 'section', 'currency': 'USD'}
+        saved = client.put(f'/api/v1/daily-cost/entries/{entry_id}', headers=headers, json={'services': [line]})
+        assert saved.status_code == 200, saved.text
+        assert Decimal(saved.json()['entry']['services_total']) == 600
+        old_id = saved.json()['services'][0]['id']
+        estimate('Day Rate')
+        url = f'/api/v1/daily-cost/entries/{entry_id}/refresh-service-rates'
+        current = client.post(url, headers=headers)
+        assert current.status_code == 200, current.text
+        rates = current.json()['service_rates']
+        assert len([rate for rate in rates if rate['is_current']]) == 2
+        assert next(rate for rate in rates if rate['id'] == section_rate['id'])['is_current'] is False
+        # Refresh is idempotent, and cannot affect historical actuals or budget.
+        again = client.post(url, headers=headers).json()
+        assert {row['id'] for row in again['service_rates']} == {row['id'] for row in rates}
+        assert again['total_amount'] == setup['baseline']['total_amount']
+        day = client.get(f'/api/v1/daily-cost/entries/{entry_id}', headers=headers).json()
+        assert Decimal(day['entry']['services_total']) == 600
+        assert day['services'][0]['charging_basis'] == 'Per Section Rate'
+        operation = next(rate for rate in rates if rate['is_current'] and rate['charge_category'] == 'Operation')
+        mob = next(rate for rate in rates if rate['is_current'] and rate['charge_category'] == 'Mobilization')
+        allocations = []
+        for index, (activity, sub, hours) in enumerate((('activity', 'sub1', '10'), ('activity_npt', 'sub_npt', '11'), ('activity_upa', 'sub_upa', '3'))):
+            allocations.append({**line, 'id': old_id if index == 0 else None,
+                'activity_id': setup[activity]['id'], 'sub_activity_id': setup[sub]['id'],
+                'baseline_service_rate_id': operation['id'], 'charging_basis': 'Day Rate', 'quantity': hours,
+                'quantity_unit': 'hours', 'party_name': 'Operations team'})
+        allocations.append({**allocations[0], 'id': None, 'baseline_service_rate_id': mob['id'],
+                            'charge_category': 'Mobilization', 'quantity': '1', 'quantity_unit': 'unit'})
+        result = client.put(f'/api/v1/daily-cost/entries/{entry_id}', headers=headers, json={'services': allocations})
+        assert result.status_code == 200, result.text
+        assert Decimal(result.json()['entry']['services_total']) == 740
+        assert [Decimal(row['amount']) for row in result.json()['services']] == [100, 110, 30, 500]
+        assert all(row['baseline_budget_line_id'] for row in result.json()['services'])
+        assert len({row['budget_key'] for row in result.json()['services']}) == 1
+        assert Decimal(result.json()['entry']['npt_total']) == 110
+        assert Decimal(result.json()['entry']['upa_total']) == 30
+        allocations[2]['quantity'] = '4'
+        rejected = client.put(f'/api/v1/daily-cost/entries/{entry_id}/preview', headers=headers, json={'services': allocations})
+        assert rejected.status_code == 422, rejected.text
+        assert '24' in rejected.text
+        foreign = client.post(url, headers=login(client, 'south'))
+        assert foreign.status_code == 404

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Alert,
+  Checkbox,
   Box,
   FormControl,
   FormControlLabel,
@@ -11,6 +12,8 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { ActivityAllocationEditor } from './ActivityAllocationEditor'
+import { allocateService, allocationErrors, type ActivityAllocation } from '../../lib/dailyAllocations'
 import { FormDialog } from '../Common'
 import {
   DAILY_ONE_TIME_CATEGORIES,
@@ -22,7 +25,7 @@ import {
 } from '../../lib/dailyCost'
 import type { DepthUnit } from '../../lib/units'
 
-type Selection = { index: number; line: DailyCostServiceInput }
+type Selection = { index: number; line: DailyCostServiceInput; lines?: DailyCostServiceInput[] }
 type ScopeMode = 'keep' | 'assign'
 type BulkFieldMode = 'keep' | 'assign'
 
@@ -52,6 +55,8 @@ function rateQuantityUnit(basis: string, category: string): DailyQuantityUnit {
 export function DailyCostBulkScopeDialog({
   open, selections, allLines, baseline, reference, wellId, scope = 'drilling', onClose, onApply,
 }: Props) {
+  const [useCurrentRates, setUseCurrentRates] = useState(false)
+  const [allocations, setAllocations] = useState<ActivityAllocation[]>([])
   const [activityId, setActivityId] = useState('')
   const [subActivityId, setSubActivityId] = useState('')
   const [scopeMode, setScopeMode] = useState<ScopeMode>('keep')
@@ -91,6 +96,8 @@ export function DailyCostBulkScopeDialog({
     const commonDepthUnit = commonValue(selections.map(item => item.line.actual_depth_unit ?? 'm'))
     const commonQuantity = commonValue(selections.map(item => item.line.quantity))
     const commonQuantityUnit = commonValue(selections.map(item => item.line.quantity_unit))
+    setUseCurrentRates(false)
+    setAllocations([])
     setActivityId(commonActivity ?? '')
     setSubActivityId(commonSub ?? '')
     setScopeMode('keep')
@@ -113,8 +120,32 @@ export function DailyCostBulkScopeDialog({
     setError('')
   }
 
+  const currentRateLine = (line: DailyCostServiceInput): DailyCostServiceInput => {
+    if (!useCurrentRates) return line
+    const section = allocations[0]?.hole_section_id || (scopeMode === 'assign' ? sectionId : line.hole_section_id)
+    const phase = allocations[0]?.phase_id || (scopeMode === 'assign' ? phaseId : line.phase_id)
+    const rates = baseline.service_rates.filter(rate => rate.is_current !== false && rate.service_id === line.service_id)
+      .filter(rate => !rate.hole_section_id || rate.hole_section_id === section)
+      .filter(rate => !rate.phase_id || rate.phase_id === phase)
+    const rate = rates.find(rate => rate.charge_category === line.charge_category)
+    if (!rate) throw new Error('No compatible current AFE rate exists for a selected service. Edit that service individually.')
+    return { ...line, baseline_service_rate_id: rate.id, charging_basis: rate.charging_basis,
+      charge_category: rate.charge_category as DailyCostServiceInput['charge_category'], currency: rate.currency,
+      exchange_rate: rate.currency === line.currency ? line.exchange_rate : null,
+      override_rate: null, override_reason: '', quantity_unit: rateQuantityUnit(rate.charging_basis, rate.charge_category) }
+  }
+  const timeBased = selections.some(({ line }) => useCurrentRates ? baseline.service_rates.some(rate => rate.is_current !== false && rate.service_id === line.service_id && rate.charging_basis === 'Day Rate' && !DAILY_ONE_TIME_CATEGORIES.includes(rate.charge_category as DailyCostServiceInput['charge_category'])) : line.charging_basis === 'Day Rate' && !DAILY_ONE_TIME_CATEGORIES.includes(line.charge_category))
+
   const apply = () => {
     setError('')
+    if (allocations.length) {
+      const errors = allocationErrors(allocations, reference, wellId, scope, timeBased)
+      if (errors.length) { setError(errors[0]); return }
+      try {
+        onApply(selections.map(selection => ({ ...selection, lines: allocateService(currentRateLine(selection.line), allocations, baseline, reference) })))
+      } catch (caught) { setError(caught instanceof Error ? caught.message : 'Could not allocate services.') }
+      return
+    }
     if (!activityId) { setError('Select one Activity for the selected service lines.'); return }
     const selectedSub = reference.sub_activities.find(item =>
       item.id === subActivityId && item.well_id === wellId && (item.scope ?? 'drilling') === scope && item.activity_id === activityId,
@@ -151,11 +182,14 @@ export function DailyCostBulkScopeDialog({
     const selectedIndexes = new Set(selections.map(item => item.index))
     const existingPairs = new Set<string>()
     allLines.forEach((line, index) => {
-      if (!selectedIndexes.has(index)) existingPairs.add(`${line.service_id}:${line.sub_activity_id ?? ''}`)
+      if (!selectedIndexes.has(index)) existingPairs.add(`${line.service_id}:${line.sub_activity_id ?? ''}:${line.charge_category}:${line.hole_section_id}:${line.phase_id}`)
     })
     const updates: Selection[] = []
     for (const selection of selections) {
-      const { index, line } = selection
+      const index = selection.index
+      let line: DailyCostServiceInput
+      try { line = currentRateLine(selection.line) }
+      catch (caught) { setError(caught instanceof Error ? caught.message : 'Could not select current rates.'); return }
       const nextSection = scopeMode === 'assign' ? targetSection : line.hole_section_id
       const nextPhase = scopeMode === 'assign' ? targetPhase : line.phase_id
       const targetLine = {
@@ -242,7 +276,7 @@ export function DailyCostBulkScopeDialog({
         return
       }
 
-      const duplicateKey = `${targetLine.service_id}:${targetLine.sub_activity_id ?? ''}`
+      const duplicateKey = `${targetLine.service_id}:${targetLine.sub_activity_id ?? ''}:${targetLine.charge_category}:${targetLine.hole_section_id}:${targetLine.phase_id}`
       if (existingPairs.has(duplicateKey)) {
         const serviceCode = reference.services.find(item => item.id === targetLine.service_id)?.service_code ?? targetLine.service_id
         setError(`Service ${serviceCode} is already selected for this sub activity on this sheet. Choose a different sub activity or deselect one of the duplicate lines.`)
@@ -258,12 +292,12 @@ export function DailyCostBulkScopeDialog({
   const invalidScope = scopeMode === 'assign' && (requireSection && !sectionId || Boolean(phaseId && !sectionId))
   const invalidDepth = depthMode === 'assign' && (actualDepth.trim() === '' || !Number.isFinite(Number(actualDepth)) || Number(actualDepth) < 0)
   const invalidQuantity = quantityMode === 'assign' && (quantity.trim() === '' || !Number.isFinite(Number(quantity)) || Number(quantity) <= 0 || Number(quantity) > 1_000_000 || quantityUnit === 'hours' && Number(quantity) > 24)
-  const submitDisabled = !selections.length || !activityId || !selectedSubIsValid || invalidScope || invalidDepth || invalidQuantity
+  const submitDisabled = !allocations.length && (!selections.length || !activityId || !selectedSubIsValid || invalidScope || invalidDepth || invalidQuantity)
 
   return <FormDialog
     open={open}
     title={`Bulk edit ${selections.length} selected service line(s)`}
-    subtitle="Apply one Activity and well sub activity to the selected lines. Optionally assign one scope, actual depth, charged quantity and unit; each line keeps its locked AFE rate."
+    subtitle="Allocate multiple Activities and sub activities to selected services, or apply common criteria. Optionally assign one scope, actual depth, charged quantity and unit; each line keeps its locked AFE rate."
     onClose={onClose}
     onSubmit={apply}
     submitLabel="Apply to selected lines"
@@ -271,6 +305,9 @@ export function DailyCostBulkScopeDialog({
     maxWidth="md"
   >
     <Box display="grid" gap={1.7}>
+      <FormControlLabel control={<Checkbox checked={useCurrentRates} onChange={event => setUseCurrentRates(event.target.checked)}/>} label="Use current AFE service rates and charging basis (replaces manual rate overrides)"/>
+      <ActivityAllocationEditor value={allocations} onChange={setAllocations} baseline={baseline} reference={reference} wellId={wellId} scope={scope} timeBased={timeBased}/>
+      {!!allocations.length && <Alert severity="info">The allocation rows replace the common scope and quantity controls below.</Alert>}
       <Alert severity="info">
         Planned is derived from the chosen Activity. Planned services require a saved rate from this AFE; UPA/NPT lines without a locked rate need an existing manual override and a responsible party. Conflicting locked section/phase rates are blocked.
       </Alert>

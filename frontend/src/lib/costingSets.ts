@@ -18,6 +18,8 @@ export type CostingSetItem = {
 }
 
 export type CostingSet = {
+  is_global?: boolean
+  owner_id?: string
   id: string
   name: string
   item_group: CostingSetGroup
@@ -39,6 +41,7 @@ export type CostingSetOption = {
 }
 
 export type CostingSetInput = {
+  is_global?: boolean
   name: string
   item_group: CostingSetGroup
   description: string

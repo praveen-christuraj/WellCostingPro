@@ -9,7 +9,7 @@ visible as unavailable and are skipped when the set is applied.
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -25,7 +25,7 @@ def uid() -> str:
 
 
 class UserCostingSet(Base):
-    """A named, private-to-one-user collection of reusable catalogue items."""
+    """An owned catalogue shortcut, optionally shared within its workspace."""
 
     __tablename__ = "user_costing_sets"
     __table_args__ = (
@@ -41,6 +41,7 @@ class UserCostingSet(Base):
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    is_global: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     name_key: Mapped[str] = mapped_column(String(100), nullable=False)
     item_group: Mapped[str] = mapped_column(String(20), nullable=False)

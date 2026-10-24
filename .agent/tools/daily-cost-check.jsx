@@ -447,18 +447,78 @@ const scopedReference = {
   consumable_categories: ['Mud Chemicals', 'Cement Additives', 'Fuel', 'Drill Bits'],
   other_expense_types: [],
 }
+scopedBaseline.service_rates.push({ ...scopedBaseline.service_rates[0], id: 'sr-mob', charge_category: 'Mobilization', unit_rate: '500' })
+let allocatedSave = null
 const scopedRoot = createRoot(document.createElement('div'))
 await act(async () => scopedRoot.render(<MemoryRouter><ThemeProvider theme={buildTheme('light')}>
   <DailyCostLineDialog
     open kind="service" initialLine={null} serviceLines={[]} lineIndex={null}
     baseline={scopedBaseline} reference={scopedReference} wellId="well-1" scope="completion"
-    onClose={() => {}} onSave={() => {}}
+    onClose={() => {}} onSave={lines => { allocatedSave = lines }}
   />
 </ThemeProvider></MemoryRouter>))
 await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
 assert.ok(document.body.textContent.includes('COMP-ONLY · Run completion tubing'), 'completion sheet selects completion sub-activity')
 assert.ok(!document.body.textContent.includes('DRL-ONLY · Drill surface hole'), 'completion sheet excludes drilling sub-activity')
+await click([...document.querySelectorAll('button')].find(button => button.textContent === 'Add activity allocation'), 'add an activity allocation inside the service editor')
+assert.ok(document.body.textContent.includes('24 / 24 hours'), 'allocated hours are visible beside the entry')
+const mobCheckbox = [...document.querySelectorAll('label')].find(label => label.textContent.includes('Mobilization ·'))?.querySelector('input')
+await click(mobCheckbox, 'include a one-time mobilization without selecting the service again')
+await click([...document.querySelectorAll('button')].find(button => button.textContent === 'Add service'), 'save operation and mobilization in one entry')
+assert.ok(allocatedSave, 'single submit produces service charge lines')
+assert.equal(allocatedSave.length, 2)
+assert.equal(allocatedSave[0].quantity, '24')
+assert.equal(allocatedSave[0].quantity_unit, 'hours')
+assert.equal(allocatedSave[1].charge_category, 'Mobilization')
+assert.equal(allocatedSave[1].quantity, '1')
+assert.equal(allocatedSave[1].quantity_unit, 'unit')
+
+const { allocateService, allocationErrors } = await import('../../frontend/src/lib/dailyAllocations')
+const allocationReference = {
+  ...scopedReference,
+  activities: [...scopedReference.activities,
+    { id: 'npt', activity_code: 'NPT', activity_name: 'Non productive time' },
+    { id: 'upa', activity_code: 'UPA', activity_name: 'Unplanned activity' }],
+  sub_activities: [...scopedReference.sub_activities,
+    { id: 'sub-npt', activity_id: 'npt', well_id: 'well-1', scope: 'completion', responsible_party: 'Team N' },
+    { id: 'sub-upa', activity_id: 'upa', well_id: 'well-1', scope: 'completion', responsible_party: 'Team U' }],
+}
+const allocationRows = [
+  { activity_id: 'act-1', sub_activity_id: 'sub-comp-only', hours: '10' },
+  { activity_id: 'npt', sub_activity_id: 'sub-npt', hours: '11' },
+  { activity_id: 'upa', sub_activity_id: 'sub-upa', hours: '3' },
+].map((row, index) => ({ ...row, hole_section_id: 'sec-c1', phase_id: 'ph-c1', actual_depth: String(100 + index), actual_depth_unit: 'm' }))
+assert.deepEqual(allocationErrors(allocationRows, allocationReference, 'well-1', 'completion'), [])
+const distributed = allocateService(allocatedSave[0], allocationRows, scopedBaseline, allocationReference)
+assert.deepEqual(distributed.map(line => line.quantity), ['10', '11', '3'])
+assert.deepEqual(distributed.map(line => line.party_name), ['Not Applicable', 'Team N', 'Team U'])
+assert.deepEqual(distributed.map(line => line.actual_depth), ['100', '101', '102'])
+assert.equal(allocateService(allocatedSave[1], allocationRows, scopedBaseline, allocationReference).length, 1, 'mobilization never multiplies with activity count')
+assert.equal(allocateService({ ...allocatedSave[0], charging_basis: 'Per Service Rate', baseline_service_rate_id: null }, allocationRows, scopedBaseline, allocationReference)[0].quantity_unit, 'service')
+assert.equal(allocateService({ ...allocatedSave[0], charging_basis: 'Per Section Rate', baseline_service_rate_id: null }, [], scopedBaseline, allocationReference)[0].quantity, '1')
+assert.equal(allocateService({ ...allocatedSave[0], id: 'existing', charging_basis: 'Per Service Rate', quantity_unit: 'service', quantity: '2' }, [], scopedBaseline, allocationReference)[0].quantity, '2', 'editing existing non-time quantities never silently resets them')
+assert.ok(allocationErrors([{ ...allocationRows[0], hours: '25' }], allocationReference, 'well-1', 'completion').length)
+assert.ok(allocationErrors([{ ...allocationRows[0], sub_activity_id: 'sub-drl-only' }], allocationReference, 'well-1', 'completion').length, 'scope boundaries remain enforced')
+assert.throws(() => allocateService({ ...allocatedSave[0], cost_items: [{ description: 'Manual total', amount: '100' }] }, allocationRows, scopedBaseline, allocationReference), /manual cost items/)
 await act(async () => scopedRoot.unmount())
+
+// Bulk scope can deliberately upgrade an old per-section line to today's day rate.
+const { DailyCostBulkScopeDialog } = await import('../../frontend/src/components/daily-cost/DailyCostBulkScopeDialog')
+const bulkRoot = createRoot(document.createElement('div'))
+let bulkResult = null
+const oldSectionLine = { ...allocatedSave[0], id: 'saved-section-line', charging_basis: 'Per Section Rate', quantity: '1', quantity_unit: 'section', baseline_service_rate_id: 'old-section' }
+await act(async () => bulkRoot.render(<ThemeProvider theme={buildTheme('dark')}><DailyCostBulkScopeDialog
+  open selections={[{ index: 0, line: oldSectionLine }]} allLines={[oldSectionLine]}
+  baseline={scopedBaseline} reference={scopedReference} wellId="well-1" scope="completion"
+  onClose={() => {}} onApply={updates => { bulkResult = updates }}
+/></ThemeProvider>))
+await click([...document.querySelectorAll('label')].find(label => label.textContent.includes('Use current AFE service rates'))?.querySelector('input'), 'explicitly upgrade selected historical rates')
+await click([...document.querySelectorAll('button')].find(button => button.textContent === 'Add activity allocation'), 'add bulk allocation')
+await click([...document.querySelectorAll('button')].find(button => button.textContent === 'Apply to selected lines'), 'apply activity allocations in bulk')
+assert.equal(bulkResult?.[0].lines?.[0].charging_basis, 'Day Rate')
+assert.equal(bulkResult[0].lines[0].quantity, '24')
+assert.equal(bulkResult[0].lines[0].id, 'saved-section-line', 'first allocation retains the edited ledger identity')
+await act(async () => bulkRoot.unmount())
 
 const subActivitiesPage = readFileSync('../frontend/src/pages/WellSubActivities.tsx', 'utf8')
 for (const required of ['label="Well scope"', 'scope: selectedScope', 'well_id=${encodeURIComponent(selectedWellId)}`', 'key={`${selectedWellId}:${selectedScope}`}']) {
@@ -472,7 +532,7 @@ const rigWellDeletedPage = readFileSync('../frontend/src/pages/RigWellDeleted.ts
 for (const required of ['row => `${row.entity_type}:${row.id}:${row.scope ?? \'all\'}`', '? `?scope=${encodeURIComponent(target.scope)}`']) {
   assert.ok(rigWellDeletedPage.includes(required), `rig-well deleted page retains ${required}`)
 }
-console.log('Daily cost checks passed: advanced consumable/tangible bulk selection with required usage, locked prices and show-selected-only review, the same selector reused by the AFE tangible estimate, bulk depth/quantity/unit controls, AFE / last day / report day / cumulative cost columns with currency symbols, the milestone label and lead/lag read from the register, bulk first-page-only printing, scope-aware report titles, transposed mud and loss matrices, group-ordered/name-only services with every AFE allowance listed, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
+console.log('Daily cost checks passed: single-window multi-activity and multi-charge entry, one-time charging, scoped activity depths, explicit bulk rate upgrades, advanced consumable/tangible bulk selection with required usage, locked prices and show-selected-only review, the same selector reused by the AFE tangible estimate, bulk depth/quantity/unit controls, AFE / last day / report day / cumulative cost columns with currency symbols, the milestone label and lead/lag read from the register, bulk first-page-only printing, scope-aware report titles, transposed mud and loss matrices, group-ordered/name-only services with every AFE allowance listed, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
 
 dom.window.close()
 process.exit(0)
