@@ -491,8 +491,13 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
      cost, the loss matrix and the UPA summary all resolve to the shared row. */
   .daily-cost-print-sheet .dcr-stack { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: minmax(0, .37fr) minmax(0, .63fr); gap: 1.05mm; }
   /* NDT is conditional. Without records, the original two-panel stack above is
-     untouched; with records, its compact schedule owns the bottom-left corner. */
-  .daily-cost-print-sheet .dcr-stack--ndt { grid-template-rows: minmax(0, .22fr) minmax(0, .46fr) minmax(0, .32fr); }
+     untouched. With records the three panels become a triple decker: the LIH
+     register and the AFE vs actual summary keep only the height their own rows
+     need (no reserved space under the "AFE available" line), so the NDT details
+     schedule is pulled up directly beneath them and then fills the remaining
+     stack height. The stack itself is the shared lower-row height, so the three
+     panels together end on exactly the mud cost panel's baseline. */
+  .daily-cost-print-sheet .dcr-stack--ndt { grid-template-rows: max-content max-content minmax(0, 1fr); }
   .daily-cost-print-sheet .dcr-bottomline > .dcr-panel,
   .daily-cost-print-sheet .dcr-side > .dcr-incident:last-child { height: var(--dcr-lower-row-height); }
   .daily-cost-print-sheet .dcr-panel table { table-layout: fixed; margin: 0; font-size: 5.7pt; line-height: 1.08; }
@@ -577,11 +582,19 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-overall table { font-size: 5.3pt; }
   .daily-cost-print-sheet .dcr-overall th,
   .daily-cost-print-sheet .dcr-overall td { padding: .2mm .4mm; }
-  .daily-cost-print-sheet .dcr-ndt table { font-size: 4.35pt; line-height: 1; }
+  /* NDT details: description, received, consumed and one grouped Backloads
+     heading over its Good / Bad sub-headings. Remarks are no longer printed. */
+  .daily-cost-print-sheet .dcr-ndt table { align-self: start; height: auto; font-size: 4.35pt; line-height: 1; }
   .daily-cost-print-sheet .dcr-ndt th,
   .daily-cost-print-sheet .dcr-ndt td { padding: .18mm .25mm; }
-  .daily-cost-print-sheet .dcr-ndt th:first-child { width: 42%; }
-  .daily-cost-print-sheet .dcr-ndt td span { display: block; margin-top: .12mm; color: #4A6F96; font-size: 3.8pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .daily-cost-print-sheet .dcr-ndt thead th { text-align: center; }
+  .daily-cost-print-sheet .dcr-ndt thead tr:first-child th:first-child,
+  .daily-cost-print-sheet .dcr-ndt tbody td:first-child { text-align: left; }
+  .daily-cost-print-sheet .dcr-ndt col:nth-child(1) { width: 42%; }
+  .daily-cost-print-sheet .dcr-ndt col:nth-child(2),
+  .daily-cost-print-sheet .dcr-ndt col:nth-child(3),
+  .daily-cost-print-sheet .dcr-ndt col:nth-child(4),
+  .daily-cost-print-sheet .dcr-ndt col:nth-child(5) { width: 14.5%; }
   .daily-cost-print-sheet .dcr-total th,
   .daily-cost-print-sheet .dcr-total td { font-weight: 800; border-top: 1pt solid #123A63; }
   .daily-cost-print-sheet .dcr-mud-analysis table { font-size: 4.4pt; }
