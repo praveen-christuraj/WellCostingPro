@@ -308,10 +308,9 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   // Codes define business order but remain hidden; consumables are four category totals.
   const costRows = reportCostRows(budgetLines)
   // Every AFE allowance prints, in its reporting group, including lines with no
-  // cost yet (they show 0). The density step keeps a long schedule on page one.
+  // cost yet (they show 0). The density step (below) keeps a long schedule on page one.
   const services = costRows.services
   const consumables = costRows.consumables
-  const densityStep = services.length > 26 ? 4 : services.length > 18 ? 3 : services.length > 12 ? 2 : 1
   const groupPosition = (group: 'Services' | 'Consumables' | 'Tangibles') => {
     // Planned values come from the locked AFE budget schedule. Summary factor
     // rows are driven by recorded actuals and can omit a planned-only group
@@ -350,6 +349,12 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   const lihLineCount = summary?.totals.lih_line_count ?? lihBucket?.line_count ?? 0
   const lihEntryCount = summary?.totals.lih_entries ?? lihBucket?.entry_count ?? 0
   const ndtInspections = report.ndtInspections ?? []
+  // Page one has a fixed height. NDT Inspection Details stacks in the lower band
+  // under LIH and the AFE vs actual summary, so its heading and rows draw on the
+  // same height as Services rows (measured: each NDT row costs about 1.5 Services
+  // rows; the panel heading about 3.5). Thresholds keep a one-row margin.
+  const coverLoad = services.length + (ndtInspections.length ? 3.5 + ndtInspections.length * 1.5 : 0)
+  const densityStep = coverLoad > 21 ? 4 : coverLoad > 18 ? 3 : coverLoad > 12 ? 2 : 1
   const actualIncludingLih = totalActual + lihTotal
   const afeAvailable = totalPlanned - lihTotal
   const balance = asNumber(
@@ -518,8 +523,14 @@ function ReportCover({ report }: { report: CostPrintReport }) {
       <div><div className="dcr-eyebrow">Daily Cost Management · {report.reportKind === 'daily' ? 'Daily cost report' : 'Well cost report'}</div><h1>{reportTitle(report)}</h1></div>
       <div className="dcr-report-meta"><strong>{latest.entry.well_name}</strong><span>{latest.entry.rig_name}</span><span>{report.period}</span></div>
     </header>
+    {/* Page-one placement follows MODEL REPORTS/REVISED DAILY REPORT TABLE
+        PLACEMENTS.jpg: three bands over two columns. Upper band: milestone,
+        depth and time strip over Services cost | Mud cost analysis over Mud
+        chemical cost. Middle band: Consumables over Tangibles | Consumption /
+        losses. Lower band, full width: LIH / AFE vs actual / NDT stack | UPA
+        summary | NPT summary. Only placement changes; panel contents do not. */}
     <div className="dcr-layout">
-      <div className="dcr-main">
+      <div className="dcr-upper">
         <div className="dcr-topline">
           <section className="dcr-panel dcr-milestone"><h2>Reporting milestone</h2><dl><dt>{reportMilestoneLabel(report)}</dt><dd>{spud ? `${spud.replace('T', ' ').slice(0, 16)} hrs` : 'Not recorded'}</dd><dt>Current report date</dt><dd>{displayDate(reportDate)} · 24:00 hrs</dd></dl></section>
           <section className="dcr-panel dcr-depth"><h2>Section-wise planned depth &amp; current depth</h2><table><thead><tr><th>Section</th><th>Planned depth (m)</th><th>Current depth (m)</th></tr></thead><tbody>{sections.map(section => <tr key={section.hole_section_id}><td>{section.section_name}</td><td className="num">{depthText(section.to_depth, 'm')}</td><td className="num">{depthText(sectionDepths.get(section.hole_section_id), 'm')}</td></tr>)}</tbody></table></section>
@@ -527,6 +538,19 @@ function ReportCover({ report }: { report: CostPrintReport }) {
         </div>
         <CostTable title="Services cost · AFE vs last day, this day and cumulative" rows={services} position={servicePosition}
           day={serviceDay} grouped/>
+      </div>
+      <div className="dcr-mud-stack">
+        <section className="dcr-panel dcr-mud-analysis"><h2>Mud cost analysis · section / mud type</h2><table><thead><tr><th>Measure</th>{mudSections.map(row => <th key={row.section_id}>{sectionNameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
+          {mudMatrixRows.map(metric => <tr key={metric.label}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
+          {!mudSections.length && <tr><td colSpan={2} className="dcr-none">No mud material-balance data for this reporting period.</td></tr>}
+        </tbody></table></section>
+        <section className="dcr-panel dcr-mud-cost"><h2>Mud chemical cost · section-wise</h2><table><thead><tr><th>Section / mud</th><th>Planned (AFE)</th><th>Actual</th><th>Reconciled</th></tr></thead><tbody>{mudSections.slice(0, mudRowLimit).map(row => (
+          <tr key={row.section_id}><td>{sectionNameOnly(row.section_label)} · {row.mud_type ?? 'Not configured'}</td><td className="num">{mudPlanned(row)}</td><td className="num">{printMoney(row.actual_cost, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : printMoney(row.reconciled_cost, currency)}</td></tr>
+        ))}{!mudSections.length && <tr><td colSpan={4} className="dcr-none">No mud reconciliation data.</td></tr>}</tbody>
+        {mudSections.length > 0 && <tfoot><tr><th>Total{mudSections.length > mudRowLimit ? ` · all ${mudSections.length} sections` : ''}</th><th className="num">{mudPlannedTotal == null ? '—' : printMoney(mudPlannedTotal, currency)}</th><th className="num">{printMoney(mudActualTotal, currency)}</th><th className="num">{mudReconciledTotal == null ? '—' : printMoney(mudReconciledTotal, currency)}</th></tr></tfoot>}</table>
+        <p className="dcr-mud-note">{mudPlanNote}</p></section>
+      </div>
+      <div className="dcr-middle">
         <CostTable title="Consumables cost · AFE vs last day, this day and cumulative" rows={consumables} position={consumablePosition}
           day={consumableDay}/>
         <section className="dcr-panel dcr-tangibles"><h2>Tangibles cost · AFE vs actual</h2><div>
@@ -537,38 +561,27 @@ function ReportCover({ report }: { report: CostPrintReport }) {
           <span>Balance <strong>{printMoney(tangiblePosition.planned - tangiblePosition.actual, currency)}</strong></span>
           <span>Used <strong>{percent(tangiblePosition.actual, tangiblePosition.planned)}</strong></span>
         </div></section>
-        <div className="dcr-bottomline">
-          {/* The LIH register panel owns the bottom-left slot directly under
-              Tangibles; the AFE vs actual summary follows it downward. */}
-          <div className={`dcr-stack${ndtInspections.length ? ' dcr-stack--ndt' : ''}`}>
-            <section className="dcr-panel dcr-lih"><h2>LIH cost · manual register deduction from the AFE</h2><div><span>LIH cost <strong>{printMoney(lihTotal, currency)}</strong></span><span className="dcr-lih-deduct">Deducted from AFE <strong>{printMoney(lihTotal, currency)}</strong></span><span>Actual incl. LIH <strong>{printMoney(actualIncludingLih, currency)}</strong></span><span>AFE available after LIH <strong>{printMoney(afeAvailable, currency)}</strong></span></div><p className="dcr-lih-note">{lihEntryCount ? `${lihLineCount} item${lihLineCount === 1 ? '' : 's'} across ${lihEntryCount} LIH register day${lihEntryCount === 1 ? '' : 's'} · item detail prints on the cumulative pages.` : 'No LIH cost recorded for this report.'}</p></section>
-            <section className="dcr-panel dcr-overall"><h2>AFE vs actual summary</h2><table><tbody><tr><th>Services</th><td>{printMoney(servicePosition.planned, currency)}</td><td>{printMoney(servicePosition.actual, currency)}</td></tr><tr><th>Consumables</th><td>{printMoney(consumablePosition.planned, currency)}</td><td>{printMoney(consumablePosition.actual, currency)}</td></tr><tr><th>Tangibles</th><td>{printMoney(tangiblePosition.planned, currency)}</td><td>{printMoney(tangiblePosition.actual, currency)}</td></tr><tr><th>Other expenses</th><td>—</td><td>{printMoney(otherExpenses, currency)}</td></tr><tr><th>LIH cost · register</th><td>—</td><td>{printMoney(lihTotal, currency)}</td></tr><tr className="dcr-total"><th>Total</th><td>{printMoney(totalPlanned, currency)}</td><td>{printMoney(actualIncludingLih, currency)}</td></tr></tbody></table><p>AFE available = {printMoney(balance, currency)} · {percent(actualIncludingLih, totalPlanned)} used</p></section>
-            {ndtInspections.length > 0 && <section className="dcr-panel dcr-ndt"><h2>NDT Inspection Details</h2><table><colgroup><col/><col/><col/><col/><col/></colgroup><thead><tr><th rowSpan={2}>Description</th><th rowSpan={2}>Received</th><th rowSpan={2}>Consumed</th><th colSpan={2}>Backloads</th></tr><tr><th>Good</th><th>Bad</th></tr></thead><tbody>{ndtInspections.map(row => <tr key={row.id}><td>{row.description}</td><td className="num">{decimalText(row.quantity_received)}</td><td className="num">{decimalText(row.quantity_consumed)}</td><td className="num">{decimalText(row.quantity_backloaded_good)}</td><td className="num">{decimalText(row.quantity_backloaded_bad)}</td></tr>)}</tbody></table></section>}
-          </div>
-          <section className="dcr-panel dcr-mud-cost"><h2>Mud chemical cost · section-wise</h2><table><thead><tr><th>Section / mud</th><th>Planned (AFE)</th><th>Actual</th><th>Reconciled</th></tr></thead><tbody>{mudSections.slice(0, mudRowLimit).map(row => (
-            <tr key={row.section_id}><td>{sectionNameOnly(row.section_label)} · {row.mud_type ?? 'Not configured'}</td><td className="num">{mudPlanned(row)}</td><td className="num">{printMoney(row.actual_cost, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : printMoney(row.reconciled_cost, currency)}</td></tr>
-          ))}{!mudSections.length && <tr><td colSpan={4} className="dcr-none">No mud reconciliation data.</td></tr>}</tbody>
-          {mudSections.length > 0 && <tfoot><tr><th>Total{mudSections.length > mudRowLimit ? ` · all ${mudSections.length} sections` : ''}</th><th className="num">{mudPlannedTotal == null ? '—' : printMoney(mudPlannedTotal, currency)}</th><th className="num">{printMoney(mudActualTotal, currency)}</th><th className="num">{mudReconciledTotal == null ? '—' : printMoney(mudReconciledTotal, currency)}</th></tr></tfoot>}</table>
-          <p className="dcr-mud-note">{mudPlanNote}</p></section>
-          <section className="dcr-panel dcr-loss dcr-loss-matrix"><h2>Consumption / losses · cumulative matrix</h2><table><thead><tr><th>Loss measure</th>{mudSections.map(row => <th key={row.section_id}>{sectionNameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
-            <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Surface losses</th></tr>
-            {lossMetricRows.filter(metric => metric.group === 'surface' || metric.group === 'surface-total').map(metric => <tr className={metric.group === 'surface-total' ? 'dcr-matrix-total' : ''} key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
-            <tr className="dcr-matrix-total"><th>Loss (bbl/m)</th>{mudSections.map(row => <td key={row.section_id} className="num">{surfaceLossPerMeter(row)}</td>)}</tr>
-            <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Other losses</th></tr>
-            {lossMetricRows.filter(metric => metric.group === 'other' || metric.group === 'other-total').map(metric => <tr className={metric.group === 'other-total' ? 'dcr-matrix-total' : ''} key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
-            {lossMetricRows.filter(metric => metric.group === 'grand-total').map(metric => <tr className="dcr-matrix-grand" key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
-            {!mudSections.length && <tr><td colSpan={2} className="dcr-none">No consumption or loss data.</td></tr>}
-          </tbody></table></section>
-        </div>
       </div>
-      <aside className="dcr-side">
-        <section className="dcr-panel dcr-mud-analysis"><h2>Mud cost analysis · section / mud type</h2><table><thead><tr><th>Measure</th>{mudSections.map(row => <th key={row.section_id}>{sectionNameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
-          {mudMatrixRows.map(metric => <tr key={metric.label}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
-          {!mudSections.length && <tr><td colSpan={2} className="dcr-none">No mud material-balance data for this reporting period.</td></tr>}
-        </tbody></table></section>
-        <IncidentTable title="NPT summary" rows={npt} total={asNumber(summary?.totals.npt ?? latestComparison.npt_to_date)}/>
+      <section className="dcr-panel dcr-loss dcr-loss-matrix"><h2>Consumption / losses · cumulative matrix</h2><table><thead><tr><th>Loss measure</th>{mudSections.map(row => <th key={row.section_id}>{sectionNameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
+        <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Surface losses</th></tr>
+        {lossMetricRows.filter(metric => metric.group === 'surface' || metric.group === 'surface-total').map(metric => <tr className={metric.group === 'surface-total' ? 'dcr-matrix-total' : ''} key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
+        <tr className="dcr-matrix-total"><th>Loss (bbl/m)</th>{mudSections.map(row => <td key={row.section_id} className="num">{surfaceLossPerMeter(row)}</td>)}</tr>
+        <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Other losses</th></tr>
+        {lossMetricRows.filter(metric => metric.group === 'other' || metric.group === 'other-total').map(metric => <tr className={metric.group === 'other-total' ? 'dcr-matrix-total' : ''} key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
+        {lossMetricRows.filter(metric => metric.group === 'grand-total').map(metric => <tr className="dcr-matrix-grand" key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
+        {!mudSections.length && <tr><td colSpan={2} className="dcr-none">No consumption or loss data.</td></tr>}
+      </tbody></table></section>
+      <div className="dcr-bottomline">
+        {/* Bottom-left: the LIH register, the AFE vs actual summary below it and,
+            only when records exist, NDT Inspection Details beneath both. */}
+        <div className={`dcr-stack${ndtInspections.length ? ' dcr-stack--ndt' : ''}`}>
+          <section className="dcr-panel dcr-lih"><h2>LIH cost · manual register deduction from the AFE</h2><div><span>LIH cost <strong>{printMoney(lihTotal, currency)}</strong></span><span className="dcr-lih-deduct">Deducted from AFE <strong>{printMoney(lihTotal, currency)}</strong></span><span>Actual incl. LIH <strong>{printMoney(actualIncludingLih, currency)}</strong></span><span>AFE available after LIH <strong>{printMoney(afeAvailable, currency)}</strong></span></div><p className="dcr-lih-note">{lihEntryCount ? `${lihLineCount} item${lihLineCount === 1 ? '' : 's'} across ${lihEntryCount} LIH register day${lihEntryCount === 1 ? '' : 's'} · item detail prints on the cumulative pages.` : 'No LIH cost recorded for this report.'}</p></section>
+          <section className="dcr-panel dcr-overall"><h2>AFE vs actual summary</h2><table><tbody><tr><th>Services</th><td>{printMoney(servicePosition.planned, currency)}</td><td>{printMoney(servicePosition.actual, currency)}</td></tr><tr><th>Consumables</th><td>{printMoney(consumablePosition.planned, currency)}</td><td>{printMoney(consumablePosition.actual, currency)}</td></tr><tr><th>Tangibles</th><td>{printMoney(tangiblePosition.planned, currency)}</td><td>{printMoney(tangiblePosition.actual, currency)}</td></tr><tr><th>Other expenses</th><td>—</td><td>{printMoney(otherExpenses, currency)}</td></tr><tr><th>LIH cost · register</th><td>—</td><td>{printMoney(lihTotal, currency)}</td></tr><tr className="dcr-total"><th>Total</th><td>{printMoney(totalPlanned, currency)}</td><td>{printMoney(actualIncludingLih, currency)}</td></tr></tbody></table><p>AFE available = {printMoney(balance, currency)} · {percent(actualIncludingLih, totalPlanned)} used</p></section>
+          {ndtInspections.length > 0 && <section className="dcr-panel dcr-ndt"><h2>NDT Inspection Details</h2><table><colgroup><col/><col/><col/><col/><col/></colgroup><thead><tr><th rowSpan={2}>Description</th><th rowSpan={2}>Received</th><th rowSpan={2}>Consumed</th><th colSpan={2}>Backloads</th></tr><tr><th>Good</th><th>Bad</th></tr></thead><tbody>{ndtInspections.map(row => <tr key={row.id}><td>{row.description}</td><td className="num">{decimalText(row.quantity_received)}</td><td className="num">{decimalText(row.quantity_consumed)}</td><td className="num">{decimalText(row.quantity_backloaded_good)}</td><td className="num">{decimalText(row.quantity_backloaded_bad)}</td></tr>)}</tbody></table></section>}
+        </div>
         <IncidentTable title="UPA summary" rows={upa} total={asNumber(summary?.totals.upa ?? latestComparison.upa_to_date)}/>
-      </aside>
+        <IncidentTable title="NPT summary" rows={npt} total={asNumber(summary?.totals.npt ?? latestComparison.npt_to_date)}/>
+      </div>
     </div>
     <footer className="dcr-footer"><span>Prepared from saved Daily Cost Management records · all figures in {currencyLabel(currency)}</span><span>Printed {printed}{report.reportKind === 'daily' ? '' : ' · cumulative schedules begin on page 2'}</span></footer>
   </section>

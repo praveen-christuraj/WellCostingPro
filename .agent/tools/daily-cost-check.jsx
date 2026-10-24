@@ -147,13 +147,28 @@ for (const heading of [
   'Mud chemical cost · section-wise', 'Consumption / losses · cumulative', 'Mud cost analysis · section / mud type',
   'NPT summary', 'UPA summary',
 ]) assert.ok(sheet.textContent.includes(heading), `cover prints ${heading}`)
+// Page one follows MODEL REPORTS/REVISED DAILY REPORT TABLE PLACEMENTS.jpg: an upper
+// and a middle band over two columns, then one full-width lower band.
+const panelTitle = node => node.querySelector('h2')?.textContent
+const coverLayout = sheet.querySelector('.daily-report-cover .dcr-layout')
+assert.deepEqual([...coverLayout.children].map(node => node.classList.contains('dcr-panel') ? panelTitle(node) : node.className),
+  ['dcr-upper', 'dcr-mud-stack', 'dcr-middle', 'Consumption / losses · cumulative matrix', 'dcr-bottomline'],
+  'page one is an upper band (strip and Services | mud stack), a middle band (Consumables and Tangibles | losses) and a full-width lower band')
+assert.deepEqual([...coverLayout.querySelector('.dcr-upper > .dcr-topline').children].map(panelTitle),
+  ['Reporting milestone', 'Section-wise planned depth & current depth', 'Time position'], 'the milestone, depth and time strip heads the left column')
+assert.equal(panelTitle(coverLayout.querySelector('.dcr-upper > .dcr-cost-panel')), 'Services cost · AFE vs last day, this day and cumulative',
+  'Services sits directly under the milestone, depth and time strip')
+assert.deepEqual([...coverLayout.querySelector('.dcr-mud-stack').children].map(panelTitle),
+  ['Mud cost analysis · section / mud type', 'Mud chemical cost · section-wise'], 'Mud cost analysis sits over Mud chemical cost, beside Services')
+assert.deepEqual([...coverLayout.querySelector('.dcr-middle').children].map(panelTitle),
+  ['Consumables cost · AFE vs last day, this day and cumulative', 'Tangibles cost · AFE vs actual'], 'Consumables sits over Tangibles, beside Consumption / losses')
 const lowerRow = sheet.querySelector('.dcr-bottomline')
-assert.deepEqual([...lowerRow.children].map(node => node.classList.contains('dcr-stack') ? 'stack' : node.classList.contains('dcr-mud-cost') ? 'mud' : 'loss'),
-  ['stack', 'mud', 'loss'], 'lower-row placement stays LIH/AFE stack, mud cost, then consumption/losses')
+assert.deepEqual([...lowerRow.children].map(node => node.classList.contains('dcr-stack') ? 'stack' : panelTitle(node)),
+  ['stack', 'UPA summary', 'NPT summary'], 'the full-width lower band places the LIH/AFE/NDT stack, then UPA summary, then NPT summary')
 assert.deepEqual([...lowerRow.querySelector('.dcr-stack').children].map(node => node.classList.contains('dcr-lih') ? 'LIH' : node.classList.contains('dcr-overall') ? 'AFE' : 'NDT'),
   ['LIH', 'AFE', 'NDT'], 'NDT follows LIH and AFE at the bottom-left only when records exist')
 const ndtTable = lowerRow.querySelector('.dcr-ndt')
-assert.ok(sheet.querySelector('.daily-report-cover').classList.contains('dcr-has-ndt'), 'NDT-bearing cover opts into the reclaimed consumables space')
+assert.ok(sheet.querySelector('.daily-report-cover').classList.contains('dcr-has-ndt'), 'NDT-bearing cover keeps its dcr-has-ndt state hook')
 assert.ok(ndtTable.textContent.includes('Drill pipe inspection') && ndtTable.textContent.includes('20.00') && ndtTable.textContent.includes('18.00') && ndtTable.textContent.includes('15.00') && ndtTable.textContent.includes('3.00'), 'NDT table prints received, consumed and good/bad backloaded quantities')
 assert.equal(ndtTable.querySelector('h2').textContent, 'NDT Inspection Details', 'the schedule is titled NDT Inspection Details')
 const ndtHeaderRows = [...ndtTable.querySelectorAll('thead tr')]
@@ -165,7 +180,7 @@ assert.deepEqual([...ndtHeaderRows[1].querySelectorAll('th')].map(cell => cell.t
 assert.equal(ndtTable.querySelectorAll('colgroup col').length, 5, 'the grouped header keeps five leaf columns')
 assert.equal(ndtTable.querySelectorAll('tbody tr')[0].cells.length, 5, 'an NDT row prints description, received, consumed and both backloads')
 assert.ok(!ndtTable.textContent.includes('Batch A') && !ndtTable.textContent.includes('Remarks'), 'NDT remarks are no longer printed')
-assert.ok(sheet.querySelector('.dcr-side > .dcr-incident:last-child').textContent.includes('UPA summary'), 'UPA remains the far-right lower panel')
+assert.ok(lowerRow.lastElementChild.classList.contains('dcr-incident') && panelTitle(lowerRow.lastElementChild) === 'NPT summary', 'NPT is the far-right lower panel, with UPA in the middle')
 assert.ok(sheet.textContent.includes('Side track on date / time'), 'the report prints the user-edited milestone label')
 assert.ok(sheet.querySelector('.dcr-titlebar h1').textContent.endsWith('(LEAD: 2.75 days)'), 'selected decimal lead days print at the end of the title')
 assert.ok(validLeadLagDays('LAG', '0.125') && !validLeadLagDays('LAG', '') && !validLeadLagDays('LEAD', '-1'), 'lead/lag validation accepts non-negative decimals only')
@@ -270,6 +285,21 @@ assert.equal(bulkSheet.querySelectorAll('.daily-report-details').length, 0, 'bul
 assert.equal(bulkSheet.querySelectorAll('.dcr-titlebar h1').length, 2, 'each selected report keeps its own title bar')
 assert.equal(bulkSheet.querySelectorAll('.dcr-ndt').length, 0, 'reports without NDT records retain the original layout')
 assert.ok([...bulkSheet.querySelectorAll('.dcr-stack')].every(stack => stack.children.length === 2 && !stack.classList.contains('dcr-stack--ndt')), 'empty NDT data leaves the LIH/AFE double-decker unchanged')
+// NDT Inspection Details stacks in the lower band, so its rows draw on the same page-one
+// height as Services rows and push a long schedule one density step down.
+const withServiceLines = count => ({ ...second, comparison: { ...second.comparison, budget_lines: [
+  ...Array.from({ length: count }, (_, index) => ({ ...second.comparison.budget_lines[0], budget_key: `service:dense-${index}`, item_code: `SVC-D${index}`, item_name: `Dense service ${index}` })),
+  ...second.comparison.budget_lines.filter(row => row.cost_group !== 'Services'),
+] } })
+await act(async () => root.render(<DailyCostPrintSheet coversOnly reports={[
+  { title: 'Dense sheet', period: 'Oct 11, 2026', days: [withServiceLines(20)] },
+  { title: 'Dense sheet with NDT', period: 'Oct 11, 2026', days: [withServiceLines(20)], ndtInspections: ndtInspections.slice(0, 1) },
+  { title: 'Short sheet', period: 'Oct 11, 2026', days: [withServiceLines(12)] },
+]}/>))
+const denseCovers = [...document.querySelectorAll('.afe-print-sheet .daily-report-cover')]
+assert.equal(denseCovers[0].querySelectorAll('.dcr-cost-panel')[0].querySelectorAll('tbody tr').length, 20, 'the dense fixture prints all 20 service lines')
+assert.deepEqual(denseCovers.map(cover => cover.className.match(/dcr-density-(\d)/)[1]), ['3', '4', '1'],
+  'a 20-line schedule prints at density 3, one NDT row moves it to density 4, and 12 lines keep full size')
 await act(async () => root.unmount())
 
 // The shared advanced selector collects many priced items at once, refuses a checked
@@ -463,13 +493,27 @@ assert.ok(styles.includes('overflow: visible !important'), 'print removes dialog
 assert.ok(styles.includes('@page daily-cost-report'), 'daily reports define a dedicated landscape print page')
 assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landscape')
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
-assert.ok(styles.includes('--dcr-lower-row-height: 58mm'), 'the four lower columns share one compact physical height')
-assert.ok(styles.includes('grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr) var(--dcr-lower-row-height)'), 'UPA resolves to the shared lower-row height')
-assert.ok(styles.includes('.dcr-has-ndt .dcr-layout { --dcr-lower-row-height: 82mm; }'), 'NDT cover assigns the reclaimed space to a taller lower row')
-assert.ok(styles.includes('grid-template-rows: max-content minmax(auto, 1fr) max-content max-content var(--dcr-lower-row-height)'), 'NDT cover makes only the consumables panel track intrinsic-height')
+assert.match(styles, /grid-template-areas:\s*"upper mud"\s*"middle loss"\s*"lower lower";/, 'page one grid follows the model: upper | mud, middle | loss, then a full-width lower band')
+assert.ok(styles.includes('grid-template-columns: minmax(0, 2.58fr) minmax(0, 1fr);'), "the two columns keep the model's 737 : 286 px split")
+assert.ok(styles.includes('grid-template-rows: minmax(max-content, 1.3fr) max-content minmax(max-content, 1fr);'),
+  'every band keeps at least its content height, the middle band is as tall as its tallest side and spare height goes to the upper and lower bands')
+assert.ok(styles.includes('.dcr-upper { grid-area: upper; grid-template-rows: max-content minmax(0, 1fr); }'), 'Services takes the upper band below the strip')
+assert.ok(styles.includes('.dcr-mud-stack { grid-area: mud; grid-template-rows: minmax(max-content, 1.17fr) minmax(max-content, 1fr); }'),
+  'the mud pair always fills the upper band, so Mud chemical cost ends on the Services baseline')
+assert.ok(styles.includes('.dcr-middle { grid-area: middle; grid-template-rows: minmax(max-content, 1fr) max-content; }'),
+  'Consumables absorbs the extra middle-band height so Tangibles ends on the Consumption / losses baseline')
+assert.ok(styles.includes('.dcr-bottomline { grid-area: lower; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, .61fr) minmax(0, 1fr) minmax(0, 1fr);'),
+  "the lower band keeps the model's 237 : 390 : 390 px stack, UPA and NPT columns")
+assert.ok(styles.includes('.dcr-stack { min-width: 0; min-height: 0; display: grid; grid-template-rows: max-content minmax(0, 1fr);'),
+  'LIH keeps its content height and the AFE vs actual summary fills the stack')
 assert.ok(styles.includes('.dcr-stack--ndt { grid-template-rows: max-content max-content minmax(0, 1fr); }'),
-  'the NDT triple decker sizes LIH and the AFE summary to their content and pulls NDT up to fill the shared lower row')
-assert.ok(styles.includes('height: var(--dcr-lower-row-height); display: grid; grid-template-columns: 1fr 1fr 1.18fr'), 'LIH/AFE, mud cost and losses resolve to the same lower-row height')
+  'the NDT triple decker sizes LIH and the AFE summary to their content and pulls NDT up to fill the lower band')
+assert.ok(!styles.includes('--dcr-lower-row-height') && !/\.dcr-(main|side)\b/.test(styles), 'the fixed lower-row height and the old main/side columns are retired')
+assert.match(styles, /\.dcr-density-3 \.dcr-stack \.dcr-panel table,\s*\S+ \.dcr-density-3 \.dcr-panel\.dcr-mud-cost table,\s*\S+ \.dcr-density-3 \.dcr-panel\.dcr-loss-matrix table \{ font-size: 4\.8pt; \}/,
+  'density 3 compresses the stack, mud cost and loss tables by name')
+assert.match(styles, /\.dcr-density-4 \.dcr-stack \.dcr-panel table,\s*\S+ \.dcr-density-4 \.dcr-panel\.dcr-mud-cost table,\s*\S+ \.dcr-density-4 \.dcr-panel\.dcr-loss-matrix table \{ font-size: 4\.4pt; \}/,
+  'density 4 compresses the stack, mud cost and loss tables by name')
+assert.ok(!styles.includes('.dcr-bottomline .dcr-panel table'), 'density type sizes follow named panels, not the lower band, so moving a panel never changes its printed size')
 assert.ok(styles.includes('.dcr-cost-panel table { align-self: start; height: auto; font-size: 6.4pt'), 'service and consumable tables use the same intrinsic row and font sizing')
 assert.ok(styles.includes('.dcr-cost-panel td { padding: .57mm .34mm; }'), 'normal cost rows use 1.5x their previous vertical padding')
 assert.ok(styles.includes('.dcr-density-2 .dcr-cost-panel td { padding: .285mm .3mm; }'), 'density-2 cost rows retain the same 1.5x increase')

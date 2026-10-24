@@ -439,37 +439,44 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-eyebrow { color: #4A6F96; font-size: 6.2pt; font-weight: 700; letter-spacing: .65pt; text-transform: uppercase; margin-bottom: .6mm; }
   .daily-cost-print-sheet .dcr-report-meta { display: grid; justify-items: end; gap: .35mm; text-align: right; white-space: nowrap; }
   .daily-cost-print-sheet .dcr-report-meta strong { color: #0B2A47; font-size: 8pt; }
+  /* Page one follows MODEL REPORTS/REVISED DAILY REPORT TABLE PLACEMENTS.jpg:
+     three bands over the model's two columns (737 : 286 px, i.e. 72 / 28).
+       upper  - milestone / depth / time strip over Services cost,
+                beside Mud cost analysis over Mud chemical cost
+       middle - Consumables over Tangibles, beside Consumption / losses
+       lower  - full width: LIH / AFE vs actual / NDT stack, UPA, NPT
+     One shared grid keeps the model's edges exact: Services ends on the Mud
+     chemical cost baseline, Consumables starts level with Consumption / losses
+     and Tangibles ends on its baseline. Every band is at least its content
+     height, so no panel is clipped; spare height goes to the upper and lower
+     bands in roughly the model's 305 : 231 px proportion. Only placement
+     changes here: panel contents and each density level's type sizes are
+     untouched. */
   .daily-cost-print-sheet .dcr-layout {
-    --dcr-lower-row-height: 58mm;
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 2.12fr) minmax(0, 1fr);
-    gap: 1.2mm;
+    grid-template-columns: minmax(0, 2.58fr) minmax(0, 1fr);
+    grid-template-rows: minmax(max-content, 1.3fr) max-content minmax(max-content, 1fr);
+    grid-template-areas:
+      "upper mud"
+      "middle loss"
+      "lower lower";
+    gap: 1.05mm 1.2mm;
   }
-  /* Both report columns finish on the same fixed lower row. The left side gives
-     the released height to its two cost schedules; the top and tangible panels
-     retain their content height. */
-  .daily-cost-print-sheet .dcr-main {
-    min-width: 0;
-    display: grid;
-    grid-template-rows: max-content minmax(auto, 1.25fr) minmax(auto, .75fr) max-content var(--dcr-lower-row-height);
-    gap: 1.05mm;
-  }
-  /* Only NDT-bearing covers reclaim the unused area beneath the intrinsic
-     Consumables total. Its table rows keep the exact shared cost-table rules;
-     only the panel track becomes max-content. The recovered 24 mm is assigned
-     to the existing lower row so the compact NDT schedule fits without overlap. */
-  .daily-cost-print-sheet .dcr-has-ndt .dcr-layout { --dcr-lower-row-height: 82mm; }
-  .daily-cost-print-sheet .dcr-has-ndt .dcr-main {
-    grid-template-rows: max-content minmax(auto, 1fr) max-content max-content var(--dcr-lower-row-height);
-  }
-  .daily-cost-print-sheet .dcr-side {
-    min-width: 0;
-    display: grid;
-    grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr) var(--dcr-lower-row-height);
-    gap: 1.05mm;
-  }
+  .daily-cost-print-sheet .dcr-upper,
+  .daily-cost-print-sheet .dcr-mud-stack,
+  .daily-cost-print-sheet .dcr-middle { min-width: 0; min-height: 0; display: grid; gap: 1.05mm; }
+  /* The strip keeps its content height; Services takes the rest of the band. */
+  .daily-cost-print-sheet .dcr-upper { grid-area: upper; grid-template-rows: max-content minmax(0, 1fr); }
+  /* Mud cost analysis over Mud chemical cost in the model's 163 : 139 px, never
+     below content. Flex factors of at least 1 guarantee the pair fills the band,
+     so Mud chemical cost always ends on the Services baseline. */
+  .daily-cost-print-sheet .dcr-mud-stack { grid-area: mud; grid-template-rows: minmax(max-content, 1.17fr) minmax(max-content, 1fr); }
+  /* Consumables absorbs whatever extra height the loss matrix needs, so
+     Tangibles keeps its content height and ends on the losses baseline. */
+  .daily-cost-print-sheet .dcr-middle { grid-area: middle; grid-template-rows: minmax(max-content, 1fr) max-content; }
+  .daily-cost-print-sheet .dcr-layout > .dcr-loss { grid-area: loss; }
   .daily-cost-print-sheet .dcr-panel { min-width: 0; border: .55pt solid #B9CCE0; break-inside: avoid; overflow: hidden; }
   .daily-cost-print-sheet .dcr-panel h2 {
     font-size: 6.3pt;
@@ -484,22 +491,22 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  .daily-cost-print-sheet .dcr-topline { display: grid; grid-template-columns: .85fr 1.55fr .8fr; gap: 1.05mm; }
-  .daily-cost-print-sheet .dcr-bottomline { min-height: 0; height: var(--dcr-lower-row-height); display: grid; grid-template-columns: 1fr 1fr 1.18fr; gap: 1.05mm; }
-  /* The LIH register panel takes the bottom-left slot under Tangibles; the AFE
-     vs actual summary stacks below it. Their combined height, the section mud
-     cost, the loss matrix and the UPA summary all resolve to the shared row. */
-  .daily-cost-print-sheet .dcr-stack { min-width: 0; min-height: 0; height: 100%; display: grid; grid-template-rows: minmax(0, .37fr) minmax(0, .63fr); gap: 1.05mm; }
-  /* NDT is conditional. Without records, the original two-panel stack above is
-     untouched. With records the three panels become a triple decker: the LIH
-     register and the AFE vs actual summary keep only the height their own rows
-     need (no reserved space under the "AFE available" line), so the NDT details
-     schedule is pulled up directly beneath them and then fills the remaining
-     stack height. The stack itself is the shared lower-row height, so the three
-     panels together end on exactly the mud cost panel's baseline. */
+  /* Milestone, depth and time close to the model's 229 : 327 : 166 px; Time
+     position keeps about 49 mm so "Actual against planned activities" stays on
+     one line and the strip stays at its original height. */
+  .daily-cost-print-sheet .dcr-topline { display: grid; grid-template-columns: 1.28fr 1.88fr 1fr; gap: 1.05mm; }
+  /* Full-width lower band: the LIH / AFE vs actual / NDT stack, UPA summary and
+     NPT summary in the model's 237 : 390 : 390 px. All three end together. */
+  .daily-cost-print-sheet .dcr-bottomline { grid-area: lower; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, .61fr) minmax(0, 1fr) minmax(0, 1fr); gap: 1.05mm; }
+  /* The LIH register keeps its content height and the AFE vs actual summary
+     fills the rest, so the stack ends level with UPA / NPT. One flexible track
+     keeps the stack's intrinsic height exact: two fractional tracks would either
+     inflate it (factors above 1) or under-fill the band (factors summing to 1). */
+  .daily-cost-print-sheet .dcr-stack { min-width: 0; min-height: 0; display: grid; grid-template-rows: max-content minmax(0, 1fr); gap: 1.05mm; }
+  /* NDT is conditional. With records, the LIH register and the AFE vs actual
+     summary keep their content height and NDT Inspection Details, pulled up
+     directly beneath them, fills the rest of the band. */
   .daily-cost-print-sheet .dcr-stack--ndt { grid-template-rows: max-content max-content minmax(0, 1fr); }
-  .daily-cost-print-sheet .dcr-bottomline > .dcr-panel,
-  .daily-cost-print-sheet .dcr-side > .dcr-incident:last-child { height: var(--dcr-lower-row-height); }
   .daily-cost-print-sheet .dcr-panel table { table-layout: fixed; margin: 0; font-size: 5.7pt; line-height: 1.08; }
   .daily-cost-print-sheet .dcr-panel th,
   .daily-cost-print-sheet .dcr-panel td { padding: .42mm .55mm; border-color: #B9CCE0; }
@@ -548,10 +555,16 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-density-4 .dcr-cost-panel th,
   .daily-cost-print-sheet .dcr-density-4 .dcr-cost-panel td { padding: .12mm .18mm; }
   .daily-cost-print-sheet .dcr-density-4 .dcr-cost-panel thead th { font-size: 4.4pt; }
-  /* A dense schedule also compresses the lower panels so the page still fits. */
-  .daily-cost-print-sheet .dcr-density-3 .dcr-bottomline .dcr-panel table { font-size: 4.8pt; }
-  .daily-cost-print-sheet .dcr-density-4 .dcr-bottomline .dcr-panel table { font-size: 4.4pt; }
-  .daily-cost-print-sheet .dcr-density-4 .dcr-loss-matrix table { font-size: 3.6pt; }
+  /* A dense schedule also compresses the LIH / AFE / NDT stack, the section mud
+     cost and the loss matrix so the page still fits. These are named panels, not
+     a page position, so moving a panel never changes its printed type size
+     (UPA / NPT keep their own 4.7pt). */
+  .daily-cost-print-sheet .dcr-density-3 .dcr-stack .dcr-panel table,
+  .daily-cost-print-sheet .dcr-density-3 .dcr-panel.dcr-mud-cost table,
+  .daily-cost-print-sheet .dcr-density-3 .dcr-panel.dcr-loss-matrix table { font-size: 4.8pt; }
+  .daily-cost-print-sheet .dcr-density-4 .dcr-stack .dcr-panel table,
+  .daily-cost-print-sheet .dcr-density-4 .dcr-panel.dcr-mud-cost table,
+  .daily-cost-print-sheet .dcr-density-4 .dcr-panel.dcr-loss-matrix table { font-size: 4.4pt; }
   .daily-cost-print-sheet .dcr-milestone dl,
   .daily-cost-print-sheet .dcr-time dl { margin: 0; padding: .55mm .9mm; display: grid; grid-template-columns: 1fr auto; gap: .2mm 1mm; font-size: 6.1pt; }
   /* The reporting milestone, time position and depth tables are compact so the
