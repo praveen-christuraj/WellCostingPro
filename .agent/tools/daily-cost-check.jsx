@@ -208,8 +208,11 @@ assert.equal(mudCostPanel.querySelector('thead th:nth-child(2)').textContent, 'P
 assert.equal(mudCostPanel.querySelector('tbody tr td:nth-child(2)').textContent, '€3,500.00', 'planned mud chemicals print the section AFE allowance instead of the section plan')
 const mudCostTotal = mudCostPanel.querySelector('tfoot tr')
 assert.deepEqual([...mudCostTotal.cells].map(cell => cell.textContent), ['Total', '€3,500.00', '€200.00', '€187.50'], 'mud chemical totals print planned, actual and reconciled for every section')
-assert.equal(mudCostPanel.querySelector('.dcr-mud-note').textContent, 'AFE mud chemicals allowance €3,500.00 · every section allowance is shown above.', 'the note ties the printed plan back to the whole-well AFE allowance')
+assert.equal(mudCostPanel.querySelector('.dcr-mud-note'), null, 'the mud chemical panel no longer prints the AFE allowance note')
 assert.equal(sheet.querySelector('.dcr-tangibles span:first-child strong').textContent, '€4,000.00', 'daily report reads the tangible AFE amount from its locked budget line')
+const afeSummaryRows = [...sheet.querySelectorAll('.dcr-overall tbody tr')].map(row => [...row.cells].map(cell => cell.textContent))
+assert.deepEqual(afeSummaryRows[1], ['Consumables', '€16,000.00', '€100.00'],
+  'without a well summary the bulk print keeps its own AFE-scoped consumables actual')
 const afeSummaryNote = sheet.querySelector('.dcr-overall p').textContent
 assert.equal(afeSummaryNote, 'AFE available = €6,900.00 · 1.43% used', 'AFE summary labels the final balance as the available amount')
 assert.ok(!afeSummaryNote.includes('after LIH') && !afeSummaryNote.includes('Balance'), 'AFE summary removes the old after-LIH and duplicate balance wording')
@@ -227,6 +230,7 @@ const summaryWithoutTangibleFactor = {
   as_of: '2026-10-10',
   totals: {
     currency: 'EUR', planned: '23000', comparison_actual: '800', services: '700', consumables: '100', tangibles: '0',
+    comparison_consumables: '87.5',
     other_expenses: '0', lih_cost: '0', npt: '0', upa: '0',
   },
   factors: [{ dimension: 'cost_group', rows: [
@@ -249,9 +253,13 @@ assert.equal(summarySheet.querySelector('.dcr-tangibles span:first-child strong'
 const summaryMud = summarySheet.querySelector('.dcr-mud-cost')
 assert.equal(summaryMud.querySelector('tbody tr td:nth-child(2)').textContent, '€9,000.00',
   'well-summary printing reads planned mud cost from the section AFE allowance on the summary payload')
-assert.equal(summaryMud.querySelector('.dcr-mud-note').textContent,
-  'AFE mud chemicals allowance €9,000.00 · every section allowance is shown above.',
-  'the well-summary note ties the printed mud plan back to the AFE')
+assert.equal(summaryMud.querySelector('.dcr-mud-note'), null,
+  'the well-summary mud chemical panel prints no AFE allowance note')
+const summaryAfeRows = [...summarySheet.querySelectorAll('.dcr-overall tbody tr')].map(row => [...row.cells].map(cell => cell.textContent))
+assert.deepEqual(summaryAfeRows[1], ['Consumables', '€16,000.00', '€87.50'],
+  'the AFE vs actual summary compares consumables at the reconciled mud chemicals cost, not the recorded actual')
+assert.deepEqual(summaryAfeRows.at(-1), ['Total', '€23,000.00', '€800.00'],
+  'the summary total keeps the API comparison actual that already includes the reconciled mud chemicals')
 let trigger
 function PrintHarness() { const hook = useCostPrint(); trigger = hook.print; return hook.printSheet }
 await act(async () => root.render(<PrintHarness/>))

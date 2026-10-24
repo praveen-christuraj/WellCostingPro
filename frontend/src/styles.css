@@ -586,9 +586,6 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-lih .dcr-lih-deduct { color: #9B2C2C; }
   .daily-cost-print-sheet .dcr-lih .dcr-lih-deduct strong { color: #9B2C2C; }
   .daily-cost-print-sheet .dcr-lih-note { margin: 0; padding: .45mm 1mm; border-top: .5pt solid #B9CCE0; color: #4A6F96; font-size: 5pt; }
-  /* Planned mud chemicals are the AFE allowance per section; the note ties the
-     printed total back to the whole-well AFE consumables schedule. */
-  .daily-cost-print-sheet .dcr-mud-note { margin: 0; padding: .45mm 1mm; border-top: .5pt solid #B9CCE0; color: #4A6F96; font-size: 4.6pt; line-height: 1.1; }
   .daily-cost-print-sheet .dcr-lih span { padding: .45mm 1mm; font-size: 5.2pt; }
   .daily-cost-print-sheet .dcr-lih strong { font-size: 5.9pt; margin-top: .2mm; }
   .daily-cost-print-sheet .dcr-tangibles span { padding: 0 1.5mm; border-right: .5pt solid #B9CCE0; color: #4A6F96; }
