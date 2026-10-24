@@ -395,6 +395,9 @@ for (const forbidden of ['daily-cost/overview', 'StatCard', 'ReactECharts', 'cum
 for (const retained of ['New daily sheet', 'Well cost analysis', 'Filter by well', 'Filter by AFE', '<DataTable', 'Print well costing sheet', 'exportAudit', 'Deleted entries', "headerName: 'CUMULATIVE TO DATE'", "field: 'cumulative_cost'"]) {
   assert.ok(register.includes(retained), `register retains ${retained}`)
 }
+assert.ok(register.includes("id={deletedView ? 'daily-cost-deleted-panel'"), 'deleted entries have their own rendered grid panel')
+assert.ok(!register.includes('{!deletedView && <Box role="tabpanel"'), 'deleted view is not excluded from the shared table render boundary')
+assert.ok(register.includes('{!deletedView && <Paper variant="outlined"'), 'only active-register filters stay hidden in deleted view')
 const sheetPage = readFileSync('../frontend/src/pages/DailyCostSheet.tsx', 'utf8')
 for (const retained of ["'other_expenses'", 'Less other expenses', 'Other Expenses', 'Assign scope / depth / quantity', 'Cost report lead / lag', 'Lead / lag days', 'validLeadLagDays', 'MudCostMaterialBalance', 'label="Cost on this date"', 'Cumulative cost to date', 'quantityEntryOnly', 'Table total']) {
   assert.ok(sheetPage.includes(retained), `day sheet retains ${retained}`)

@@ -345,11 +345,15 @@ export default function DailyCostManagement() {
       </Tabs>
     </Box>}
 
-    {!deletedView && <Box role="tabpanel" id={`daily-cost-panel-${active}`} aria-labelledby={`daily-cost-tab-${active}`}>
+    <Box
+      role={deletedView ? undefined : 'tabpanel'}
+      id={deletedView ? 'daily-cost-deleted-panel' : `daily-cost-panel-${active}`}
+      aria-labelledby={deletedView ? undefined : `daily-cost-tab-${active}`}
+    >
       <ErrorMessage message={loadError} />
       {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')}>{notice}</Alert>}
 
-      <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 2, mb: 1.8 }}>
+      {!deletedView && <Paper variant="outlined" sx={{ p: 1.6, borderRadius: 2, mb: 1.8 }}>
         <Box display="grid" gap={1.3} sx={{ gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '1.3fr 1.3fr .8fr .8fr .8fr auto' } }} alignItems="center">
           <TextField select label="Filter by well" value={filterWell} onChange={event => {
             const next = event.target.value
@@ -379,7 +383,7 @@ export default function DailyCostManagement() {
           Showing {tabRows.length} daily sheet{tabRows.length === 1 ? '' : 's'} for the selected filters.
           {dateFrom && dateTo && dateFrom > dateTo ? ' The start date is after the end date, so no sheet can match.' : ''}
         </Alert>}
-      </Paper>
+      </Paper>}
 
       {loading && !rows.length ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={26} /></Box> : <>
         {selected.length > 0 && <Paper variant="outlined" sx={{ p: 1.4, borderRadius: 2, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
@@ -415,7 +419,7 @@ export default function DailyCostManagement() {
           {deletedView ? 'There are no deleted daily sheets.' : 'No daily sheets yet. Start from a saved AFE estimate on a configured well.'}
         </Typography>}
       </>}
-    </Box>}
+    </Box>
 
     <WellCostPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} wells={reference?.wells ?? []} initialWellId={filterWell} />
     <BulkDailyCostPrintDialog
