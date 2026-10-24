@@ -406,6 +406,11 @@ class MudCostReconciliationSectionOut(BaseModel):
     additions: Decimal
     extra_obm_received: Decimal
     actual_cost: Decimal
+    # The section's own AFE "Mud Chemicals" allowance from the locked plan. It is
+    # never the section's whole AFE plan (services, tangibles and the other
+    # consumable categories are separate allowances). None means the well has no
+    # locked AFE plan yet, so a planned amount is unknown rather than zero.
+    planned_cost: Decimal | None = None
     total_mud: Decimal
     alpha: Decimal | None
     beta: Decimal | None
@@ -443,5 +448,10 @@ class MudCostReconciliationOut(BaseModel):
     total_reconciled_cost: Decimal
     total_adjustment: Decimal
     total_consumption_losses: Decimal
+    # Whole-well AFE mud chemicals allowance. Every locked section allowance is
+    # included, even for sections with no mud activity in the reported window, so
+    # the plan always ties back to the AFE consumables schedule. None when the
+    # well has no locked AFE plan yet.
+    total_planned_cost: Decimal | None = None
     sections: list[MudCostReconciliationSectionOut]
     rows: list[MudCostReconciliationRowOut]

@@ -245,6 +245,8 @@ export type MudCostReconciliationSection = {
   currency: string; base_rate: string; opening_stock: string
   first_date: string | null; last_date: string | null; entry_count: number
   additions: string; extra_obm_received: string; actual_cost: string
+  /* The section's own AFE Mud Chemicals allowance; null when the well has no locked AFE plan. */
+  planned_cost: string | null
   total_mud: string; alpha: string | null; beta: string | null
   consumption_losses: string; cost_per_bbl: string | null
   reconciled_cost: string | null; adjustment: string | null
@@ -262,6 +264,8 @@ export type MudCostReconciliation = {
   latest_cost_per_bbl_date: string | null
   total_actual_cost: string; total_reconciled_cost: string
   total_adjustment: string; total_consumption_losses: string
+  /* Whole-well AFE mud chemicals allowance, including sections with no activity yet. */
+  total_planned_cost: string | null
   sections: MudCostReconciliationSection[]
   rows: MudCostReconciliationRow[]
 }

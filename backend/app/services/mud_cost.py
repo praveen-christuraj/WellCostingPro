@@ -23,7 +23,10 @@ from app.domain.mud_cost import (
     reconcile_mud,
 )
 from app.models import (
+    Afe,
     Currency,
+    DailyCostBaseline,
+    DailyCostBaselineBudgetLine,
     DailyCostConsumableLine,
     DailyCostEntry,
     MudCostEntry,
@@ -1557,6 +1560,64 @@ def _mud_actual_cost_map(
     return result
 
 
+def _planned_mud_cost_map(
+    db: Session,
+    organization_id: str,
+    well_id: str,
+) -> tuple[dict[tuple[str, str], Decimal], bool]:
+    """The AFE mud chemicals allowance of each section, keyed by scope and section.
+
+    Daily Cost freezes every AFE estimate into an immutable baseline when tracking
+    starts, and the whole cost report plans against that snapshot. The mud
+    allowance is therefore the section's own ``Mud Chemicals`` consumable line of
+    the frozen estimate — never the section's entire AFE plan, which also carries
+    its services, tangible items and other consumable categories.
+
+    The second value reports whether the well has any locked AFE plan at all. When
+    it does not, a planned amount is unknown and must not be printed as zero.
+    """
+    locked_plan = db.scalar(
+        select(DailyCostBaseline.id).where(
+            DailyCostBaseline.organization_id == organization_id,
+            DailyCostBaseline.well_id == well_id,
+            select(DailyCostEntry.id).where(
+                DailyCostEntry.baseline_id == DailyCostBaseline.id,
+                DailyCostEntry.is_deleted.is_(False),
+            ).exists(),
+        ).limit(1)
+    )
+    if locked_plan is None:
+        return {}, False
+    rows = db.execute(
+        select(
+            Afe.configuration_scope,
+            DailyCostBaselineBudgetLine.section_id,
+            func.sum(DailyCostBaselineBudgetLine.planned_amount),
+        )
+        .join(DailyCostBaseline, DailyCostBaseline.id == DailyCostBaselineBudgetLine.baseline_id)
+        .join(Afe, Afe.id == DailyCostBaseline.afe_id)
+        .where(
+            DailyCostBaselineBudgetLine.organization_id == organization_id,
+            DailyCostBaseline.well_id == well_id,
+            DailyCostBaselineBudgetLine.cost_group == "Consumables",
+            DailyCostBaselineBudgetLine.budget_kind == "consumable_category",
+            DailyCostBaselineBudgetLine.item_key == MUD_CHEMICAL_CATEGORY,
+            select(DailyCostEntry.id).where(
+                DailyCostEntry.baseline_id == DailyCostBaseline.id,
+                DailyCostEntry.is_deleted.is_(False),
+            ).exists(),
+        )
+        .group_by(Afe.configuration_scope, DailyCostBaselineBudgetLine.section_id)
+    ).all()
+    planned: dict[tuple[str, str], Decimal] = {}
+    for scope, hole_section_id, amount in rows:
+        if not scope or not hole_section_id:
+            continue
+        key = _setting_key(str(scope), str(hole_section_id))
+        planned[key] = planned.get(key, ZERO) + _recon_amount(amount)
+    return planned, True
+
+
 def reconcile_well(
     db: Session,
     organization_id: str,
@@ -1582,6 +1643,7 @@ def reconcile_well(
         db, organization_id, well.id, date_to=effective_to, include_draft=include_draft,
     )
     settings = _setting_map(db, organization_id, well.id)
+    planned_mud, has_locked_plan = _planned_mud_cost_map(db, organization_id, well.id)
     for key, setting in settings.items():
         if setting.currency and setting.currency != currency and any(
             hole == key[1] for (hole, _date) in actuals
@@ -1770,6 +1832,7 @@ def reconcile_well(
             additions=_recon_amount(additions),
             extra_obm_received=_recon_amount(extra_obm),
             actual_cost=_recon_amount(actual),
+            planned_cost=planned_mud.get(key) if has_locked_plan else None,
             total_mud=total_mud,
             alpha=alpha,
             beta=beta,
@@ -1819,6 +1882,9 @@ def reconcile_well(
         total_reconciled_cost=_recon_amount(total_reconciled),
         total_adjustment=_recon_amount(total_adjustment),
         total_consumption_losses=_recon_amount(sum((row.consumption_losses for row in section_rows), ZERO)),
+        total_planned_cost=(
+            _recon_amount(sum(planned_mud.values(), ZERO)) if has_locked_plan else None
+        ),
         sections=section_rows,
         rows=daily_rows,
     )

@@ -406,6 +406,9 @@ export default function MudCostAnalysis() {
   const reconciliationSectionColumns = useMemo<ColDef<MudCostReconciliationSection>[]>(() => [
     { headerName: 'SECTION', field: 'section_label', minWidth: 255, flex: 1.1 },
     { headerName: 'MUD TYPE', field: 'mud_type', minWidth: 130, cellRenderer: mudTypeCell },
+    // The section's own AFE Mud Chemicals allowance — never the section's whole
+    // AFE plan, which also carries its services and other cost groups.
+    { headerName: 'PLANNED (AFE)', field: 'planned_cost', minWidth: 155, headerTooltip: 'The section\'s locked AFE mud chemicals allowance', valueFormatter: params => params.value == null ? '—' : dailyMoney(String(params.value), reconciliation?.currency ?? '') },
     { headerName: 'BASE RATE', field: 'base_rate', minWidth: 135, valueFormatter: params => dailyMoney(String(params.value ?? '0'), reconciliation?.currency ?? '') },
     { headerName: 'ADDITIONS', field: 'additions', minWidth: 120, valueFormatter: params => mudQuantity(String(params.value ?? '0')) },
     { headerName: 'INITIAL OPENING STOCK', field: 'opening_stock', minWidth: 185, headerTooltip: 'Initial inventory for this section and its configured mud type; included once in ALPHA', valueFormatter: params => mudQuantity(String(params.value ?? '0')) },

@@ -1026,6 +1026,10 @@ class DailyCostMudSectionReconciliation(BaseModel):
     is_wbm: bool = False
     currency: str = ""
     base_rate: Decimal = Decimal("0")
+    # The section's own AFE "Mud Chemicals" allowance, from the locked plan. This
+    # is never the section's whole AFE plan. None when the well has no locked AFE
+    # plan yet, so a planned amount is unknown rather than zero.
+    planned_cost: Decimal | None = None
     actual_cost: Decimal = Decimal("0")
     reconciled_cost: Decimal | None = None
     cost_per_bbl: Decimal | None = None
@@ -1051,6 +1055,9 @@ class DailyCostMudReconciliation(BaseModel):
     unreconciled_actual_cost: Decimal
     comparison_cost: Decimal
     adjustment: Decimal
+    # Whole-well AFE mud chemicals allowance, including sections with no mud
+    # activity to date, so the plan ties back to the AFE consumables schedule.
+    planned_cost: Decimal | None = None
     latest_cost_per_bbl: Decimal | None = None
     latest_cost_per_bbl_section: str = ""
     latest_cost_per_bbl_date: date | None = None

@@ -16,8 +16,9 @@ from app.core.database import Base, SessionLocal, engine
 from app.core.security import hash_password
 from app.main import app
 from app.models import (
-    Afe, AuditLog, DailyCostBaseline, DailyCostConsumableLine, DailyCostEntry,
-    DailyCostWellRateBaseline, Organization, Permission, Role, User,
+    Afe, AuditLog, DailyCostBaseline, DailyCostBaselineBudgetLine, DailyCostBaselineSection,
+    DailyCostConsumableLine, DailyCostEntry, DailyCostWellRateBaseline, Organization,
+    Permission, Role, User,
 )
 
 
@@ -139,13 +140,23 @@ def create_mud_entry(client, headers, scope, entry_date, section_index, lines):
     }, 201)
 
 
-def seed_daily_cost(scope: dict, *, section_costs: list[tuple[str, int, Decimal]]) -> None:
-    """Insert daily cost sheets and mud-chemical lines directly.
+def seed_daily_cost(
+    scope: dict,
+    *,
+    section_costs: list[tuple[str, int, Decimal]],
+    mud_allowances: tuple[Decimal, ...] = (Decimal("3000"), Decimal("2000")),
+    section_service_allowance: Decimal = Decimal("0"),
+) -> None:
+    """Insert daily cost sheets, the locked AFE plan and mud-chemical lines.
 
     The reconciliation only depends on the Daily Cost register's persisted
-    section-scoped standard amounts. Inserting those rows directly keeps this
-    suite focused on the reconciliation rules instead of re-testing the whole
-    AFE/daily-sheet workflow.
+    section-scoped standard amounts and the locked AFE allowances. Inserting those
+    rows directly keeps this suite focused on the reconciliation rules instead of
+    re-testing the whole AFE/daily-sheet workflow.
+
+    ``mud_allowances`` is the AFE "Mud Chemicals" consumable allowance per section;
+    ``section_service_allowance`` adds a service allowance on the first section, so
+    a test can prove the mud plan is not read from the section's whole AFE plan.
     """
     with SessionLocal() as db:
         org = db.scalar(select(Organization).where(Organization.slug == "north"))
@@ -160,15 +171,45 @@ def seed_daily_cost(scope: dict, *, section_costs: list[tuple[str, int, Decimal]
         rate_baseline = DailyCostWellRateBaseline(organization_id=org.id, well_id=scope["well"]["id"])
         db.add(rate_baseline)
         db.flush()
+        mud_total = sum(mud_allowances, Decimal("0"))
         baseline = DailyCostBaseline(
             organization_id=org.id, well_id=scope["well"]["id"], afe_id=afe.id,
             rate_baseline_id=rate_baseline.id, afe_code_snapshot=afe.afe_code,
             afe_name_snapshot=afe.afe_name, standard_currency="USD",
-            services_total=Decimal("0"), consumables_total=Decimal("5000"),
-            tangibles_total=Decimal("0"), total_amount=Decimal("5000"),
+            services_total=section_service_allowance, consumables_total=mud_total,
+            tangibles_total=Decimal("0"), total_amount=mud_total + section_service_allowance,
         )
         db.add(baseline)
         db.flush()
+        # The frozen section snapshots and allowances the cost report plans against.
+        for index, hole in enumerate(scope["holes"]):
+            db.add(DailyCostBaselineSection(
+                organization_id=org.id, baseline_id=baseline.id, hole_section_id=hole["id"],
+                section_code_snapshot=hole["code"], section_name_snapshot=hole["name"],
+                from_depth=Decimal("0"), to_depth=Decimal("1000") if index == 0 else Decimal("2500"),
+                total_days=Decimal("5") if index == 0 else Decimal("10"), sort_order=index,
+            ))
+        if section_service_allowance:
+            db.add(DailyCostBaselineBudgetLine(
+                organization_id=org.id, baseline_id=baseline.id, cost_group="Services",
+                budget_kind="service", item_key="drilling-service", item_code_snapshot="DRL-SVC",
+                item_name_snapshot="Drilling service", source_afe_line_id="drilling-service",
+                section_id=scope["holes"][0]["id"], quantity=Decimal("1"),
+                unit_rate=section_service_allowance, native_amount=section_service_allowance,
+                currency="USD", exchange_rate=Decimal("1"),
+                planned_amount=section_service_allowance, uom="", sort_order=0,
+            ))
+        for index, amount in enumerate(mud_allowances):
+            db.add(DailyCostBaselineBudgetLine(
+                organization_id=org.id, baseline_id=baseline.id, cost_group="Consumables",
+                budget_kind="consumable_category", item_key="Mud Chemicals",
+                item_code_snapshot="BULK-MUD-CHEMICALS",
+                item_name_snapshot="Mud Chemicals allowance", source_afe_line_id=f"mud-{index}",
+                section_id=scope["holes"][index]["id"], quantity=Decimal("1"),
+                unit_rate=Decimal("0"), native_amount=amount, currency="USD",
+                exchange_rate=Decimal("1"), planned_amount=amount, uom="",
+                sort_order=index + 1,
+            ))
         for number, (cost_date, section_index, amount) in enumerate(section_costs, start=1):
             entry = DailyCostEntry(
                 organization_id=org.id, rig_id=scope["rig"]["id"],
@@ -364,6 +405,57 @@ def test_reconciliation_uses_actual_daily_cost_and_latest_cost_per_bbl():
                 AuditLog.summary.like("%mud cost reconciliation%"),
             ))
             assert exported is not None
+
+
+def test_planned_mud_cost_is_the_sections_own_afe_mud_allowance():
+    """Planned mud chemicals per section come from that section's AFE allowance.
+
+    The section cut of the cost factors sums every AFE line booked to the section,
+    so borrowing it printed the section's whole plan (7,000) as its mud plan
+    instead of the 3,000 mud chemicals allowance.
+    """
+    with TestClient(app) as client:
+        headers = login(client)
+        scope = setup_well(client, headers)
+        create_mud_entry(client, headers, scope, "2026-10-11", 0, [
+            line("drill_water", "100"), line("shakers", "10"),
+        ])
+        create_mud_entry(client, headers, scope, "2026-10-12", 1, [
+            line("drill_water", "10"), line("shakers", "5"),
+        ])
+        seed_daily_cost(
+            scope,
+            section_costs=[
+                ("2026-10-11", 0, Decimal("1000")),
+                ("2026-10-12", 1, Decimal("200")),
+            ],
+            section_service_allowance=Decimal("4000"),
+        )
+        configure_section(client, headers, scope, 0, "OBM", "2")
+        configure_section(client, headers, scope, 1, "WBM", None)
+
+        params = f"rig_id={scope['rig']['id']}&well_id={scope['well']['id']}&to=2026-10-12"
+        result = _json(client, "get", f"/api/v1/mud-cost/reconciliation?{params}", headers)
+        by_type = {row["mud_type"]: row for row in result["sections"]}
+        # Each section carries only its own Mud Chemicals allowance.
+        assert Decimal(by_type["OBM"]["planned_cost"]) == Decimal("3000")
+        assert Decimal(by_type["WBM"]["planned_cost"]) == Decimal("2000")
+        assert Decimal(result["total_planned_cost"]) == Decimal("5000")
+
+        summary = _json(client, "get", f"/api/v1/daily-cost/wells/{scope['well']['id']}/cost-summary", headers)
+        mud = summary["mud_cost"]
+        mud_by_type = {row["mud_type"]: row for row in mud["sections"]}
+        assert Decimal(mud_by_type["OBM"]["planned_cost"]) == Decimal("3000")
+        assert Decimal(mud_by_type["WBM"]["planned_cost"]) == Decimal("2000")
+        assert Decimal(mud["planned_cost"]) == Decimal("5000")
+        # The comparison still plans the whole AFE: 4,000 services + 5,000 mud.
+        assert Decimal(summary["totals"]["planned"]) == Decimal("9000")
+        section_factor = next(
+            row for row in next(
+                group for group in summary["factors"] if group["dimension"] == "section"
+            )["rows"] if row["code"] == scope["holes"][0]["code"]
+        )
+        assert Decimal(section_factor["planned"]) == Decimal("7000")
 
 
 def test_consumption_loss_report_groups_totals_drills_and_exports():

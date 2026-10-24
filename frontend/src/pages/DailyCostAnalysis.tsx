@@ -416,11 +416,13 @@ export default function DailyCostAnalysis() {
           <Tag tone={mud.available ? 'success' : 'warning'}>{mud.available ? 'Reconciled in comparison' : 'Actual cost only'}</Tag>
         </Box>
         <Box sx={{ overflowX: 'auto' }}>
-          <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 860, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
-            <thead><tr><th>SECTION</th><th>MUD TYPE</th><th align="right">COST/BBL</th><th align="right">BASE RATE</th><th align="right">ACTUAL MUD COST</th><th align="right">RECONCILED</th><th align="right">DIFFERENCE</th><th align="right">CONSUMPTION / LOSSES</th></tr></thead>
+          <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 1000, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
+            <thead><tr><th>SECTION</th><th>MUD TYPE</th><th align="right">PLANNED (AFE)</th><th align="right">COST/BBL</th><th align="right">BASE RATE</th><th align="right">ACTUAL MUD COST</th><th align="right">RECONCILED</th><th align="right">DIFFERENCE</th><th align="right">CONSUMPTION / LOSSES</th></tr></thead>
             <tbody>{mud.sections.map(row => <tr key={row.section_id}>
               <td>{row.section_label}</td>
               <td><Tag tone={row.is_configured ? 'info' : 'warning'}>{row.mud_type ?? 'Not configured'}</Tag></td>
+              {/* The section's own AFE Mud Chemicals allowance — never the section's whole AFE plan. */}
+              <td align="right">{row.planned_cost != null ? dailyMoney(row.planned_cost, mud.currency) : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
               <td align="right">{row.cost_per_bbl != null ? dailyMoney(row.cost_per_bbl, mud.currency) : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
               <td align="right">{row.mud_type && row.mud_type !== 'WBM' ? dailyMoney(row.base_rate, mud.currency) : <Typography fontSize={12} color="text.secondary">—</Typography>}</td>
               <td align="right">{dailyMoney(row.actual_cost, mud.currency)}</td>
@@ -434,6 +436,7 @@ export default function DailyCostAnalysis() {
           <Typography color="text.secondary" fontSize={11.5}>
             Final mud chemicals comparison: {dailyMoney(mud.comparison_cost, mud.currency)} (recorded actual {dailyMoney(mud.actual_cost, mud.currency)}; difference {dailyMoney(mud.adjustment, mud.currency)}).
             {Number(mud.unreconciled_actual_cost) > 0 && <> {dailyMoney(mud.unreconciled_actual_cost, mud.currency)} stays at actual cost because those sections cannot be reconciled.</>}
+            {mud.planned_cost != null && <> AFE mud chemicals allowance {dailyMoney(mud.planned_cost, mud.currency)}.</>}
           </Typography>
           <Typography color="text.secondary" fontSize={11.5}>
             {mud.latest_cost_per_bbl != null ? `Latest Cost/BBL ${dailyMoney(mud.latest_cost_per_bbl, mud.currency)} · ${mud.latest_cost_per_bbl_section}` : 'No derived Cost/BBL for the configured mud types'}
