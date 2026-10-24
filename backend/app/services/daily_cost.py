@@ -512,6 +512,41 @@ def _make_budget_line(
     )
 
 
+def _service_rate_snapshots(organization_id: str, line: Any, order: int) -> list[DailyCostBaselineServiceRate]:
+    service_rates: list[DailyCostBaselineServiceRate] = []
+    currency = line.currency.upper()
+    if line.charging_basis == "Day Rate":
+        for index, row in enumerate(line.rates):
+            service_rates.append(DailyCostBaselineServiceRate(
+                id=uid(), organization_id=organization_id, service_id=line.service_id,
+                source_afe_line_id=line.id, service_code_snapshot=line.service_code,
+                service_name_snapshot=line.service_name, charging_basis=line.charging_basis,
+                rate_kind="day_rate", charge_category=row.category, hole_section_id=line.hole_section_id,
+                phase_id=line.phase_id, unit_rate=_rate(row.unit_rate), currency=currency,
+                sort_order=order * 100 + index,
+            ))
+    elif line.charging_basis == "Per Service Rate":
+        service_rates.append(DailyCostBaselineServiceRate(
+            id=uid(), organization_id=organization_id, service_id=line.service_id,
+            source_afe_line_id=line.id, service_code_snapshot=line.service_code,
+            service_name_snapshot=line.service_name, charging_basis=line.charging_basis,
+            rate_kind="per_service", charge_category="Operation", hole_section_id=line.hole_section_id,
+            phase_id=line.phase_id, unit_rate=_rate(line.service_amount), currency=currency,
+            sort_order=order * 100,
+        ))
+    else:
+        for index, row in enumerate(line.section_rates):
+            service_rates.append(DailyCostBaselineServiceRate(
+                id=uid(), organization_id=organization_id, service_id=line.service_id,
+                source_afe_line_id=line.id, service_code_snapshot=line.service_code,
+                service_name_snapshot=line.service_name, charging_basis=line.charging_basis,
+                rate_kind="per_section", charge_category="Operation", hole_section_id=row.hole_section_id,
+                phase_id=row.phase_id, unit_rate=_rate(row.amount), currency=currency,
+                sort_order=order * 100 + index,
+            ))
+    return service_rates
+
+
 def _ensure_afe_baseline(
     db: Session, organization_id: str, well: Well, afe: Afe,
     rate_baseline: DailyCostWellRateBaseline, user: User,
@@ -589,35 +624,7 @@ def _ensure_afe_baseline(
                 fx_rate=factor, uom="", sort_order=order, service_group=line.service_group,
             ))
             order += 1
-            if line.charging_basis == "Day Rate":
-                for index, row in enumerate(line.rates):
-                    service_rates.append(DailyCostBaselineServiceRate(
-                        id=uid(), organization_id=organization_id, baseline=baseline, service_id=line.service_id,
-                        source_afe_line_id=line.id, service_code_snapshot=line.service_code,
-                        service_name_snapshot=line.service_name, charging_basis=line.charging_basis,
-                        rate_kind="day_rate", charge_category=row.category, hole_section_id=line.hole_section_id,
-                        phase_id=line.phase_id, unit_rate=_rate(row.unit_rate), currency=currency,
-                        sort_order=order * 100 + index,
-                    ))
-            elif line.charging_basis == "Per Service Rate":
-                service_rates.append(DailyCostBaselineServiceRate(
-                    id=uid(), organization_id=organization_id, baseline=baseline, service_id=line.service_id,
-                    source_afe_line_id=line.id, service_code_snapshot=line.service_code,
-                    service_name_snapshot=line.service_name, charging_basis=line.charging_basis,
-                    rate_kind="per_service", charge_category="Operation", hole_section_id=line.hole_section_id,
-                    phase_id=line.phase_id, unit_rate=_rate(line.service_amount), currency=currency,
-                    sort_order=order * 100,
-                ))
-            else:
-                for index, row in enumerate(line.section_rates):
-                    service_rates.append(DailyCostBaselineServiceRate(
-                        id=uid(), organization_id=organization_id, baseline=baseline, service_id=line.service_id,
-                        source_afe_line_id=line.id, service_code_snapshot=line.service_code,
-                        service_name_snapshot=line.service_name, charging_basis=line.charging_basis,
-                        rate_kind="per_section", charge_category="Operation", hole_section_id=row.hole_section_id,
-                        phase_id=row.phase_id, unit_rate=_rate(row.amount), currency=currency,
-                        sort_order=order * 100 + index,
-                    ))
+            service_rates.extend(_service_rate_snapshots(organization_id, line, order))
 
         for line in estimate.consumables:
             if not line.id:
@@ -691,7 +698,7 @@ def _daily_rate_option(row: DailyCostBaselineServiceRate, section_names: dict[st
     return DailyCostRateOut(
         id=row.id, service_id=row.service_id, source_afe_line_id=row.source_afe_line_id,
         service_code=row.service_code_snapshot, service_name=row.service_name_snapshot,
-        charging_basis=row.charging_basis, rate_kind=row.rate_kind, charge_category=row.charge_category,
+        charging_basis=row.charging_basis, rate_kind=row.rate_kind, charge_category=row.charge_category, is_current=row.is_current,
         hole_section_id=row.hole_section_id, section_label=section_names.get(row.hole_section_id or "", ""),
         phase_id=row.phase_id, phase_label=phase_names.get((row.hole_section_id or "", row.phase_id or ""), ""),
         unit_rate=Decimal(row.unit_rate), currency=row.currency,
@@ -735,6 +742,36 @@ def _baseline_out(baseline: DailyCostBaseline, rate_baseline: DailyCostWellRateB
         sections=[_section_option(section) for section in baseline.well_sections],
         exchange_rates={row.currency_code: Decimal(row.rate) for row in baseline.exchange_rates},
     )
+
+
+def refresh_service_rates(db: Session, organization_id: str, entry_id: str, user: User, request: Request | None) -> DailyCostBaselineOut:
+    """Append rate versions; never rewrite the budgets or an existing actual line."""
+    with _WRITE_LOCK:
+        entry = _get_entry(db, entry_id, organization_id, deleted=False)
+        _lock_row_id(db, DailyCostBaseline, DailyCostBaseline.id == entry.baseline_id)
+        baseline = _baseline_for(db, organization_id, entry.baseline_id)
+        afe = _afe_or_422(db, organization_id, entry.afe_id, entry.well_id)
+        estimate = _estimate_for_daily_cost(db, organization_id, afe)
+        def signature(row: Any) -> tuple:
+            return (row.service_id, row.source_afe_line_id, row.charging_basis, row.rate_kind,
+                    row.charge_category, row.hole_section_id, row.phase_id, Decimal(row.unit_rate), row.currency)
+        existing = {signature(row): row for row in baseline.service_rates}
+        wanted = [_service_rate_snapshots(organization_id, line, index)
+                  for index, line in enumerate(estimate.services)]
+        wanted_keys = {signature(row) for rows in wanted for row in rows}
+        changed = any(row.is_current != (signature(row) in wanted_keys) for row in baseline.service_rates)
+        for row in baseline.service_rates:
+            row.is_current = signature(row) in wanted_keys
+        for rows in wanted:
+            for row in rows:
+                if signature(row) not in existing:
+                    row.is_current = True
+                    baseline.service_rates.append(row)
+                    changed = True
+        if changed:
+            _audit(db, user=user, action="update", entity_type="daily_cost", entity_id=entry.id, label=entry.daily_cost_code, summary="Refreshed current AFE service rates; historical actuals and AFE budget retained", request=request)
+        _commit(db)
+        return _baseline_out(baseline, entry.rate_baseline)
 
 
 def context_for_entry(db: Session, organization_id: str, entry_id: str) -> DailyCostBaselineOut:
@@ -1411,6 +1448,19 @@ def _normalise_service(
         rate_id = rate.id
         budget_key = f"service:{rate.source_afe_line_id}"
         matching = budgets.get(budget_key, [])
+        # AFE saves replace their source rows. Reconnect a revised service to
+        # its original locked allowance only when the mapping is unambiguous.
+        # Do not inflate or rewrite the locked budget when a basis changes.
+        if not matching:
+            candidates = {row.id: row for previous in entry.baseline.service_rates
+                          if previous.service_id == service.id
+                          for row in budgets.get(f"service:{previous.source_afe_line_id}", [])}
+            scoped = [row for row in candidates.values()
+                      if row.section_id == line.hole_section_id and row.phase_id == line.phase_id]
+            resolved = scoped if len(scoped) == 1 else list(candidates.values())
+            if len(resolved) == 1:
+                matching = resolved
+                budget_key = f"service:{resolved[0].item_key}"
         budget = matching[0] if matching else None
         if line.hole_section_id:
             _validate_scope(entry.baseline, hole_section_id=line.hole_section_id, phase_id=line.phase_id, require_section=True)
@@ -1736,12 +1786,21 @@ def _reject_duplicate_service_sub_activity(services: list[dict[str, Any]]) -> No
     """One service may repeat on a date only under a different well sub activity.
 
     A service operated 18h under sub activity 1, 3h under sub activity 2 and
-    3h under sub activity 3 is three separate lines; the same service recorded
-    twice for the same sub activity on the same well/date is a duplicate entry.
+    3h under sub activity 3 is three separate ledger allocations. Different
+    charge categories or section/phase scopes can coexist under a sub activity;
+    an identical service/sub-activity/category/scope tuple is still a duplicate.
+    Time-based hourly allocations are limited to 24 hours per service/category.
     """
-    seen: dict[tuple[str, str], str] = {}
+    hours: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     for fields in services:
-        key = (fields["service_id"], fields.get("sub_activity_id") or "")
+        if fields["charging_basis"] == "Day Rate" and fields["quantity_unit"] == "hours" and fields["charge_category"] not in SERVICE_ONE_TIME:
+            key = (fields["service_id"], fields["charge_category"])
+            hours[key] += Decimal(fields["quantity"])
+            if hours[key] > 24:
+                raise HTTPException(status_code=422, detail=f"Service {fields['service_code_snapshot']}: total allocated {fields['charge_category']} hours cannot exceed 24 on one daily sheet")
+    seen: dict[tuple, str] = {}
+    for fields in services:
+        key = (fields["service_id"], fields.get("sub_activity_id") or "", fields.get("charge_category"), fields.get("hole_section_id"), fields.get("phase_id"))
         code = fields.get("service_code_snapshot") or fields["service_id"]
         sub_label = fields.get("sub_activity_code_snapshot") or "the same sub activity"
         if key in seen:
@@ -1749,7 +1808,7 @@ def _reject_duplicate_service_sub_activity(services: list[dict[str, Any]]) -> No
                 status_code=422,
                 detail=(
                     f"Service {code} is already entered for sub activity {sub_label} on this date. "
-                    "The same service can be recorded again only with a different sub activity."
+                    "Use a different sub activity, charge category or section/phase for a distinct allocation."
                 ),
             )
         seen[key] = code

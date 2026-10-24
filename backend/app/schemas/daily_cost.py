@@ -463,6 +463,7 @@ class DailyCostReference(BaseModel):
 
 
 class DailyCostRateOut(BaseModel):
+    is_current: bool = True
     id: str
     service_id: str
     source_afe_line_id: str

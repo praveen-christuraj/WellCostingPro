@@ -26,7 +26,7 @@ import {
   entryQuery, leadLagText, otherExpenseLabel, saveFromDay, validLeadLagDays,
   type DailyCostBaseline, type DailyCostComparisonLine, type DailyCostDay, type DailyCostGroup,
   type AnyDailyCostLine, type DailyCostImportResult, type DailyCostPreview, type DailyCostReference,
-  type DailyCostSavePayload, type DailyCostServiceInput, type DailyQuantityUnit, type WellProgressScope,
+  type DailyCostSavePayload, type DailyCostServiceInput, type WellProgressScope,
   type ConsumableCategory, type ConsumableKind, type DailyCostWellSummary, type DailyLeadLagKind,
 } from '../lib/dailyCost'
 import type { MudCostMaterialBalance, MudCostReconciliation } from '../lib/mudCost'
@@ -92,6 +92,7 @@ export default function DailyCostSheet() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [notice, setNotice] = useState('')
+  const [rateRefreshWarning, setRateRefreshWarning] = useState('')
   const [lineEditor, setLineEditor] = useState<{ kind: DailyCostLineKind; index: number | null } | null>(null)
   const [lineDelete, setLineDelete] = useState<LineDelete>(null)
   const [statusAction, setStatusAction] = useState<StatusAction | null>(null)
@@ -112,6 +113,7 @@ export default function DailyCostSheet() {
   const [costingSetError, setCostingSetError] = useState('')
   const [setPickerGroup, setSetPickerGroup] = useState<CostingSetGroup | null>(null)
   const [selectedServiceIndices, setSelectedServiceIndices] = useState<number[]>([])
+  const [seedServiceIds, setSeedServiceIds] = useState<string[] | undefined>()
   const [serviceSelectionResetKey, setServiceSelectionResetKey] = useState(0)
   const [bulkScopeOpen, setBulkScopeOpen] = useState(false)
   const [amendments, setAmendments] = useState<DailyCostAmendment[]>([])
@@ -125,11 +127,20 @@ export default function DailyCostSheet() {
     setLoading(true)
     setLoadError('')
     try {
-      const [dayData, baselineData, referenceData] = await Promise.all([
+      const [dayData, savedBaseline, referenceData] = await Promise.all([
         api<DailyCostDay>(`/daily-cost/entries/${entryId}`),
         api<DailyCostBaseline>(`/daily-cost/entries/${entryId}/baseline`),
         api<DailyCostReference>('/daily-cost/reference'),
       ])
+      let baselineData = savedBaseline
+      setRateRefreshWarning('')
+      if (can('daily-cost:update') && dayData.entry.status === 'draft') {
+        try {
+          baselineData = await api<DailyCostBaseline>(`/daily-cost/entries/${entryId}/refresh-service-rates`, { method: 'POST' })
+        } catch (caught) {
+          setRateRefreshWarning(`Current AFE service rates could not be refreshed. Historical entries are still available. ${caught instanceof Error ? caught.message : ''}`)
+        }
+      }
       setDay(dayData)
       setBaseline(baselineData)
       setReference(referenceData)
@@ -252,13 +263,14 @@ export default function DailyCostSheet() {
       if (index === null) {
         rows.push(...linesToAdd)
       } else {
-        rows[index] = linesToAdd[0]
+        rows.splice(index, 1, ...linesToAdd)
       }
       return { ...current, [group]: rows }
     })
     if (group === 'services') clearServiceSelection()
     setPreview(null)
     setLineEditor(null)
+    setSeedServiceIds(undefined)
     setNotice(group === 'other_expenses'
       ? 'Other expense updated. The AFE remaining balance is being recalculated with the deduction; save to commit the change.'
       : `${linesToAdd.length > 1 ? `${linesToAdd.length} lines` : 'Line'} updated. Preview and AFE remaining balance are recalculating; save to commit the change.`)
@@ -275,11 +287,11 @@ export default function DailyCostSheet() {
     setNotice('Line removed from the draft. Save to commit the change.')
   }
 
-  const applyBulkServiceScope = (updates: { index: number; line: DailyCostServiceInput }[]) => {
-    const updateByIndex = new Map(updates.map(item => [item.index, item.line]))
+  const applyBulkServiceScope = (updates: { index: number; line: DailyCostServiceInput; lines?: DailyCostServiceInput[] }[]) => {
+    const updateByIndex = new Map(updates.map(item => [item.index, item.lines ?? [item.line]]))
     setPayload(current => ({
       ...current,
-      services: current.services.map((line, index) => updateByIndex.get(index) ?? line),
+      services: current.services.flatMap((line, index) => updateByIndex.get(index) ?? [line]),
     }))
     clearServiceSelection()
     setBulkScopeOpen(false)
@@ -443,6 +455,14 @@ export default function DailyCostSheet() {
 
   const applyCostingSet = (costingSet: CostingSet) => {
     if (!day || !baseline || !reference) return
+    if (costingSet.item_group === 'services') {
+      const ids = costingSet.items.filter(item => item.is_available && baseline.service_rates.some(rate => rate.service_id === item.item_id && rate.is_current !== false)).map(item => item.item_id)
+      if (!ids.length) { setNotice('This set has no available services with current AFE rates.'); setSetPickerGroup(null); return }
+      setSeedServiceIds(ids)
+      setLineEditor({ kind: 'service', index: null })
+      setSetPickerGroup(null)
+      return
+    }
     const available = costingSet.items.filter(item => item.is_available)
     let skipped = costingSet.items.length - available.length
     let addedCount = 0
@@ -460,7 +480,6 @@ export default function DailyCostSheet() {
     )
     const defaultSection = baseline.sections[0]
     const defaultPhase = defaultSection?.phases[0]
-    const duplicateServices = new Set(nextServices.map(line => `${line.service_id}:${line.sub_activity_id ?? ''}`))
     const duplicateCatalogueItems = new Set([
       ...nextConsumables.map(line => `${line.item_kind}:${line.item_id}:${line.activity_id}:${line.sub_activity_id ?? ''}`),
       ...nextTangibles.map(line => `tangible:${line.tangible_id}:${line.activity_id}:${line.sub_activity_id ?? ''}`),
@@ -468,51 +487,8 @@ export default function DailyCostSheet() {
 
     if (!activity || !subActivity) {
       skipped += available.length
-    } else if (deriveClassification(activity) !== 'Planned' && !subActivity.responsible_party.trim() && costingSet.item_group !== 'services') {
+    } else if (deriveClassification(activity) !== 'Planned' && !subActivity.responsible_party.trim()) {
       skipped += available.length
-    } else if (costingSet.item_group === 'services') {
-      for (const item of available) {
-        const service = reference.services.find(option => option.id === item.item_id)
-        const rate = baseline.service_rates.find(option => option.service_id === item.item_id)
-        if (!service || !rate) { skipped += 1; continue }
-        const sectionId = rate.hole_section_id ?? defaultSection?.hole_section_id ?? null
-        const phaseId = rate.phase_id ?? (sectionId === defaultSection?.hole_section_id ? defaultPhase?.phase_id : null) ?? null
-        const duplicateKey = `${service.id}:${subActivity.id}`
-        const vendor = service.vendor_id ? reference.vendors.find(option => option.id === service.vendor_id) : null
-        const category = (rate.charge_category || 'Operation') as DailyCostServiceInput['charge_category']
-        const quantityUnit: DailyQuantityUnit = rate.charging_basis === 'Per Service Rate' ? 'service'
-          : rate.charging_basis === 'Per Section Rate' ? 'section'
-            : DAILY_ONE_TIME_CATEGORIES.includes(category) ? 'unit' : 'days'
-        if (duplicateServices.has(duplicateKey)
-          || (!baseline.exchange_rates[rate.currency] && rate.currency !== 'USD')
-          || (rate.charging_basis !== 'Day Rate' && !sectionId)
-          || (deriveClassification(activity) !== 'Planned' && !vendor && !service.vendor_name && !subActivity.responsible_party)) {
-          skipped += 1
-          continue
-        }
-        const isPlanned = deriveClassification(activity) === 'Planned'
-        nextServices.push({
-          id: null,
-          activity_id: activity.id,
-          hole_section_id: sectionId,
-          phase_id: sectionId ? phaseId : null,
-          sub_activity_id: subActivity.id,
-          vendor_id: isPlanned ? null : vendor?.id ?? null,
-          party_name: isPlanned ? 'Not Applicable' : subActivity.responsible_party || vendor?.vendor_name || service.vendor_name || '',
-          quantity: '1',
-          currency: rate.currency,
-          override_rate: null,
-          override_reason: '',
-          remarks: `Added from costing set ${costingSet.name}`,
-          service_id: service.id,
-          baseline_service_rate_id: rate.id,
-          charging_basis: rate.charging_basis,
-          charge_category: category,
-          quantity_unit: quantityUnit,
-        })
-        duplicateServices.add(duplicateKey)
-        addedCount += 1
-      }
     } else if (costingSet.item_group === 'tangibles') {
       for (const item of available) {
         const catalogueItem = reference.catalogue_items.find(option => option.item_kind === 'tangible' && option.id === item.item_id)
@@ -578,7 +554,7 @@ export default function DailyCostSheet() {
     }
 
     if (addedCount) {
-      if (costingSet.item_group === 'services') clearServiceSelection()
+
       setPayload(current => ({
         ...current,
         services: nextServices,
@@ -1001,6 +977,7 @@ export default function DailyCostSheet() {
       </Box>
     </Paper>
 
+    {rateRefreshWarning && <Alert severity="warning" sx={{ mb: 1.5 }}>{rateRefreshWarning}</Alert>}
     {notice && <Alert severity="success" sx={{ mb: 1.5 }} onClose={() => setNotice('')}>{notice}</Alert>}
     {costingSetError && <Alert severity="warning" sx={{ mb: 1.5 }} onClose={() => setCostingSetError('')}>{costingSetError}</Alert>}
     <ErrorMessage message={saveError}/>
@@ -1247,11 +1224,13 @@ export default function DailyCostSheet() {
         if (!lineEditor || lineEditor.index === null) return null
         return payload[GROUP_KEY[lineEditor.kind]][lineEditor.index] as EditableDailyCostLine | undefined ?? null
       })()}
+      serviceIds={seedServiceIds}
+      onSubActivityCreated={item => setReference(current => current ? { ...current, sub_activities: [...current.sub_activities, item] } : current)}
       serviceLines={payload.services}
       lineIndex={lineEditor?.kind === 'service' ? lineEditor.index : null}
       baseline={baseline} reference={reference} wellId={entry.well_id}
       scope={reference.afes.find(item => item.id === entry.afe_id)?.configuration_scope ?? 'drilling'}
-      onClose={() => setLineEditor(null)} onSave={addOrEditLine}
+      onClose={() => { setLineEditor(null); setSeedServiceIds(undefined) }} onSave={addOrEditLine}
     />
 
     <FormDialog open={Boolean(lineDelete)} title={`Remove ${lineDelete?.label ?? 'line'}?`} subtitle="This removes the line from this unsaved daily sheet. A saved line is deleted only after you save the sheet." onClose={() => setLineDelete(null)} onSubmit={removeLine} submitLabel="Remove line">

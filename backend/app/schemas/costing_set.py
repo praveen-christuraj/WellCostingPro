@@ -30,6 +30,7 @@ class CostingSetItemIn(_Strict):
 
 
 class CostingSetCreate(_Strict):
+    is_global: bool = False
     name: str = Field(min_length=1, max_length=100)
     item_group: CostingSetGroup
     description: str = Field(default="", max_length=500)
@@ -63,6 +64,8 @@ class CostingSetItemOut(_Strict):
 
 
 class CostingSetOut(_Strict):
+    is_global: bool = False
+    owner_id: str
     id: str
     name: str
     item_group: CostingSetGroup

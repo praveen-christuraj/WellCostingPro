@@ -6,6 +6,7 @@ import {
   Box,
   Button,
   CircularProgress,
+  Checkbox, FormControlLabel,
   MenuItem,
   Paper,
   TextField,
@@ -29,6 +30,7 @@ import {
 } from '../lib/costingSets'
 
 type SetForm = {
+  is_global: boolean
   name: string
   item_group: CostingSetGroup
   description: string
@@ -36,6 +38,7 @@ type SetForm = {
 }
 
 type SetGridRow = {
+  is_global: boolean
   membership_id: string
   set_id: string
   set_name: string
@@ -49,7 +52,7 @@ type SetGridRow = {
 }
 
 const IMPORT_HEADERS = ['Set name', 'Item group', 'Item kind', 'Item code']
-const EMPTY_FORM: SetForm = { name: '', item_group: 'services', description: '', selected_items: [] }
+const EMPTY_FORM: SetForm = { is_global: false, name: '', item_group: 'services', description: '', selected_items: [] }
 const keyOf = (kind: string, id: string) => `${kind}:${id}`
 
 function StatCard({ label, value, hint }: { label: string; value: string | number; hint: string }) {
@@ -93,7 +96,7 @@ function normalizeKind(value: string): CostingSetInput['items'][number]['item_ki
 }
 
 export default function CostingSets() {
-  const { can } = useAuth()
+  const { can, user } = useAuth()
   const [sets, setSets] = useState<CostingSet[]>([])
   const [options, setOptions] = useState<CostingSetOption[]>([])
   const [loading, setLoading] = useState(true)
@@ -141,6 +144,7 @@ export default function CostingSets() {
       name: set.name,
       item_group: set.item_group,
       description: set.description,
+      is_global: set.is_global ?? false,
       selected_items: set.items.map(item => keyOf(item.item_kind, item.item_id)),
     })
     setFormError('')
@@ -193,6 +197,7 @@ export default function CostingSets() {
       name: form.name.trim(),
       item_group: form.item_group,
       description: form.description.trim(),
+      is_global: form.is_global,
       items: form.selected_items.map(value => {
         const separator = value.indexOf(':')
         return {
@@ -264,6 +269,7 @@ export default function CostingSets() {
     membership_id: item.id,
     set_id: set.id,
     set_name: set.name,
+    is_global: Boolean(set.is_global),
     item_group: set.item_group,
     item_kind: item.item_kind,
     item_code: item.item_code,
@@ -275,6 +281,7 @@ export default function CostingSets() {
 
   const columns = useMemo<ColDef<SetGridRow>[]>(() => [
     { headerName: 'Set name', field: 'set_name', minWidth: 170, flex: 1 },
+    { headerName: 'Visibility', field: 'is_global', minWidth: 110, valueFormatter: params => params.value ? 'Global' : 'Private' },
     { headerName: 'Item group', field: 'item_group', minWidth: 115, valueFormatter: params => labelGroup(params.value ?? '') },
     { headerName: 'Item kind', field: 'item_kind', minWidth: 135, valueFormatter: params => COSTING_SET_ITEM_KIND_LABEL[params.value as keyof typeof COSTING_SET_ITEM_KIND_LABEL] ?? params.value ?? '' },
     { headerName: 'Item code', field: 'item_code', minWidth: 120 },
@@ -285,17 +292,17 @@ export default function CostingSets() {
     {
       headerName: 'ACTIONS', width: 155, minWidth: 155, maxWidth: 155, flex: 0, sortable: false,
       cellRenderer: ({ data }: { data: SetGridRow }) => <Box display="flex" alignItems="center" height="100%" gap={.2}>
-        {can('costing-sets:update') && <Button size="small" onClick={() => {
+        {sets.find(set => set.id === data.set_id)?.owner_id === user?.id && can('costing-sets:update') && <Button size="small" onClick={() => {
           const target = sets.find(set => set.id === data.set_id)
           if (target) openEdit(target)
         }} aria-label={`Edit ${data.set_name}`} startIcon={<EditOutlined sx={{ fontSize: 15 }}/>}>Edit</Button>}
-        {can('costing-sets:delete') && <Button size="small" color="error" onClick={() => {
+        {sets.find(set => set.id === data.set_id)?.owner_id === user?.id && can('costing-sets:delete') && <Button size="small" color="error" onClick={() => {
           const target = sets.find(set => set.id === data.set_id)
           if (target) { setDeleteError(''); setDeleteTarget(target) }
         }} aria-label={`Delete ${data.set_name}`} startIcon={<DeleteOutlineRounded sx={{ fontSize: 15 }}/>}>Delete</Button>}
       </Box>,
     },
-  ], [can, openEdit, sets])
+  ], [can, openEdit, sets, user?.id])
 
   const groupCounts = useMemo(() => Object.fromEntries(COSTING_SET_GROUPS.map(group => [
     group.value,
@@ -308,7 +315,7 @@ export default function CostingSets() {
     <PageHeading
       eyebrow="COSTING WORKSPACE / PERSONAL SHORTCUTS"
       title="Reusable costing sets"
-      subtitle="Save private lists of frequently used services, tangibles and consumables. Apply them as editable bulk-add shortcuts in an AFE estimate or daily cost sheet."
+      subtitle="Save private or workspace-global lists of frequently used services, tangibles and consumables. Apply them as editable bulk-add shortcuts in an AFE estimate or daily cost sheet."
       action={<Box display="flex" gap={1} flexWrap="wrap">
         {can('costing-sets:create') && <Button variant="contained" startIcon={<AddRounded/>} onClick={openCreate}>Create set</Button>}
       </Box>}
@@ -364,7 +371,7 @@ export default function CostingSets() {
     <FormDialog
       open={editorOpen}
       title={editing ? `Edit costing set · ${editing.name}` : 'Create reusable costing set'}
-      subtitle="Choose one item group per set. Sets are private to your user account and store references—not rate or estimate data."
+      subtitle="Choose one item group per set. Global sets are available to everyone in this workspace; only their creator can edit them. Sets store references, not rates."
       onClose={closeEditor}
       onSubmit={() => void save()}
       dirty={dirty}
@@ -386,6 +393,7 @@ export default function CostingSets() {
             {COSTING_SET_GROUPS.map(group => <MenuItem key={group.value} value={group.value}>{group.label}</MenuItem>)}
           </TextField>
         </Box>
+        <FormControlLabel control={<Checkbox checked={form.is_global} onChange={event => setForm(current => ({ ...current, is_global: event.target.checked }))}/>} label="Global — share with everyone in this workspace"/>
         <TextField label="Description (optional)" value={form.description} onChange={event => setForm(current => ({ ...current, description: event.target.value }))} inputProps={{ maxLength: 500 }}/>
         <Autocomplete
           multiple

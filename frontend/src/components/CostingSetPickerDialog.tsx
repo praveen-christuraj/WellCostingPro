@@ -34,8 +34,8 @@ export function CostingSetPickerDialog({ open, group, destination, sets, onClose
     open={open}
     title={`Add a ${groupLabel.toLowerCase()} set`}
     subtitle={destination === 'afe'
-      ? 'Choose a private reusable set. The items are added as ordinary editable estimate lines; saved rates and amounts are not changed.'
-      : 'Choose a private reusable set. New lines use this daily sheet’s locked AFE rate snapshots and remain editable until saved.'}
+      ? 'Choose a private or workspace-global set. The items are added as ordinary editable estimate lines; saved rates and amounts are not changed.'
+      : 'Choose a private or workspace-global set. New lines use current AFE service rates and locked catalogue snapshots and remain editable until saved.'}
     onClose={onClose}
     onSubmit={apply}
     dirty={Boolean(selectedId)}
@@ -51,7 +51,7 @@ export function CostingSetPickerDialog({ open, group, destination, sets, onClose
         </Alert>
         : <TextField select label="Reusable set" value={selectedId} onChange={event => setSelectedId(event.target.value)}>
           {choices.map(set => <MenuItem key={set.id} value={set.id} disabled={!set.items.some(item => item.is_available)}>
-            {set.name} · {set.items.filter(item => item.is_available).length} available item(s)
+            {set.name}{set.is_global ? ' (Global)' : ''} · {set.items.filter(item => item.is_available).length} available item(s)
           </MenuItem>)}
         </TextField>}
 

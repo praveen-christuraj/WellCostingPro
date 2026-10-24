@@ -188,3 +188,30 @@ def test_costing_sets_are_private_tenant_scoped_and_keep_stale_item_snapshots():
 
         assert client.delete(f"/api/v1/costing-sets/{costing_set['id']}", headers=north).status_code == 204
         assert client.get("/api/v1/costing-sets", headers=north).json() == []
+
+
+def test_global_sets_are_workspace_visible_but_only_owner_can_modify():
+    with TestClient(app) as client:
+        owner = login(client)
+        vendor = create_vendor(client, owner)
+        service = create_service(client, owner, vendor['id'])
+        payload = {'name': 'Shared services', 'item_group': 'services', 'is_global': True,
+                   'items': [{'item_kind': 'service', 'item_id': service['id']}]}
+        created = client.post('/api/v1/costing-sets', headers=owner, json=payload)
+        assert created.status_code == 201, created.text
+        set_id = created.json()['id']
+        with SessionLocal() as db:
+            org = db.query(Organization).filter_by(slug='north').one()
+            role = db.query(Role).filter_by(organization_id=org.id, name='Owner').one()
+            db.add(User(organization_id=org.id, email='colleague@example.com', full_name='Colleague',
+                        password_hash=hash_password('correct-password-123'), roles=[role]))
+            db.commit()
+        colleague = login(client, email='colleague@example.com')
+        visible = client.get('/api/v1/costing-sets', headers=colleague).json()
+        assert len(visible) == 1 and visible[0]['id'] == set_id and visible[0]['is_global']
+        assert client.put(f'/api/v1/costing-sets/{set_id}', headers=colleague, json=payload).status_code == 404
+        assert client.delete(f'/api/v1/costing-sets/{set_id}', headers=colleague).status_code == 404
+        assert client.get('/api/v1/costing-sets', headers=login(client, 'south')).json() == []
+        payload['is_global'] = False
+        assert client.put(f'/api/v1/costing-sets/{set_id}', headers=owner, json=payload).status_code == 200
+        assert client.get('/api/v1/costing-sets', headers=colleague).json() == []

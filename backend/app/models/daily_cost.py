@@ -221,6 +221,7 @@ class DailyCostBaselineServiceRate(Base):
     baseline_id: Mapped[str] = mapped_column(
         ForeignKey("daily_cost_baselines.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
     service_id: Mapped[str] = mapped_column(
         ForeignKey("services.id", ondelete="RESTRICT"), nullable=False, index=True
     )
