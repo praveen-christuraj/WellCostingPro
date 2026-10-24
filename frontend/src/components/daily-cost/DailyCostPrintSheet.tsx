@@ -372,6 +372,33 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   const sections = report.sections?.length ? report.sections : [...sectionDepths.entries()].map(([key, depth]) => ({
     hole_section_id: key, section_code: key, section_name: key, from_depth: '0', to_depth: depth, total_days: '0', phases: [],
   }))
+  /*
+   * Loss per metre is measured over the interval the section itself drilled,
+   * never over the whole hole down to its current depth. The first section
+   * starts at the depth configured for it in the well configuration — 0 m for
+   * most wells, but a well may spud below an existing depth (800 m, say). Every
+   * later section starts where the previous section actually finished, so its
+   * metreage is the current depth minus that previous actual depth. A later
+   * section with no recorded previous depth falls back to its own configured
+   * start depth rather than to zero.
+   */
+  type LossSection = { hole_section_id: string; section_code: string; from_depth: string; to_depth: string }
+  const lossSections: LossSection[] = report.sections?.length
+    ? [...report.sections].sort((left, right) =>
+      asNumber(left.from_depth) - asNumber(right.from_depth) || asNumber(left.to_depth) - asNumber(right.to_depth))
+    : [...sectionDepths.entries()]
+      .map(([key, depth]) => ({ hole_section_id: key, section_code: key, from_depth: '0', to_depth: depth }))
+      .sort((left, right) => asNumber(left.to_depth) - asNumber(right.to_depth))
+  const depthOfSection = (section: { hole_section_id: string; section_code: string }) =>
+    sectionDepths.get(section.hole_section_id) ?? sectionDepths.get(section.section_code)
+  const sectionStarts = new Map<string, number>()
+  lossSections.forEach((section, index) => {
+    const previous = index > 0 ? lossSections[index - 1] : undefined
+    const previousDepth = previous ? asNumber(depthOfSection(previous)) : 0
+    const startDepth = previous && previousDepth > 0 ? previousDepth : asNumber(section.from_depth)
+    if (section.hole_section_id) sectionStarts.set(section.hole_section_id, startDepth)
+    if (section.section_code) sectionStarts.set(section.section_code, startDepth)
+  })
   const mudSections = report.mudReconciliation?.sections ?? summary?.mud_cost?.sections ?? []
   /*
    * Planned mud chemicals are the AFE's own "Mud Chemicals" allowance for each
@@ -427,9 +454,17 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     value: (row: MudSection) => decimalText(optionalText(row, metric.key)),
   }))
   const surfaceLossPerMeter = (row: MudSection) => {
-    const depth = asNumber(sectionDepths.get(optionalText(row, 'hole_section_id') ?? row.section_id))
-    if (depth <= 0) return '—'
-    return decimalText(asNumber(optionalText(row, 'surface_loss_total')) / depth)
+    const sectionId = optionalText(row, 'hole_section_id') ?? row.section_id
+    const sectionCode = optionalText(row, 'section_code') ?? ''
+    const depth = sectionDepths.get(sectionId) ?? sectionDepths.get(sectionCode)
+    if (depth === undefined) return '—'
+    const currentDepth = asNumber(depth)
+    const startDepth = sectionStarts.get(sectionId) ?? sectionStarts.get(sectionCode) ?? 0
+    // A section that has not started, or whose start depth is ahead of its
+    // current depth, has no positive metreage to divide by.
+    const meterage = currentDepth - startDepth
+    if (currentDepth <= 0 || meterage <= 0) return '—'
+    return decimalText(asNumber(optionalText(row, 'surface_loss_total')) / meterage)
   }
 
   /**
