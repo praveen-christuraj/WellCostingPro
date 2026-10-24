@@ -15,6 +15,7 @@ import { DailyCostLineDialog, type DailyCostLineKind, type EditableDailyCostLine
 import { DailyCostBulkScopeDialog } from '../components/daily-cost/DailyCostBulkScopeDialog'
 import { WellProgressPanel } from '../components/daily-cost/WellProgressPanel'
 import { CostingSetPickerDialog } from '../components/CostingSetPickerDialog'
+import { AdvancedSelectorDialog, type AdvancedSelectorItem, type AdvancedSelectorSelection } from '../components/AdvancedItemSelector'
 import { useCostPrint } from '../components/daily-cost/DailyCostPrintSheet'
 import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
@@ -32,7 +33,7 @@ import {
 import type { MudCostMaterialBalance, MudCostReconciliation } from '../lib/mudCost'
 import type { LihCostReport } from '../lib/lihCost'
 import { formatDepthMeters } from '../lib/units'
-import type { CostingSet, CostingSetGroup } from '../lib/costingSets'
+import { COSTING_SET_ITEM_KIND_LABEL, type CostingSet, type CostingSetGroup } from '../lib/costingSets'
 
 /** Where each dialog kind lives inside the save payload. */
 type LineGroupKey = 'services' | 'consumables' | 'tangibles' | 'other_expenses'
@@ -112,6 +113,7 @@ export default function DailyCostSheet() {
   const [costingSets, setCostingSets] = useState<CostingSet[]>([])
   const [costingSetError, setCostingSetError] = useState('')
   const [setPickerGroup, setSetPickerGroup] = useState<CostingSetGroup | null>(null)
+  const [pendingConsumableSet, setPendingConsumableSet] = useState<CostingSet | null>(null)
   const [selectedServiceIndices, setSelectedServiceIndices] = useState<number[]>([])
   const [seedServiceIds, setSeedServiceIds] = useState<string[] | undefined>()
   const [serviceSelectionResetKey, setServiceSelectionResetKey] = useState(0)
@@ -463,11 +465,14 @@ export default function DailyCostSheet() {
       setSetPickerGroup(null)
       return
     }
+    if (costingSet.item_group === 'consumables') {
+      setPendingConsumableSet(costingSet)
+      setSetPickerGroup(null)
+      return
+    }
     const available = costingSet.items.filter(item => item.is_available)
     let skipped = costingSet.items.length - available.length
     let addedCount = 0
-    const nextServices = payload.services.slice()
-    const nextConsumables = payload.consumables.slice()
     const nextTangibles = payload.tangibles.slice()
     const preferredActivityId = payload.services[0]?.activity_id
       ?? reference.activities.find(item => deriveClassification(item) === 'Planned')?.id
@@ -480,16 +485,13 @@ export default function DailyCostSheet() {
     )
     const defaultSection = baseline.sections[0]
     const defaultPhase = defaultSection?.phases[0]
-    const duplicateCatalogueItems = new Set([
-      ...nextConsumables.map(line => `${line.item_kind}:${line.item_id}:${line.activity_id}:${line.sub_activity_id ?? ''}`),
-      ...nextTangibles.map(line => `tangible:${line.tangible_id}:${line.activity_id}:${line.sub_activity_id ?? ''}`),
-    ])
+    const duplicateCatalogueItems = new Set(nextTangibles.map(line => `tangible:${line.tangible_id}:${line.activity_id}:${line.sub_activity_id ?? ''}`))
 
     if (!activity || !subActivity) {
       skipped += available.length
     } else if (deriveClassification(activity) !== 'Planned' && !subActivity.responsible_party.trim()) {
       skipped += available.length
-    } else if (costingSet.item_group === 'tangibles') {
+    } else {
       for (const item of available) {
         const catalogueItem = reference.catalogue_items.find(option => option.item_kind === 'tangible' && option.id === item.item_id)
         const snapshot = baseline.catalogue_rates.find(option => option.item_kind === 'tangible' && option.id === item.item_id)
@@ -516,49 +518,12 @@ export default function DailyCostSheet() {
         duplicateCatalogueItems.add(duplicateKey)
         addedCount += 1
       }
-    } else {
-      const categoryByKind: Record<ConsumableKind, ConsumableCategory> = {
-        mud_chemical: 'Mud Chemicals', cement_additive: 'Cement Additives', fuel: 'Fuel', drill_bit: 'Drill Bits',
-      }
-      for (const item of available) {
-        if (item.item_kind === 'service' || item.item_kind === 'tangible') { skipped += 1; continue }
-        const kind = item.item_kind as ConsumableKind
-        const catalogueItem = reference.catalogue_items.find(option => option.item_kind === kind && option.id === item.item_id)
-        const snapshot = baseline.catalogue_rates.find(option => option.item_kind === kind && option.id === item.item_id)
-        const duplicateKey = `${kind}:${item.item_id}:${activity.id}:${subActivity.id}`
-        if (!catalogueItem || !snapshot || duplicateCatalogueItems.has(duplicateKey)
-          || !defaultSection || (!baseline.exchange_rates[snapshot.currency] && snapshot.currency !== 'USD')) {
-          skipped += 1
-          continue
-        }
-        nextConsumables.push({
-          id: null,
-          activity_id: activity.id,
-          hole_section_id: defaultSection.hole_section_id,
-          phase_id: defaultPhase?.phase_id ?? null,
-          sub_activity_id: subActivity.id,
-          vendor_id: null,
-          party_name: subActivity.responsible_party || '',
-          quantity: '1',
-          currency: snapshot.currency,
-          override_rate: null,
-          override_reason: '',
-          remarks: `Added from costing set ${costingSet.name}`,
-          category: categoryByKind[kind],
-          item_kind: kind,
-          item_id: catalogueItem.id,
-        })
-        duplicateCatalogueItems.add(duplicateKey)
-        addedCount += 1
-      }
     }
 
     if (addedCount) {
 
       setPayload(current => ({
         ...current,
-        services: nextServices,
-        consumables: nextConsumables,
         tangibles: nextTangibles,
       }))
       setPreview(null)
@@ -568,6 +533,69 @@ export default function DailyCostSheet() {
       setNotice(`No lines were added from “${costingSet.name}”. ${skipped} item(s) were unavailable, duplicated, missing a locked AFE rate or unsupported by the current well setup.`)
     }
     setSetPickerGroup(null)
+  }
+
+  const consumableSetItems = useMemo<AdvancedSelectorItem[]>(() => {
+    if (!pendingConsumableSet || !baseline || !reference) return []
+    return pendingConsumableSet.items.flatMap(member => {
+      if (!member.is_available || member.item_kind === 'service' || member.item_kind === 'tangible') return []
+      const catalogue = reference.catalogue_items.find(item => item.item_kind === member.item_kind && item.id === member.item_id)
+      const snapshot = baseline.catalogue_rates.find(item => item.item_kind === member.item_kind && item.id === member.item_id)
+      if (!catalogue || !snapshot) return []
+      return [{
+        id: `${member.item_kind}:${member.item_id}`,
+        code: catalogue.item_code,
+        name: catalogue.item_name,
+        description: catalogue.description,
+        details: COSTING_SET_ITEM_KIND_LABEL[member.item_kind],
+        uom: catalogue.uom,
+        rate: snapshot.captured_rate,
+        currency: snapshot.currency,
+      }]
+    })
+  }, [pendingConsumableSet, baseline, reference])
+
+  const addConsumableSetUsage = (rows: AdvancedSelectorSelection[]): string | null => {
+    if (!day || !baseline || !reference || !pendingConsumableSet) return 'The daily sheet is not ready.'
+    const preferredActivityId = payload.services[0]?.activity_id
+      ?? reference.activities.find(item => deriveClassification(item) === 'Planned')?.id
+      ?? reference.activities[0]?.id ?? ''
+    const sheetScope = reference.afes.find(item => item.id === day.entry.afe_id)?.configuration_scope ?? 'drilling'
+    const activity = reference.activities.find(item => item.id === preferredActivityId)
+    const subActivity = reference.sub_activities.find(item => item.well_id === day.entry.well_id
+      && (item.scope ?? 'drilling') === sheetScope && item.activity_id === preferredActivityId)
+    const section = baseline.sections[0]
+    const phase = section?.phases[0]
+    if (!activity || !subActivity || !section) return 'Configure a planned activity, well sub activity and section before adding consumable usage.'
+    if (deriveClassification(activity) !== 'Planned' && !subActivity.responsible_party.trim()) return 'The selected activity needs a responsible party.'
+    const existing = new Set(payload.consumables.map(line => `${line.item_kind}:${line.item_id}:${line.activity_id}:${line.sub_activity_id ?? ''}`))
+    const categoryByKind: Record<ConsumableKind, ConsumableCategory> = {
+      mud_chemical: 'Mud Chemicals', cement_additive: 'Cement Additives', fuel: 'Fuel', drill_bit: 'Drill Bits',
+    }
+    const additions: DailyCostSavePayload['consumables'] = []
+    let skipped = 0
+    for (const row of rows) {
+      const [kindText, itemId] = row.item.id.split(':', 2)
+      const kind = kindText as ConsumableKind
+      const catalogue = reference.catalogue_items.find(item => item.item_kind === kind && item.id === itemId)
+      const snapshot = baseline.catalogue_rates.find(item => item.item_kind === kind && item.id === itemId)
+      const duplicateKey = `${kind}:${itemId}:${activity.id}:${subActivity.id}`
+      if (!catalogue || !snapshot || existing.has(duplicateKey)
+        || (!baseline.exchange_rates[snapshot.currency] && snapshot.currency !== 'USD')) { skipped += 1; continue }
+      additions.push({
+        id: null, activity_id: activity.id, hole_section_id: section.hole_section_id,
+        phase_id: phase?.phase_id ?? null, sub_activity_id: subActivity.id, vendor_id: null,
+        party_name: subActivity.responsible_party || '', quantity: row.quantity, currency: snapshot.currency,
+        override_rate: null, override_reason: '', remarks: `Added from costing set ${pendingConsumableSet.name}`,
+        category: categoryByKind[kind], item_kind: kind, item_id: itemId,
+      })
+      existing.add(duplicateKey)
+    }
+    if (!additions.length) return `No entered usage was added.${skipped ? ` ${skipped} duplicate, unavailable or unpriced item(s) were skipped.` : ''}`
+    setPayload(current => ({ ...current, consumables: [...current.consumables, ...additions] }))
+    setPreview(null); setPreviewError('')
+    setNotice(`${additions.length} used chemical${additions.length === 1 ? '' : 's'} added from “${pendingConsumableSet.name}”. Empty quantities were ignored.${skipped ? ` ${skipped} item(s) skipped.` : ''}`)
+    return null
   }
 
   if (loading && !day) return <Box py={12} display="grid" sx={{ placeItems: 'center' }}><CircularProgress/></Box>
@@ -781,6 +809,11 @@ export default function DailyCostSheet() {
   const consumables = getGridRows('consumable')
   const tangibles = getGridRows('tangible')
   const otherExpenses = getGridRows('other')
+  const tableTotal = (group: 'services' | 'consumables' | 'tangibles') => {
+    const lines = hasPreviewForEdits ? preview?.[group] : day[group]
+    if (!lines) return 'Preview pending'
+    return dailyMoney(lines.reduce((sum, line) => sum + Number(line.standard_amount), 0), standard)
+  }
   const lineCount = payload.services.length + payload.consumables.length + payload.tangibles.length
     + payload.other_expenses.length
   const otherLineCount = payload.other_expenses.length
@@ -1106,18 +1139,21 @@ export default function DailyCostSheet() {
         onSelectionChange={rows => setSelectedServiceIndices(rows.map(row => row.lineIndex))}
         onBulkEdit={() => setBulkScopeOpen(true)} bulkEditLabel="Assign scope / depth / quantity"
         onAddFromSet={canReadCostingSets ? () => setSetPickerGroup('services') : undefined}
+        total={tableTotal('services')}
       />
       <LineGroup
         title="Consumables" subtitle="Itemized chemical, additive, fuel and drill-bit usage, reconciled to either item or category-level AFE allowances."
         count={payload.consumables.length} rows={consumables} columns={makeColumns('consumable')} editable={editable} canExport={canExport}
         onExport={recordExport} onAdd={() => setLineEditor({ kind: 'consumable', index: null })} onImport={openImport}
         onAddFromSet={canReadCostingSets ? () => setSetPickerGroup('consumables') : undefined}
+        total={tableTotal('consumables')}
       />
       <LineGroup
         title="Tangibles" subtitle="Actual tangible usage priced from the locked catalogue or a justified daily override."
         count={payload.tangibles.length} rows={tangibles} columns={makeColumns('tangible')} editable={editable} canExport={canExport}
         onExport={recordExport} onAdd={() => setLineEditor({ kind: 'tangible', index: null })} onImport={openImport}
         onAddFromSet={canReadCostingSets ? () => setSetPickerGroup('tangibles') : undefined}
+        total={tableTotal('tangibles')}
       />
       <LineGroup
         title="Other Expenses"
@@ -1217,6 +1253,19 @@ export default function DailyCostSheet() {
       onClose={() => setSetPickerGroup(null)}
       onApply={applyCostingSet}
     />
+    <AdvancedSelectorDialog
+      open={Boolean(pendingConsumableSet) && editable}
+      title={`Enter usage from set — ${pendingConsumableSet?.name ?? ''}`}
+      subtitle="Enter a usage quantity only for chemicals used on this daily sheet. Items left empty are ignored and are not added."
+      itemNoun="used chemical"
+      items={consumableSetItems}
+      quantityEntryOnly
+      quantityLabel="Usage quantity"
+      rateText={item => dailyMoney(item.rate, item.currency ?? standard)}
+      existingIds={payload.consumables.map(line => `${line.item_kind}:${line.item_id}`)}
+      onClose={() => setPendingConsumableSet(null)}
+      onAdd={addConsumableSetUsage}
+    />
 
     <DailyCostLineDialog
       open={Boolean(lineEditor)} kind={lineEditor?.kind ?? null}
@@ -1274,13 +1323,14 @@ export default function DailyCostSheet() {
 function LineGroup({
   title, subtitle, count, rows, columns, editable, canExport, onExport, onAdd, onImport, addLabel,
   onAddFromSet, selectable = false, selectedCount = 0, onSelectionChange, onBulkEdit, bulkEditLabel,
-  selectionResetKey,
+  selectionResetKey, total,
 }: {
   title: string; subtitle: string; count: number; rows: GridLine[]; columns: ColDef<GridLine>[]; editable: boolean
   canExport: boolean; onExport: (format: 'csv' | 'xlsx' | 'pdf', count: number) => Promise<void>
   onAdd: () => void; onImport: () => void; addLabel?: string; onAddFromSet?: () => void
   selectable?: boolean; selectedCount?: number; onSelectionChange?: (rows: GridLine[]) => void
   onBulkEdit?: () => void; bulkEditLabel?: string; selectionResetKey?: number
+  total?: string
 }) {
   return <Paper variant="outlined" sx={{ borderRadius: 2, overflow: 'hidden' }}>
     <Box display="flex" justifyContent="space-between" alignItems="center" gap={1.5} flexWrap="wrap" p={1.8}>
@@ -1298,6 +1348,7 @@ function LineGroup({
       exportName={`daily-cost-${title.toLowerCase()}`} canExport={canExport} onExport={canExport ? onExport : undefined}
       selectable={editable && selectable} onSelectionChange={onSelectionChange} selectionResetKey={selectionResetKey}
     />
+    {total && <Box display="flex" justifyContent="flex-end" alignItems="center" gap={1} sx={{ px: 2, py: 1.1, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'action.hover' }}><Typography fontSize={11.5} color="text.secondary">Table total</Typography><Typography fontSize={13} fontWeight={800} className="tnum">{total}</Typography></Box>}
     {count === 0 && <Typography color="text.secondary" fontSize={11.5} textAlign="center" py={1.2}>No {title.toLowerCase()} recorded for this day yet.</Typography>}
   </Paper>
 }

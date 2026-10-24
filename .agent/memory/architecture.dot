@@ -835,6 +835,7 @@ digraph WellCostingPro {
   "frontend/src/pages/ConsumptionLossesReport.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/ConsumptionLossesReport.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/ConsumptionLossesReport.tsx" -> "frontend/src/lib/mudCost.ts";
+  "frontend/src/pages/CostingSets.tsx" -> "frontend/src/components/AdvancedItemSelector.tsx";
   "frontend/src/pages/CostingSets.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/CostingSets.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/CostingSets.tsx" -> "frontend/src/components/ImportDialog.tsx";
@@ -859,6 +860,7 @@ digraph WellCostingPro {
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/lib/units.ts";
+  "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/AdvancedItemSelector.tsx";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/CostingSetPickerDialog.tsx";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/DataTable.tsx";

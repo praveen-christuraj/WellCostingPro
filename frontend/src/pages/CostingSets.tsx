@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ColDef } from 'ag-grid-community'
 import {
   Alert,
-  Autocomplete,
   Box,
   Button,
   CircularProgress,
@@ -18,6 +17,7 @@ import { useAuth } from '../context/AuthContext'
 import { DataTable } from '../components/DataTable'
 import { FormDialog, PageHeading, useFormDirty } from '../components/Common'
 import { ImportDialog } from '../components/ImportDialog'
+import { AdvancedSelectorDialog, type AdvancedSelectorItem } from '../components/AdvancedItemSelector'
 import type { ImportRow } from '../lib/export'
 import {
   COSTING_SET_GROUPS,
@@ -111,6 +111,7 @@ export default function CostingSets() {
   const [deleteError, setDeleteError] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -181,6 +182,13 @@ export default function CostingSets() {
   }, [activeOptions, editing, form.item_group])
   const editorOptions = useMemo(() => [...activeOptions, ...staleOptions], [activeOptions, staleOptions])
   const selectedOptions = editorOptions.filter(option => form.selected_items.includes(keyOf(option.item_kind, option.item_id)))
+  const advancedOptions = useMemo<AdvancedSelectorItem[]>(() => editorOptions.map(option => ({
+    id: keyOf(option.item_kind, option.item_id),
+    code: option.item_code,
+    name: option.item_name,
+    details: `${COSTING_SET_ITEM_KIND_LABEL[option.item_kind]}${option.is_available === false ? ' · Unavailable' : ''}`,
+    rate: '—',
+  })), [editorOptions])
   const staleSelectedCount = selectedOptions.filter(option => option.is_available === false).length
 
   const save = async () => {
@@ -395,38 +403,31 @@ export default function CostingSets() {
         </Box>
         <FormControlLabel control={<Checkbox checked={form.is_global} onChange={event => setForm(current => ({ ...current, is_global: event.target.checked }))}/>} label="Global — share with everyone in this workspace"/>
         <TextField label="Description (optional)" value={form.description} onChange={event => setForm(current => ({ ...current, description: event.target.value }))} inputProps={{ maxLength: 500 }}/>
-        <Autocomplete
-          multiple
-          options={editorOptions}
-          value={selectedOptions}
-          onChange={(_event, selected) => setForm(current => ({
-            ...current,
-            selected_items: selected.map(option => keyOf(option.item_kind, option.item_id)),
-          }))}
-          isOptionEqualToValue={(option, value) => option.item_kind === value.item_kind && option.item_id === value.item_id}
-          getOptionLabel={option => `${COSTING_SET_ITEM_KIND_LABEL[option.item_kind]} · ${option.display_name}`}
-          filterSelectedOptions
-          renderOption={(props, option) => <li {...props} key={keyOf(option.item_kind, option.item_id)}>
-            <Box display="flex" justifyContent="space-between" width="100%" gap={2}>
-              <Typography fontSize={12.5}>{COSTING_SET_ITEM_KIND_LABEL[option.item_kind]} · {option.display_name}</Typography>
-              <Typography fontSize={11} color={option.is_available === false ? 'warning.main' : 'text.secondary'}>
-                {option.is_available === false ? 'Unavailable' : 'Active'}
-              </Typography>
-            </Box>
-          </li>}
-          renderInput={params => <TextField
-            {...params}
-            label={`Catalogue items · ${labelGroup(form.item_group)}`}
-            placeholder="Search by code or name"
-            helperText="Choose one or more active catalogue items. Unavailable existing references can be removed or retained."
-          />}
-        />
+        <Paper variant="outlined" sx={{ p: 1.5 }}>
+          <Box display="flex" justifyContent="space-between" gap={1.5} alignItems="center" flexWrap="wrap">
+            <Box><Typography fontSize={12.5} fontWeight={800}>Catalogue items · {labelGroup(form.item_group)}</Typography><Typography fontSize={11.5} color="text.secondary">{selectedOptions.length} selected. Use the advanced selector to search and add many items together.</Typography></Box>
+            <Button variant="outlined" startIcon={<PlaylistAddCheckRounded/>} disabled={!editorOptions.length} onClick={() => setAdvancedOpen(true)}>Advanced selector</Button>
+          </Box>
+          {selectedOptions.length > 0 && <Typography fontSize={11.5} mt={1.2} color="text.secondary">{selectedOptions.map(option => option.display_name).join(' · ')}</Typography>}
+        </Paper>
         {staleSelectedCount > 0 && <Alert severity="warning">
           This set has {staleSelectedCount} retained catalogue reference(s) that are no longer active. You may keep them in the set (they will be skipped when applied) or remove them here.
         </Alert>}
         {!editorOptions.length && <Alert severity="info">There are no active {labelGroup(form.item_group).toLowerCase()} to add yet. Create or restore catalogue items in Master Data first.</Alert>}
       </Box>
     </FormDialog>
+
+    <AdvancedSelectorDialog
+      open={advancedOpen && editorOpen}
+      title={`Advanced selector — ${labelGroup(form.item_group)}`}
+      subtitle="Select all catalogue items that should be available in this reusable set. Rates and quantities are not stored in a set."
+      itemNoun="catalogue item"
+      items={advancedOptions}
+      initialSelectedIds={form.selected_items}
+      selectionOnly
+      onClose={() => setAdvancedOpen(false)}
+      onAdd={rows => { setForm(current => ({ ...current, selected_items: rows.map(row => row.item.id) })); return null }}
+    />
 
     <FormDialog
       open={Boolean(deleteTarget)}

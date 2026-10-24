@@ -163,9 +163,11 @@ for (const text of ['Surface hole', 'OBM', 'Opening Stock', 'Receipt', 'Addition
 assert.equal(matrix.querySelector('thead th:nth-child(2)').textContent, 'Surface holeOBM', 'mud analysis header prints only section and mud type')
 const lossMatrix = sheet.querySelector('.dcr-loss-matrix')
 assert.ok(lossMatrix, 'consumption and losses print as a matrix')
-for (const text of ['Surface hole', 'OBM', 'Surface losses', 'Verti-G/Mud on Cuttings', 'Centrifuge', 'By-Pass', 'Evaporation', 'Trips', 'Surface losses total', 'Other losses', 'Mud Cleaner', 'Formation/Seepage', 'Pit Cleaning/Dump', 'Left-In-Hole', '10.00', 'Other losses total', 'Total losses', '15.00', '40.00', '55.00']) {
+for (const text of ['Surface hole', 'OBM', 'Surface losses', 'Verti-G/Mud on Cuttings', 'Centrifuge', 'By-Pass', 'Evaporation', 'Trips', 'Surface losses total', 'Loss (bbl/m)', '0.01', 'Other losses', 'Mud Cleaner', 'Formation/Seepage', 'Pit Cleaning/Dump', 'Left-In-Hole', '10.00', 'Other losses total', 'Total losses', '15.00', '40.00', '55.00']) {
   assert.ok(lossMatrix.textContent.includes(text), `loss matrix prints ${text}`)
 }
+const lossLabels = [...lossMatrix.querySelectorAll('tbody tr th')].map(cell => cell.textContent)
+assert.equal(lossLabels.indexOf('Loss (bbl/m)'), lossLabels.indexOf('Surface losses total') + 1, 'loss per metre follows the surface-loss total')
 assert.equal(lossMatrix.querySelectorAll('thead th').length, 2, 'loss matrix uses sections and mud types as columns')
 assert.equal(lossMatrix.querySelector('thead th:nth-child(2)').textContent, 'Surface holeOBM', 'loss header prints only section and mud type')
 assert.equal(sheet.querySelector('.dcr-mud-cost tbody tr td').textContent, 'Surface hole · OBM', 'mud chemical row prints only section and mud type')
@@ -327,6 +329,23 @@ await enterUsage('Casing', '3')
 await click(selectorSubmit(), 'tangible add button remains available')
 assert.deepEqual(selectedRows?.map(row => [row.item.id, row.quantity]), [['tangible-1', '3']], 'selected tangible is returned as a bulk row')
 assert.equal(selectorKind, 'tangible')
+
+// Applying a consumables set shows every set item without checkboxes. Quantities
+// start empty, empty rows are ignored, and only entered usage is returned.
+selectedRows = null
+await act(async () => selectorRoot.render(<ThemeProvider theme={buildTheme('light')}>
+  <AdvancedSelectorDialog open title="Enter usage from set — Common mud chemicals" itemNoun="used chemical"
+    items={itemRows(catalogueItems.slice(0, 2))} quantityEntryOnly
+    rateText={item => `${item.currency} ${Number(item.rate).toFixed(2)}`}
+    onClose={() => {}} onAdd={rowsSelected => { selectedRows = rowsSelected; return null }}/>
+</ThemeProvider>))
+await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+assert.equal(document.querySelectorAll('input[type="checkbox"]').length, 0, 'set usage worksheet has no item checkboxes')
+assert.ok(document.body.textContent.includes('Leave empty to skip.'), 'set usage explains that blank quantities are ignored')
+assert.ok([...document.querySelectorAll('input[type="number"]')].every(input => input.value === ''), 'set usage quantities start empty rather than one')
+await enterUsage('Barite', '6')
+await click(selectorButton('Add entered items'), 'set usage accepts entered rows')
+assert.deepEqual(selectedRows?.map(row => [row.item.id, row.quantity]), [['chem-1', '6']], 'set usage excludes the chemical whose quantity remained empty')
 await act(async () => selectorRoot.unmount())
 
 // The AFE cost estimate reuses the same selector when adding tangibles.
@@ -368,9 +387,11 @@ for (const retained of ['New daily sheet', 'Well cost analysis', 'Filter by well
   assert.ok(register.includes(retained), `register retains ${retained}`)
 }
 const sheetPage = readFileSync('../frontend/src/pages/DailyCostSheet.tsx', 'utf8')
-for (const retained of ["'other_expenses'", 'Less other expenses', 'Other Expenses', 'Assign scope / depth / quantity', 'Cost report lead / lag', 'Lead / lag days', 'validLeadLagDays', 'MudCostMaterialBalance', 'label="Cost on this date"', 'Cumulative cost to date']) {
+for (const retained of ["'other_expenses'", 'Less other expenses', 'Other Expenses', 'Assign scope / depth / quantity', 'Cost report lead / lag', 'Lead / lag days', 'validLeadLagDays', 'MudCostMaterialBalance', 'label="Cost on this date"', 'Cumulative cost to date', 'quantityEntryOnly', 'Table total']) {
   assert.ok(sheetPage.includes(retained), `day sheet retains ${retained}`)
 }
+const costingSetsPage = readFileSync('../frontend/src/pages/CostingSets.tsx', 'utf8')
+assert.ok(costingSetsPage.includes('Advanced selector') && costingSetsPage.includes('selectionOnly'), 'costing-set maintenance uses the advanced multi-item selector')
 // The report settings are saved in the register, not typed into the print dialogs.
 for (const retired of ['Milestone label in report', 'leadLagKind']) {
   assert.ok(!sheetPage.includes(retired), `day sheet no longer asks for ${retired} at print time`)

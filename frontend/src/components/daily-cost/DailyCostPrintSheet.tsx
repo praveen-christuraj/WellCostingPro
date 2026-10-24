@@ -388,6 +388,11 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     ...metric,
     value: (row: MudSection) => decimalText(optionalText(row, metric.key)),
   }))
+  const surfaceLossPerMeter = (row: MudSection) => {
+    const depth = asNumber(sectionDepths.get(optionalText(row, 'hole_section_id') ?? row.section_id))
+    if (depth <= 0) return '—'
+    return decimalText(asNumber(optionalText(row, 'surface_loss_total')) / depth)
+  }
 
   /**
    * Cost vs AFE by item. The report day is split out of the cumulative cost:
@@ -513,6 +518,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
           <section className="dcr-panel dcr-loss dcr-loss-matrix"><h2>Consumption / losses · cumulative matrix</h2><table><thead><tr><th>Loss measure</th>{mudSections.map(row => <th key={row.section_id}>{sectionNameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
             <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Surface losses</th></tr>
             {lossMetricRows.filter(metric => metric.group === 'surface' || metric.group === 'surface-total').map(metric => <tr className={metric.group === 'surface-total' ? 'dcr-matrix-total' : ''} key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
+            <tr className="dcr-matrix-total"><th>Loss (bbl/m)</th>{mudSections.map(row => <td key={row.section_id} className="num">{surfaceLossPerMeter(row)}</td>)}</tr>
             <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Other losses</th></tr>
             {lossMetricRows.filter(metric => metric.group === 'other' || metric.group === 'other-total').map(metric => <tr className={metric.group === 'other-total' ? 'dcr-matrix-total' : ''} key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
             {lossMetricRows.filter(metric => metric.group === 'grand-total').map(metric => <tr className="dcr-matrix-grand" key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}

@@ -49,6 +49,11 @@ type Props = {
   allowZeroQuantity?: boolean
   footerNote?: string
   quantityLabel?: string
+  /** Select catalogue references without asking for a quantity (costing-set editor). */
+  selectionOnly?: boolean
+  /** Show every supplied item and add only rows whose optional quantity was entered. */
+  quantityEntryOnly?: boolean
+  initialSelectedIds?: string[]
 }
 
 const QUANTITY_PATTERN = /^\d+(?:\.\d{1,10})?$/
@@ -73,6 +78,9 @@ export function AdvancedSelectorDialog({
   allowZeroQuantity = false,
   footerNote,
   quantityLabel = 'Usage quantity',
+  selectionOnly = false,
+  quantityEntryOnly = false,
+  initialSelectedIds = [],
 }: Props) {
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const [quantities, setQuantities] = useState<Record<string, string>>({})
@@ -83,13 +91,13 @@ export function AdvancedSelectorDialog({
 
   useEffect(() => {
     if (!open) return
-    setSelected({})
+    setSelected(Object.fromEntries(initialSelectedIds.map(id => [id, true])))
     setQuantities({})
     setSearch('')
     setShowSelectedOnly(false)
     setSubmitted(false)
     setError('')
-  }, [open, title])
+  }, [open, title]) // initial selection is intentionally captured when the dialog opens
 
   const existing = useMemo(() => new Set(existingIds), [existingIds])
   const validQuantity = (value: string) => {
@@ -104,8 +112,9 @@ export function AdvancedSelectorDialog({
       `${item.code} ${item.name} ${item.description ?? ''} ${item.details ?? ''}`.toLowerCase().includes(query),
     )
   }, [items, search])
-  const visible = showSelectedOnly ? matching.filter(item => selected[item.id]) : matching
-  const selectedCount = items.filter(item => selected[item.id]).length
+  const visible = showSelectedOnly && !quantityEntryOnly ? matching.filter(item => selected[item.id]) : matching
+  const enteredCount = items.filter(item => (quantities[item.id] ?? '').trim()).length
+  const selectedCount = quantityEntryOnly ? enteredCount : items.filter(item => selected[item.id]).length
   const allVisibleSelected = visible.length > 0 && visible.every(item => selected[item.id])
   const someVisibleSelected = visible.some(item => selected[item.id]) && !allVisibleSelected
   const quantityHelper = allowZeroQuantity ? 'Zero or greater.' : 'Required, greater than zero.'
@@ -118,12 +127,14 @@ export function AdvancedSelectorDialog({
 
   const submit = () => {
     setSubmitted(true)
-    const rows = items.filter(item => selected[item.id]).map(item => ({ item, quantity: quantities[item.id] ?? '' }))
+    const rows = quantityEntryOnly
+      ? items.filter(item => (quantities[item.id] ?? '').trim()).map(item => ({ item, quantity: quantities[item.id] }))
+      : items.filter(item => selected[item.id]).map(item => ({ item, quantity: quantities[item.id] ?? '' }))
     if (!rows.length) {
       setError(`Select at least one ${itemNoun}.`)
       return
     }
-    const missing = rows.find(row => !validQuantity(row.quantity))
+    const missing = selectionOnly ? undefined : rows.find(row => !validQuantity(row.quantity))
     if (missing) {
       setShowSelectedOnly(true)
       setError(`Enter the ${quantityLabel.toLowerCase()} for ${missing.item.code} · ${missing.item.name}.`)
@@ -144,7 +155,8 @@ export function AdvancedSelectorDialog({
     subtitle={subtitle}
     onClose={onClose}
     onSubmit={submit}
-    submitLabel={`Add selected items (${selectedCount})`}
+    submitLabel={selectionOnly ? `Use selected items (${selectedCount})` : quantityEntryOnly ? `Add entered items (${enteredCount})` : `Add selected items (${selectedCount})`}
+    submitDisabled={selectedCount === 0}
     maxWidth="lg"
   >
     <Box display="grid" gap={1.5}>
@@ -155,9 +167,9 @@ export function AdvancedSelectorDialog({
           value={search}
           onChange={event => setSearch(event.target.value)}
           sx={{ flex: '1 1 260px' }}
-          helperText={`${items.length} available · ${selectedCount} selected · ${visible.length} shown`}
+          helperText={`${items.length} available · ${quantityEntryOnly ? `${enteredCount} with quantity` : `${selectedCount} selected`} · ${visible.length} shown`}
         />
-        <Button
+        {!quantityEntryOnly && <Button
           variant={showSelectedOnly ? 'contained' : 'outlined'}
           size="small"
           startIcon={showSelectedOnly ? <FilterAltOffRounded/> : <FilterAltRounded/>}
@@ -166,13 +178,13 @@ export function AdvancedSelectorDialog({
           sx={{ mt: .5 }}
         >
           {showSelectedOnly ? 'Show all items' : `Show selected only${selectedCount ? ` (${selectedCount})` : ''}`}
-        </Button>
+        </Button>}
       </Box>
 
       <Box sx={{ overflowX: 'auto', border: '1px solid', borderColor: 'divider' }}>
-        <Table size="small" aria-label={`${title} item list`} sx={{ minWidth: 720 }}>
+        <Table size="small" aria-label={`${title} item list`} sx={{ minWidth: selectionOnly ? 520 : 720 }}>
           <TableHead><TableRow>
-            <TableCell padding="checkbox">
+            {!quantityEntryOnly && <TableCell padding="checkbox">
               <Checkbox
                 checked={allVisibleSelected}
                 indeterminate={someVisibleSelected}
@@ -190,24 +202,24 @@ export function AdvancedSelectorDialog({
                   setError('')
                 }}
               />
-            </TableCell>
+            </TableCell>}
             <TableCell>Item</TableCell>
-            <TableCell>UOM</TableCell>
-            <TableCell align="right">Unit price</TableCell>
-            <TableCell>{quantityLabel}</TableCell>
+            {!selectionOnly && <TableCell>UOM</TableCell>}
+            {!selectionOnly && <TableCell align="right">Unit price</TableCell>}
+            {!selectionOnly && <TableCell>{quantityLabel}</TableCell>}
           </TableRow></TableHead>
           <TableBody>
             {visible.map(item => {
-              const checked = Boolean(selected[item.id])
-              const invalid = submitted && checked && !validQuantity(quantities[item.id] ?? '')
+              const checked = quantityEntryOnly ? Boolean((quantities[item.id] ?? '').trim()) : Boolean(selected[item.id])
+              const invalid = submitted && checked && !selectionOnly && !validQuantity(quantities[item.id] ?? '')
               return <TableRow key={item.id} selected={checked}>
-                <TableCell padding="checkbox">
+                {!quantityEntryOnly && <TableCell padding="checkbox">
                   <Checkbox
                     checked={checked}
                     inputProps={{ 'aria-label': `Select ${item.code} · ${item.name}` }}
                     onChange={event => toggle(item.id, event.target.checked)}
                   />
-                </TableCell>
+                </TableCell>}
                 <TableCell>
                   <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
                     <Typography fontSize={12.5} fontWeight={700}>{item.name}</Typography>
@@ -216,30 +228,30 @@ export function AdvancedSelectorDialog({
                   <Typography fontSize={11} color="text.secondary">{item.code}</Typography>
                   {item.details && <Typography fontSize={11} color="text.secondary">{item.details}</Typography>}
                 </TableCell>
-                <TableCell>{item.uom || 'unit'}</TableCell>
-                <TableCell align="right" className="tnum">
+                {!selectionOnly && <TableCell>{item.uom || 'unit'}</TableCell>}
+                {!selectionOnly && <TableCell align="right" className="tnum">
                   {rateText ? rateText(item) : item.rate}
-                </TableCell>
-                <TableCell>
+                </TableCell>}
+                {!selectionOnly && <TableCell>
                   <TextField
                     size="small"
                     type="number"
                     label={`${quantityLabel} for ${item.name}`}
                     value={quantities[item.id] ?? ''}
-                    disabled={!checked}
-                    required={checked}
+                    disabled={!quantityEntryOnly && !checked}
+                    required={!quantityEntryOnly && checked}
                     error={invalid}
                     onChange={event => {
                       setQuantities(current => ({ ...current, [item.id]: event.target.value }))
                       setError('')
                     }}
                     inputProps={{ min: allowZeroQuantity ? 0 : 0.0000000001, step: '0.0000000001' }}
-                    helperText={invalid ? quantityHelper : ' '}
+                    helperText={invalid ? quantityHelper : quantityEntryOnly ? 'Leave empty to skip.' : ' '}
                   />
-                </TableCell>
+                </TableCell>}
               </TableRow>
             })}
-            {!visible.length && <TableRow><TableCell colSpan={5}>
+            {!visible.length && <TableRow><TableCell colSpan={selectionOnly ? 2 : quantityEntryOnly ? 4 : 5}>
               <Typography color="text.secondary" textAlign="center" py={2}>
                 {showSelectedOnly
                   ? (selectedCount
