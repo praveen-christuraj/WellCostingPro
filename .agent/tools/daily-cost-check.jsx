@@ -79,8 +79,12 @@ const mudReconciliation = { currency: 'EUR', sections: [{ section_id: 'section-1
   verti_g_mud_on_cuttings: '1', centrifuge: '2', by_pass: '3', evaporation: '4', trips: '5', surface_loss_total: '15',
   mud_cleaner: '6', formation_seepage: '7', pit_cleaning_dump: '8', left_in_hole: '9', other_losses: '10', other_loss_total: '40', total_losses: '55' }] }
 const mudBalance = { view: 'section', rows: [{ section_id: 'section-1', opening_stock: '20', receipt: '30', additions: '60', consumption_losses: '15', closing_stock: '95' }] }
+const ndtInspections = [
+  { id: 'ndt-1', description: 'Drill pipe inspection', quantity_received: '20', quantity_consumed: '18', quantity_backloaded_good: '15', quantity_backloaded_bad: '3', remarks: 'Batch A' },
+  { id: 'ndt-2', description: 'BHA inspection', quantity_received: '4', quantity_consumed: '4', quantity_backloaded_good: '3', quantity_backloaded_bad: '1', remarks: '' },
+]
 const root = createRoot(document.getElementById('root'))
-await act(async () => root.render(<DailyCostPrintSheet report={{ title: 'Well costing sheet', period: 'Inception to date', days: [day, second], mudReconciliation, mudBalance, milestoneLabel: 'Side track on date / time', leadLagKind: 'LEAD', leadLagDays: '2.75' }}/>))
+await act(async () => root.render(<DailyCostPrintSheet report={{ title: 'Well costing sheet', period: 'Inception to date', days: [day, second], mudReconciliation, mudBalance, ndtInspections, milestoneLabel: 'Side track on date / time', leadLagKind: 'LEAD', leadLagDays: '2.75' }}/>))
 let sheet = document.querySelector('.afe-print-sheet')
 assert.ok(sheet, 'print sheet is a body portal')
 assert.equal(sheet.parentElement, document.body)
@@ -146,8 +150,11 @@ for (const heading of [
 const lowerRow = sheet.querySelector('.dcr-bottomline')
 assert.deepEqual([...lowerRow.children].map(node => node.classList.contains('dcr-stack') ? 'stack' : node.classList.contains('dcr-mud-cost') ? 'mud' : 'loss'),
   ['stack', 'mud', 'loss'], 'lower-row placement stays LIH/AFE stack, mud cost, then consumption/losses')
-assert.deepEqual([...lowerRow.querySelector('.dcr-stack').children].map(node => node.classList.contains('dcr-lih') ? 'LIH' : 'AFE'),
-  ['LIH', 'AFE'], 'LIH and AFE summary remain a double-decker in the bottom-left slot')
+assert.deepEqual([...lowerRow.querySelector('.dcr-stack').children].map(node => node.classList.contains('dcr-lih') ? 'LIH' : node.classList.contains('dcr-overall') ? 'AFE' : 'NDT'),
+  ['LIH', 'AFE', 'NDT'], 'NDT follows LIH and AFE at the bottom-left only when records exist')
+const ndtTable = lowerRow.querySelector('.dcr-ndt')
+assert.ok(ndtTable.textContent.includes('Drill pipe inspection') && ndtTable.textContent.includes('20.00') && ndtTable.textContent.includes('18.00') && ndtTable.textContent.includes('15.00') && ndtTable.textContent.includes('3.00'), 'NDT table prints received, consumed and good/bad backloaded quantities')
+assert.ok(ndtTable.textContent.includes('Batch A'), 'NDT table keeps the compact line remark')
 assert.ok(sheet.querySelector('.dcr-side > .dcr-incident:last-child').textContent.includes('UPA summary'), 'UPA remains the far-right lower panel')
 assert.ok(sheet.textContent.includes('Side track on date / time'), 'the report prints the user-edited milestone label')
 assert.ok(sheet.querySelector('.dcr-titlebar h1').textContent.endsWith('(LEAD: 2.75 days)'), 'selected decimal lead days print at the end of the title')
@@ -235,6 +242,8 @@ assert.ok(bulkSheet.classList.contains('daily-cost-print-sheet--bulk'), 'bulk pr
 assert.equal(bulkSheet.querySelectorAll('.daily-report-cover').length, 2, 'every selected report contributes its first page')
 assert.equal(bulkSheet.querySelectorAll('.daily-report-details').length, 0, 'bulk print omits the cumulative schedules')
 assert.equal(bulkSheet.querySelectorAll('.dcr-titlebar h1').length, 2, 'each selected report keeps its own title bar')
+assert.equal(bulkSheet.querySelectorAll('.dcr-ndt').length, 0, 'reports without NDT records retain the original layout')
+assert.ok([...bulkSheet.querySelectorAll('.dcr-stack')].every(stack => stack.children.length === 2 && !stack.classList.contains('dcr-stack--ndt')), 'empty NDT data leaves the LIH/AFE double-decker unchanged')
 await act(async () => root.unmount())
 
 // The shared advanced selector collects many priced items at once, refuses a checked

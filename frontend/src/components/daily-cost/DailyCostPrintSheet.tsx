@@ -7,6 +7,7 @@ import {
 } from '../../lib/dailyCost'
 import { MUD_COST_LOSS_METRICS, type MudCostMaterialBalance, type MudCostReconciliation } from '../../lib/mudCost'
 import { lihMeasure, type LihCostReport } from '../../lib/lihCost'
+import type { NdtEntry } from '../../lib/ndtInspection'
 import { compareServiceCodes, compareServiceGroups, serviceGroupLabel } from '../../lib/serviceGroups'
 import { depthToMeters } from '../../lib/units'
 
@@ -21,6 +22,8 @@ export type CostPrintReport = {
   mudBalance?: MudCostMaterialBalance | null
   /** Manual LIH Cost Register for the printed well/period. */
   lihReport?: LihCostReport | null
+  /** Active manual NDT inspection lines for the printed well/scope. */
+  ndtInspections?: NdtEntry[]
   sections?: DailyCostSectionOption[]
   reportKind?: 'daily' | 'well'
   /**
@@ -346,6 +349,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
   const lihTotal = asNumber(summary?.totals.lih_cost ?? lihBucket?.total ?? 0)
   const lihLineCount = summary?.totals.lih_line_count ?? lihBucket?.line_count ?? 0
   const lihEntryCount = summary?.totals.lih_entries ?? lihBucket?.entry_count ?? 0
+  const ndtInspections = report.ndtInspections ?? []
   const actualIncludingLih = totalActual + lihTotal
   const afeAvailable = totalPlanned - lihTotal
   const balance = asNumber(
@@ -507,9 +511,10 @@ function ReportCover({ report }: { report: CostPrintReport }) {
         <div className="dcr-bottomline">
           {/* The LIH register panel owns the bottom-left slot directly under
               Tangibles; the AFE vs actual summary follows it downward. */}
-          <div className="dcr-stack">
+          <div className={`dcr-stack${ndtInspections.length ? ' dcr-stack--ndt' : ''}`}>
             <section className="dcr-panel dcr-lih"><h2>LIH cost · manual register deduction from the AFE</h2><div><span>LIH cost <strong>{printMoney(lihTotal, currency)}</strong></span><span className="dcr-lih-deduct">Deducted from AFE <strong>{printMoney(lihTotal, currency)}</strong></span><span>Actual incl. LIH <strong>{printMoney(actualIncludingLih, currency)}</strong></span><span>AFE available after LIH <strong>{printMoney(afeAvailable, currency)}</strong></span></div><p className="dcr-lih-note">{lihEntryCount ? `${lihLineCount} item${lihLineCount === 1 ? '' : 's'} across ${lihEntryCount} LIH register day${lihEntryCount === 1 ? '' : 's'} · item detail prints on the cumulative pages.` : 'No LIH cost recorded for this report.'}</p></section>
             <section className="dcr-panel dcr-overall"><h2>AFE vs actual summary</h2><table><tbody><tr><th>Services</th><td>{printMoney(servicePosition.planned, currency)}</td><td>{printMoney(servicePosition.actual, currency)}</td></tr><tr><th>Consumables</th><td>{printMoney(consumablePosition.planned, currency)}</td><td>{printMoney(consumablePosition.actual, currency)}</td></tr><tr><th>Tangibles</th><td>{printMoney(tangiblePosition.planned, currency)}</td><td>{printMoney(tangiblePosition.actual, currency)}</td></tr><tr><th>Other expenses</th><td>—</td><td>{printMoney(otherExpenses, currency)}</td></tr><tr><th>LIH cost · register</th><td>—</td><td>{printMoney(lihTotal, currency)}</td></tr><tr className="dcr-total"><th>Total</th><td>{printMoney(totalPlanned, currency)}</td><td>{printMoney(actualIncludingLih, currency)}</td></tr></tbody></table><p>AFE available = {printMoney(balance, currency)} · {percent(actualIncludingLih, totalPlanned)} used</p></section>
+            {ndtInspections.length > 0 && <section className="dcr-panel dcr-ndt"><h2>NDT inspection register</h2><table><thead><tr><th>Description</th><th>Received</th><th>Consumed</th><th>Backload good</th><th>Backload bad</th></tr></thead><tbody>{ndtInspections.map(row => <tr key={row.id}><td>{row.description}{row.remarks && <span>{row.remarks}</span>}</td><td className="num">{decimalText(row.quantity_received)}</td><td className="num">{decimalText(row.quantity_consumed)}</td><td className="num">{decimalText(row.quantity_backloaded_good)}</td><td className="num">{decimalText(row.quantity_backloaded_bad)}</td></tr>)}</tbody></table></section>}
           </div>
           <section className="dcr-panel dcr-mud-cost"><h2>Mud chemical cost · section-wise</h2><table><thead><tr><th>Section / mud</th><th>Planned</th><th>Actual</th><th>Reconciled</th></tr></thead><tbody>{mudSections.slice(0, 5).map(row => {
             const sectionFactor = summary?.factors.find(item => item.dimension === 'section')?.rows.find(item => item.code === ('section_code' in row ? row.section_code : ''))

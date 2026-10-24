@@ -9,6 +9,7 @@ import {
 } from '../../lib/dailyCost'
 import type { MudCostMaterialBalance, MudCostReconciliation } from '../../lib/mudCost'
 import type { LihCostReport } from '../../lib/lihCost'
+import type { NdtEntry, NdtScope } from '../../lib/ndtInspection'
 import { useCostPrint, type CostPrintReport } from './DailyCostPrintSheet'
 
 /**
@@ -53,8 +54,10 @@ export function BulkDailyCostPrintDialog({ open, onClose, entries, wells }: {
     : '—'
 
   /** Fetch a report context (mud and LIH panels) for one saved day. */
-  const loadContext = async (entry: DailyCostEntry, rigId: string) => {
-    const [mudReconciliation, mudBalance, lihReport] = await Promise.all([
+  const loadContext = async (entry: DailyCostEntry, rigId: string, scope?: NdtScope) => {
+    const ndtParams = new URLSearchParams({ well_id: entry.well_id })
+    if (scope) ndtParams.set('scope', scope)
+    const [mudReconciliation, mudBalance, lihReport, ndtInspections] = await Promise.all([
       rigId
         ? api<MudCostReconciliation>(`/mud-cost/reconciliation?${new URLSearchParams({
           rig_id: rigId, well_id: entry.well_id, to: entry.cost_date, include_draft: 'true',
@@ -68,8 +71,9 @@ export function BulkDailyCostPrintDialog({ open, onClose, entries, wells }: {
       api<LihCostReport>(`/lih-cost/wells/${entry.well_id}/report?${new URLSearchParams({
         well_id: entry.well_id, from: entry.cost_date, to: entry.cost_date,
       })}`).catch(() => null),
+      api<NdtEntry[]>(`/ndt-inspections/entries?${ndtParams}`).catch(() => []),
     ])
-    return { mudReconciliation, mudBalance, lihReport }
+    return { mudReconciliation, mudBalance, lihReport, ndtInspections }
   }
 
   const submit = async () => {
@@ -100,7 +104,7 @@ export function BulkDailyCostPrintDialog({ open, onClose, entries, wells }: {
           continue
         }
         const well = wells.find(item => item.id === entry.well_id)
-        const context = await loadContext(entry, well?.rig_id ?? entry.rig_id)
+        const context = await loadContext(entry, well?.rig_id ?? entry.rig_id, saved.progress?.scope)
         reports.push({
           title: costReportTitle('daily', [saved.progress?.scope], entry.well_name),
           period: displayDate(entry.cost_date),
@@ -113,6 +117,7 @@ export function BulkDailyCostPrintDialog({ open, onClose, entries, wells }: {
           mudReconciliation: context.mudReconciliation,
           mudBalance: context.mudBalance,
           lihReport: context.lihReport,
+          ndtInspections: context.ndtInspections,
           sections: well?.sections,
           reportKind: 'daily',
         })
