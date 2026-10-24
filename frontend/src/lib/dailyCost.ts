@@ -481,7 +481,10 @@ export type DailyCostMudSectionReconciliation = {
   section_id: string; section_label: string
   mud_type: string | null; mud_type_label: string
   is_configured: boolean; is_wbm: boolean
-  currency: string; base_rate: string; actual_cost: string
+  currency: string; base_rate: string
+  /* The section's own AFE Mud Chemicals allowance; null when no locked plan exists. */
+  planned_cost: string | null
+  actual_cost: string
   reconciled_cost: string | null; cost_per_bbl: string | null
   consumption_losses: string; adjustment: string | null; remarks: string
 }
@@ -489,6 +492,8 @@ export type DailyCostMudReconciliation = {
   available: boolean; currency: string
   actual_cost: string; reconciled_cost: string; unreconciled_actual_cost: string
   comparison_cost: string; adjustment: string
+  /* Whole-well AFE mud chemicals allowance, including sections with no activity yet. */
+  planned_cost: string | null
   latest_cost_per_bbl: string | null; latest_cost_per_bbl_section: string
   latest_cost_per_bbl_date: string | null
   configured_section_count: number; unconfigured_section_count: number

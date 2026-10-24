@@ -75,7 +75,7 @@ const second = { ...day, entry: { ...day.entry, id: 'd2', afe_id: 'afe2', afe_co
 }
 day.entry.section_depths = [{ hole_section_id: 'section-1', section_code: 'SURFACE', section_name: 'Surface hole', actual_depth: '1234.567', depth_unit: 'm', entered_depth: '1234.567', entered_unit: 'm', daily_cost_code: 'DC-1' }]
 second.entry.section_depths = day.entry.section_depths
-const mudReconciliation = { currency: 'EUR', sections: [{ section_id: 'section-1', hole_section_id: 'section-1', section_label: 'SURFACE · Surface hole · Drilling · 0–1,500', mud_type: 'OBM', additions: '60', total_mud: '90', consumption_losses: '15', cost_per_bbl: '12.5', reconciled_cost: '187.5', actual_cost: '200',
+const mudReconciliation = { currency: 'EUR', total_planned_cost: '3500', sections: [{ section_id: 'section-1', hole_section_id: 'section-1', section_label: 'SURFACE · Surface hole · Drilling · 0–1,500', mud_type: 'OBM', planned_cost: '3500', additions: '60', total_mud: '90', consumption_losses: '15', cost_per_bbl: '12.5', reconciled_cost: '187.5', actual_cost: '200',
   verti_g_mud_on_cuttings: '1', centrifuge: '2', by_pass: '3', evaporation: '4', trips: '5', surface_loss_total: '15',
   mud_cleaner: '6', formation_seepage: '7', pit_cleaning_dump: '8', left_in_hole: '9', other_losses: '10', other_loss_total: '40', total_losses: '55' }] }
 const mudBalance = { view: 'section', rows: [{ section_id: 'section-1', opening_stock: '20', receipt: '30', additions: '60', consumption_losses: '15', closing_stock: '95' }] }
@@ -188,6 +188,12 @@ assert.equal(lossLabels.indexOf('Loss (bbl/m)'), lossLabels.indexOf('Surface los
 assert.equal(lossMatrix.querySelectorAll('thead th').length, 2, 'loss matrix uses sections and mud types as columns')
 assert.equal(lossMatrix.querySelector('thead th:nth-child(2)').textContent, 'Surface holeOBM', 'loss header prints only section and mud type')
 assert.equal(sheet.querySelector('.dcr-mud-cost tbody tr td').textContent, 'Surface hole · OBM', 'mud chemical row prints only section and mud type')
+const mudCostPanel = sheet.querySelector('.dcr-mud-cost')
+assert.equal(mudCostPanel.querySelector('thead th:nth-child(2)').textContent, 'Planned (AFE)', 'planned mud chemicals are labelled as the section AFE allowance')
+assert.equal(mudCostPanel.querySelector('tbody tr td:nth-child(2)').textContent, '€3,500.00', 'planned mud chemicals print the section AFE allowance instead of the section plan')
+const mudCostTotal = mudCostPanel.querySelector('tfoot tr')
+assert.deepEqual([...mudCostTotal.cells].map(cell => cell.textContent), ['Total', '€3,500.00', '€200.00', '€187.50'], 'mud chemical totals print planned, actual and reconciled for every section')
+assert.equal(mudCostPanel.querySelector('.dcr-mud-note').textContent, 'AFE mud chemicals allowance €3,500.00 · every section allowance is shown above.', 'the note ties the printed plan back to the whole-well AFE allowance')
 assert.equal(sheet.querySelector('.dcr-tangibles span:first-child strong').textContent, '€4,000.00', 'daily report reads the tangible AFE amount from its locked budget line')
 const afeSummaryNote = sheet.querySelector('.dcr-overall p').textContent
 assert.equal(afeSummaryNote, 'AFE available = €6,900.00 · 1.43% used', 'AFE summary labels the final balance as the available amount')
@@ -212,7 +218,11 @@ const summaryWithoutTangibleFactor = {
     { code: 'Services', planned: '3000' }, { code: 'Consumables', planned: '16000' },
   ] }],
   budget_lines: second.comparison.budget_lines,
-  progress: [], mud_cost: { sections: [] },
+  progress: [], mud_cost: { planned_cost: '9000', sections: [{
+    section_id: 'section-2', section_label: 'INTER · Intermediate hole · Drilling · 1,500–3,000',
+    mud_type: 'WBM', planned_cost: '9000', actual_cost: '1200', reconciled_cost: '1200',
+    consumption_losses: '30',
+  }] },
 }
 await act(async () => root.render(<DailyCostPrintSheet coversOnly report={{
   title: 'Daily Cost Report', period: '10 Oct 2026', days: [second], overviewDays: [second],
@@ -221,6 +231,12 @@ await act(async () => root.render(<DailyCostPrintSheet coversOnly report={{
 const summarySheet = document.querySelector('.afe-print-sheet')
 assert.equal(summarySheet.querySelector('.dcr-tangibles span:first-child strong').textContent, '€4,000.00',
   'well-summary printing falls back to the locked tangible AFE budget when its actual factor is absent')
+const summaryMud = summarySheet.querySelector('.dcr-mud-cost')
+assert.equal(summaryMud.querySelector('tbody tr td:nth-child(2)').textContent, '€9,000.00',
+  'well-summary printing reads planned mud cost from the section AFE allowance on the summary payload')
+assert.equal(summaryMud.querySelector('.dcr-mud-note').textContent,
+  'AFE mud chemicals allowance €9,000.00 · every section allowance is shown above.',
+  'the well-summary note ties the printed mud plan back to the AFE')
 let trigger
 function PrintHarness() { const hook = useCostPrint(); trigger = hook.print; return hook.printSheet }
 await act(async () => root.render(<PrintHarness/>))

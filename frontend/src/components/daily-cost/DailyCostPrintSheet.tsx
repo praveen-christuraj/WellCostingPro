@@ -368,6 +368,35 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     hole_section_id: key, section_code: key, section_name: key, from_depth: '0', to_depth: depth, total_days: '0', phases: [],
   }))
   const mudSections = report.mudReconciliation?.sections ?? summary?.mud_cost?.sections ?? []
+  /*
+   * Planned mud chemicals are the AFE's own "Mud Chemicals" allowance for each
+   * section. They must never be read from the section factor cut, which sums
+   * every AFE line booked to the section (services, tangibles and the other
+   * consumable categories) and therefore overstates the mud plan.
+   */
+  const mudRowLimit = 5
+  const mudPlannedTotal = mudSections.reduce<number | null>(
+    (total, row) => row.planned_cost == null ? total : (total ?? 0) + asNumber(row.planned_cost),
+    null,
+  )
+  const mudActualTotal = mudSections.reduce((total, row) => total + asNumber(row.actual_cost), 0)
+  const mudReconciledRows = mudSections.filter(row => row.reconciled_cost != null)
+  const mudReconciledTotal = mudReconciledRows.length
+    ? mudReconciledRows.reduce((total, row) => total + asNumber(row.reconciled_cost), 0)
+    : null
+  // The whole-well allowance keeps the printed plan tied to the AFE consumables
+  // schedule, even when a planned section has no mud activity to this date.
+  const mudWellPlanned = report.mudReconciliation?.total_planned_cost ?? summary?.mud_cost?.planned_cost ?? null
+  const mudUnallocatedPlan = mudWellPlanned == null ? 0 : asNumber(mudWellPlanned) - (mudPlannedTotal ?? 0)
+  const mudPlanNote = mudWellPlanned == null
+    ? 'No locked AFE mud chemicals allowance is available yet, so the planned column stays open.'
+    : `AFE mud chemicals allowance ${printMoney(mudWellPlanned, currency)}${
+      mudUnallocatedPlan > 0.005
+        ? ` · ${printMoney(mudUnallocatedPlan, currency)} is planned for sections with no mud activity to this date.`
+        : ' · every section allowance is shown above.'
+    }`
+  const mudPlanned = (row: (typeof mudSections)[number]) =>
+    row.planned_cost == null ? '—' : printMoney(row.planned_cost, currency)
   const mudBalances = new Map((report.mudBalance?.rows ?? []).map(row => [row.section_id, row]))
   const npt = incidentRows(coverDays, 'NPT')
   const upa = incidentRows(coverDays, 'UPA')
@@ -516,10 +545,11 @@ function ReportCover({ report }: { report: CostPrintReport }) {
             <section className="dcr-panel dcr-overall"><h2>AFE vs actual summary</h2><table><tbody><tr><th>Services</th><td>{printMoney(servicePosition.planned, currency)}</td><td>{printMoney(servicePosition.actual, currency)}</td></tr><tr><th>Consumables</th><td>{printMoney(consumablePosition.planned, currency)}</td><td>{printMoney(consumablePosition.actual, currency)}</td></tr><tr><th>Tangibles</th><td>{printMoney(tangiblePosition.planned, currency)}</td><td>{printMoney(tangiblePosition.actual, currency)}</td></tr><tr><th>Other expenses</th><td>—</td><td>{printMoney(otherExpenses, currency)}</td></tr><tr><th>LIH cost · register</th><td>—</td><td>{printMoney(lihTotal, currency)}</td></tr><tr className="dcr-total"><th>Total</th><td>{printMoney(totalPlanned, currency)}</td><td>{printMoney(actualIncludingLih, currency)}</td></tr></tbody></table><p>AFE available = {printMoney(balance, currency)} · {percent(actualIncludingLih, totalPlanned)} used</p></section>
             {ndtInspections.length > 0 && <section className="dcr-panel dcr-ndt"><h2>NDT Inspection Details</h2><table><colgroup><col/><col/><col/><col/><col/></colgroup><thead><tr><th rowSpan={2}>Description</th><th rowSpan={2}>Received</th><th rowSpan={2}>Consumed</th><th colSpan={2}>Backloads</th></tr><tr><th>Good</th><th>Bad</th></tr></thead><tbody>{ndtInspections.map(row => <tr key={row.id}><td>{row.description}</td><td className="num">{decimalText(row.quantity_received)}</td><td className="num">{decimalText(row.quantity_consumed)}</td><td className="num">{decimalText(row.quantity_backloaded_good)}</td><td className="num">{decimalText(row.quantity_backloaded_bad)}</td></tr>)}</tbody></table></section>}
           </div>
-          <section className="dcr-panel dcr-mud-cost"><h2>Mud chemical cost · section-wise</h2><table><thead><tr><th>Section / mud</th><th>Planned</th><th>Actual</th><th>Reconciled</th></tr></thead><tbody>{mudSections.slice(0, 5).map(row => {
-            const sectionFactor = summary?.factors.find(item => item.dimension === 'section')?.rows.find(item => item.code === ('section_code' in row ? row.section_code : ''))
-            return <tr key={row.section_id}><td>{sectionNameOnly(row.section_label)} · {row.mud_type ?? 'Not configured'}</td><td className="num">{printMoney(sectionFactor?.planned ?? 0, currency)}</td><td className="num">{printMoney(row.actual_cost, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : printMoney(row.reconciled_cost, currency)}</td></tr>
-          })}{!mudSections.length && <tr><td colSpan={4} className="dcr-none">No mud reconciliation data.</td></tr>}</tbody></table></section>
+          <section className="dcr-panel dcr-mud-cost"><h2>Mud chemical cost · section-wise</h2><table><thead><tr><th>Section / mud</th><th>Planned (AFE)</th><th>Actual</th><th>Reconciled</th></tr></thead><tbody>{mudSections.slice(0, mudRowLimit).map(row => (
+            <tr key={row.section_id}><td>{sectionNameOnly(row.section_label)} · {row.mud_type ?? 'Not configured'}</td><td className="num">{mudPlanned(row)}</td><td className="num">{printMoney(row.actual_cost, currency)}</td><td className="num">{row.reconciled_cost == null ? '—' : printMoney(row.reconciled_cost, currency)}</td></tr>
+          ))}{!mudSections.length && <tr><td colSpan={4} className="dcr-none">No mud reconciliation data.</td></tr>}</tbody>
+          {mudSections.length > 0 && <tfoot><tr><th>Total{mudSections.length > mudRowLimit ? ` · all ${mudSections.length} sections` : ''}</th><th className="num">{mudPlannedTotal == null ? '—' : printMoney(mudPlannedTotal, currency)}</th><th className="num">{printMoney(mudActualTotal, currency)}</th><th className="num">{mudReconciledTotal == null ? '—' : printMoney(mudReconciledTotal, currency)}</th></tr></tfoot>}</table>
+          <p className="dcr-mud-note">{mudPlanNote}</p></section>
           <section className="dcr-panel dcr-loss dcr-loss-matrix"><h2>Consumption / losses · cumulative matrix</h2><table><thead><tr><th>Loss measure</th>{mudSections.map(row => <th key={row.section_id}>{sectionNameOnly(row.section_label)}<span>{row.mud_type ?? 'Not configured'}</span></th>)}</tr></thead><tbody>
             <tr className="dcr-matrix-group"><th colSpan={Math.max(2, mudSections.length + 1)}>Surface losses</th></tr>
             {lossMetricRows.filter(metric => metric.group === 'surface' || metric.group === 'surface-total').map(metric => <tr className={metric.group === 'surface-total' ? 'dcr-matrix-total' : ''} key={metric.key}><th>{metric.label}</th>{mudSections.map(row => <td key={row.section_id} className="num">{metric.value(row)}</td>)}</tr>)}
