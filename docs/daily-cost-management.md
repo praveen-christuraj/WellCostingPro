@@ -68,6 +68,11 @@
    - `POST /api/v1/lih-cost/import` bulk-imports up to 2,000 items for one well from `.xlsx`/`.csv`, validates every row first, groups the valid rows by their optional Date column and appends them to the matching day. Row-numbered errors appear beside the import preview while valid rows still save.
    - Permissions: `daily-cost:create` to open a day, `daily-cost:update` to save an existing day, `daily-cost:delete` to remove rows or the day, `daily-cost:import` for bulk import, `daily-cost:export` for the register and worksheet exports. Every worksheet save, bulk removal and import is audited.
 
+8. **NDT Inspection Register** (`/daily-cost/ndt-inspections`)
+   - The user chooses a rig, well and Drilling/Completion scope once, adds multiple inspection rows in the dialog, and saves the batch in one transaction. Each Description, Quantity Received, Quantity Consumed, Backloaded Good, Backloaded Bad and Remarks row is stored and displayed separately.
+   - Standard rig/well/scope/date filters, CSV/XLSX/PDF export auditing, spreadsheet import, soft delete, restore and permanent delete use the existing `daily-cost:*` permissions. The API validates tenant ownership and that the well belongs to the selected rig; every quantity is a non-negative `Numeric(28,10)` column and no JSON data is stored.
+   - Daily Cost Deleted Entries loads deleted register rows independently from active reference metadata, so an archived well or AFE cannot prevent the recovery page from rendering.
+
 ## Awaiting the reference daily sheet
 
 No reference sheet was attached to the request implemented in this increment. Existing capture fields and pricing/approval/import/delete functionality have been retained; exact reference-template parity is **not claimed**.

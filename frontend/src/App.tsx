@@ -39,6 +39,7 @@ const DailyCostAnalysis = lazy(() => import('./pages/DailyCostAnalysis'))
 const LihCostRegister = lazy(() => import('./pages/LihCostRegister'))
 const FuelCostRegister = lazy(() => import('./pages/FuelCostRegister'))
 const MudCostAnalysis = lazy(() => import('./pages/MudCostAnalysis'))
+const NdtInspectionRegister = lazy(() => import('./pages/NdtInspectionRegister'))
 const CostingSets = lazy(() => import('./pages/CostingSets'))
 const Reports = lazy(() => import('./pages/Reports'))
 const WellCostComparisonReport = lazy(() => import('./pages/WellCostComparisonReport'))
@@ -117,11 +118,12 @@ export default function App() {
           <Route path="afe/estimate/:afeId" element={<Guard permission="afe:read"><AfeEstimate/></Guard>}/>
           <Route path="daily-cost" element={<Guard permission="daily-cost:read"><DailyCostManagement/></Guard>}/>
           <Route path="daily-cost/entries/:entryId" element={<Guard permission="daily-cost:read"><DailyCostSheet/></Guard>}/>
-          <Route path="daily-cost/fuel-cost-register" element={<Guard permission="daily-cost:read"><FuelCostRegister/></Guard>}/>
+          <Route path="daily-cost/mud-cost-analysis" element={<Guard permission="daily-cost:read"><MudCostAnalysis/></Guard>}/>
           <Route path="daily-cost/lih-register" element={<Guard permission="daily-cost:read"><LihCostRegister/></Guard>}/>
+          <Route path="daily-cost/fuel-cost-register" element={<Guard permission="daily-cost:read"><FuelCostRegister/></Guard>}/>
+          <Route path="daily-cost/ndt-inspections" element={<Guard permission="daily-cost:read"><NdtInspectionRegister/></Guard>}/>
           <Route path="daily-cost/analysis" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
           <Route path="daily-cost/analysis/:wellId" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
-          <Route path="daily-cost/mud-cost-analysis" element={<Guard permission="daily-cost:read"><MudCostAnalysis/></Guard>}/>
           <Route path="reports" element={<GuardAny permissions={['rig-well:read', 'afe:read', 'daily-cost:read']}><Reports/></GuardAny>}/>
           <Route path="reports/well-cost-comparison" element={<Guard permission="rig-well:read"><GuardAny permissions={['afe:read', 'daily-cost:read']}><WellCostComparisonReport/></GuardAny></Guard>}/>
           <Route path="reports/consumption-losses" element={<Guard permission="daily-cost:read"><ConsumptionLossesReport/></Guard>}/>

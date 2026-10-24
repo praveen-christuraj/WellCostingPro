@@ -85,12 +85,22 @@ export default function DailyCostManagement() {
     setLoadError('')
     setSelected([])
     try {
-      const [entries, ref] = await Promise.all([
-        api<DailyCostEntry[]>(deletedView ? '/daily-cost/entries/deleted' : `/daily-cost/entries${filterQuery}`),
-        api<DailyCostReference>('/daily-cost/reference'),
-      ])
-      setRows(entries)
-      setReference(ref)
+      if (deletedView) {
+        // Deleted rows remain recoverable even when a deleted well/AFE makes the
+        // active reference-data request unavailable. The snapshots on each row
+        // are sufficient to render and restore the register.
+        const entries = await api<DailyCostEntry[]>('/daily-cost/entries/deleted')
+        setRows(entries)
+        try { setReference(await api<DailyCostReference>('/daily-cost/reference')) }
+        catch { setReference(null) }
+      } else {
+        const [entries, ref] = await Promise.all([
+          api<DailyCostEntry[]>(`/daily-cost/entries${filterQuery}`),
+          api<DailyCostReference>('/daily-cost/reference'),
+        ])
+        setRows(entries)
+        setReference(ref)
+      }
     } catch (caught) {
       setLoadError(caught instanceof Error ? caught.message : 'Daily Cost Management could not be loaded')
     } finally {

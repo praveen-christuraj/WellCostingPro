@@ -20,6 +20,7 @@ digraph WellCostingPro {
   "backend/app/api/lih_cost.py";
   "backend/app/api/master_data.py";
   "backend/app/api/mud_cost.py";
+  "backend/app/api/ndt_inspection.py";
   "backend/app/api/rbac.py";
   "backend/app/api/rig_well.py";
   "backend/app/api/service_master.py";
@@ -49,6 +50,7 @@ digraph WellCostingPro {
   "backend/app/models/lih_cost.py";
   "backend/app/models/master_data.py";
   "backend/app/models/mud_cost.py";
+  "backend/app/models/ndt_inspection.py";
   "backend/app/models/rig_well.py";
   "backend/app/models/service_master.py";
   "backend/app/models/sow_adjustment.py";
@@ -65,6 +67,7 @@ digraph WellCostingPro {
   "backend/app/schemas/lih_cost.py";
   "backend/app/schemas/master_data.py";
   "backend/app/schemas/mud_cost.py";
+  "backend/app/schemas/ndt_inspection.py";
   "backend/app/schemas/rbac.py";
   "backend/app/schemas/rig_well.py";
   "backend/app/schemas/service_master.py";
@@ -85,6 +88,7 @@ digraph WellCostingPro {
   "backend/app/services/fuel_cost.py";
   "backend/app/services/lih_cost.py";
   "backend/app/services/mud_cost.py";
+  "backend/app/services/ndt_inspection.py";
   "backend/app/services/provisioning.py";
   "backend/app/services/retention.py";
   "backend/app/services/sow_adjustment.py";
@@ -165,6 +169,7 @@ digraph WellCostingPro {
   "frontend/src/lib/lihCost.ts";
   "frontend/src/lib/masterData.ts";
   "frontend/src/lib/mudCost.ts";
+  "frontend/src/lib/ndtInspection.ts";
   "frontend/src/lib/rigWell.ts";
   "frontend/src/lib/serviceGroups.ts";
   "frontend/src/lib/serviceMaster.ts";
@@ -197,6 +202,7 @@ digraph WellCostingPro {
   "frontend/src/pages/MasterDataOverview.tsx";
   "frontend/src/pages/MasterDataRecords.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx";
+  "frontend/src/pages/NdtInspectionRegister.tsx";
   "frontend/src/pages/OtherManagementOverview.tsx";
   "frontend/src/pages/Overview.tsx";
   "frontend/src/pages/Permissions.tsx";
@@ -279,6 +285,9 @@ digraph WellCostingPro {
   "backend/app/api/mud_cost.py" -> "backend/app/api/deps.py";
   "backend/app/api/mud_cost.py" -> "backend/app/schemas/mud_cost.py";
   "backend/app/api/mud_cost.py" -> "backend/app/services/__init__.py";
+  "backend/app/api/ndt_inspection.py" -> "backend/app/api/deps.py";
+  "backend/app/api/ndt_inspection.py" -> "backend/app/schemas/ndt_inspection.py";
+  "backend/app/api/ndt_inspection.py" -> "backend/app/services/__init__.py";
   "backend/app/api/rbac.py" -> "backend/app/api/deps.py";
   "backend/app/api/rbac.py" -> "backend/app/core/security.py";
   "backend/app/api/rbac.py" -> "backend/app/models/__init__.py";
@@ -343,6 +352,7 @@ digraph WellCostingPro {
   "backend/app/models/__init__.py" -> "backend/app/models/lih_cost.py";
   "backend/app/models/__init__.py" -> "backend/app/models/master_data.py";
   "backend/app/models/__init__.py" -> "backend/app/models/mud_cost.py";
+  "backend/app/models/__init__.py" -> "backend/app/models/ndt_inspection.py";
   "backend/app/models/__init__.py" -> "backend/app/models/rig_well.py";
   "backend/app/models/__init__.py" -> "backend/app/models/service_master.py";
   "backend/app/models/__init__.py" -> "backend/app/models/sow_adjustment.py";
@@ -366,6 +376,8 @@ digraph WellCostingPro {
   "backend/app/models/mud_cost.py" -> "backend/app/core/database.py";
   "backend/app/models/mud_cost.py" -> "backend/app/domain/mud_cost.py";
   "backend/app/models/mud_cost.py" -> "backend/app/models/rig_well.py";
+  "backend/app/models/ndt_inspection.py" -> "backend/app/core/database.py";
+  "backend/app/models/ndt_inspection.py" -> "backend/app/models/rig_well.py";
   "backend/app/models/rig_well.py" -> "backend/app/core/database.py";
   "backend/app/models/rig_well.py" -> "backend/app/models/master_data.py";
   "backend/app/models/service_master.py" -> "backend/app/domain/service_groups.py";
@@ -385,6 +397,7 @@ digraph WellCostingPro {
   "backend/app/schemas/lih_cost.py" -> "backend/app/core/precision.py";
   "backend/app/schemas/mud_cost.py" -> "backend/app/core/precision.py";
   "backend/app/schemas/mud_cost.py" -> "backend/app/domain/mud_cost.py";
+  "backend/app/schemas/ndt_inspection.py" -> "backend/app/core/precision.py";
   "backend/app/schemas/rig_well.py" -> "backend/app/core/precision.py";
   "backend/app/schemas/service_master.py" -> "backend/app/domain/service_groups.py";
   "backend/app/schemas/sow_adjustment.py" -> "backend/app/core/precision.py";
@@ -453,6 +466,10 @@ digraph WellCostingPro {
   "backend/app/services/mud_cost.py" -> "backend/app/models/rig_well.py";
   "backend/app/services/mud_cost.py" -> "backend/app/schemas/mud_cost.py";
   "backend/app/services/mud_cost.py" -> "backend/app/services/__init__.py";
+  "backend/app/services/ndt_inspection.py" -> "backend/app/models/__init__.py";
+  "backend/app/services/ndt_inspection.py" -> "backend/app/models/entities.py";
+  "backend/app/services/ndt_inspection.py" -> "backend/app/schemas/ndt_inspection.py";
+  "backend/app/services/ndt_inspection.py" -> "backend/app/services/__init__.py";
   "backend/app/services/provisioning.py" -> "backend/app/core/database.py";
   "backend/app/services/provisioning.py" -> "backend/app/core/security.py";
   "backend/app/services/provisioning.py" -> "backend/app/models/__init__.py";
@@ -495,6 +512,7 @@ digraph WellCostingPro {
   "frontend/src/App.tsx" -> "frontend/src/pages/MasterDataOverview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/MasterDataRecords.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/MudCostAnalysis.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/pages/NdtInspectionRegister.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/OtherManagementOverview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Overview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Permissions.tsx";
@@ -740,6 +758,7 @@ digraph WellCostingPro {
   "frontend/src/context/ThemeContext.tsx" -> "frontend/src/theme.ts";
   "frontend/src/lib/dailyAllocations.ts" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/lib/dailyCost.ts" -> "frontend/src/lib/units.ts";
+  "frontend/src/lib/ndtInspection.ts" -> "frontend/src/lib/export.ts";
   "frontend/src/lib/rigWell.ts" -> "frontend/src/lib/units.ts";
   "frontend/src/lib/serviceMaster.ts" -> "frontend/src/lib/serviceGroups.ts";
   "frontend/src/lib/sowAdjustment.ts" -> "frontend/src/lib/afe.ts";
@@ -923,6 +942,13 @@ digraph WellCostingPro {
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/lib/mudCost.ts";
+  "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/components/DataTable.tsx";
+  "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/components/ImportDialog.tsx";
+  "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/lib/export.ts";
+  "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/lib/ndtInspection.ts";
   "frontend/src/pages/OtherManagementOverview.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/OtherManagementOverview.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/OtherManagementOverview.tsx" -> "frontend/src/lib/api.ts";

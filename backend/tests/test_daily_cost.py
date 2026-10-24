@@ -1733,3 +1733,34 @@ def test_current_afe_rates_are_versioned_without_repricing_history():
         assert '24' in rejected.text
         foreign = client.post(url, headers=login(client, 'south'))
         assert foreign.status_code == 404
+
+
+def test_ndt_inspections_bulk_lines_filters_and_deleted_lifecycle():
+    with TestClient(app) as client:
+        headers = login(client)
+        setup = _setup_daily_sheet(client, headers, create_entry=False)
+        payload = {
+            "rig_id": setup["rig"]["id"], "well_id": setup["well"]["id"], "scope": "drilling",
+            "lines": [
+                {"description": "Drill pipe inspection", "quantity_received": "20", "quantity_consumed": "18", "quantity_backloaded_good": "15", "quantity_backloaded_bad": "3", "remarks": "Batch A"},
+                {"description": "BHA inspection", "quantity_received": "4", "quantity_consumed": "4", "quantity_backloaded_good": "3", "quantity_backloaded_bad": "1", "remarks": "Batch B"},
+            ],
+        }
+        created = client.post("/api/v1/ndt-inspections/entries/bulk", headers=headers, json=payload)
+        assert created.status_code == 201, created.text
+        assert len(created.json()) == 2
+        assert created.json()[0]["rig_code"] == "RIG-01"
+
+        listed = client.get("/api/v1/ndt-inspections/entries", headers=headers, params={"rig_id": setup["rig"]["id"], "well_id": setup["well"]["id"], "scope": "drilling"})
+        assert listed.status_code == 200, listed.text
+        assert {row["description"] for row in listed.json()} == {"Drill pipe inspection", "BHA inspection"}
+        first_id = listed.json()[0]["id"]
+
+        deleted = client.post("/api/v1/ndt-inspections/entries/bulk-delete", headers=headers, json={"ids": [first_id]})
+        assert deleted.status_code == 200 and deleted.json()["affected_count"] == 1
+        assert len(client.get("/api/v1/ndt-inspections/entries/deleted", headers=headers).json()) == 1
+        restored = client.post("/api/v1/ndt-inspections/entries/bulk-restore", headers=headers, json={"ids": [first_id]})
+        assert restored.status_code == 200 and restored.json()["affected_count"] == 1
+
+        foreign = client.get("/api/v1/ndt-inspections/entries", headers=login(client, "south"))
+        assert foreign.status_code == 200 and foreign.json() == []
