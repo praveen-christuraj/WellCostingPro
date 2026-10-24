@@ -502,7 +502,7 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-loss-matrix .dcr-matrix-grand td { font-weight: 800; background: #E8EEF6 !important; border-top-width: .8pt; }
   .daily-cost-print-sheet .dcr-panel tfoot th,
   .daily-cost-print-sheet .dcr-panel tfoot td { font-weight: 800; background: #F3F6FA !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  /* AFE | up to last day | cost on the report day | cumulative | balance | used. */
+  /* AFE | up to last day | report day | cumulative by activity | balance | used. */
   .daily-cost-print-sheet .dcr-cost-panel { display: grid; grid-template-rows: max-content minmax(0, 1fr); }
   /* Both schedules use identical intrinsic rows. Stretching each table to its
      panel made the four-row Consumables schedule look much taller than the
@@ -511,13 +511,13 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
   .daily-cost-print-sheet .dcr-cost-panel th,
   .daily-cost-print-sheet .dcr-cost-panel td { padding: .57mm .34mm; }
   .daily-cost-print-sheet .dcr-cost-panel thead th { font-size: 5.3pt; line-height: 1.02; padding-top: .3mm; padding-bottom: .3mm; }
-  .daily-cost-print-sheet .dcr-cost-panel table th:first-child { width: 27%; }
-  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(2) { width: 12.5%; }
-  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(3),
-  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(4),
-  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(5) { width: 13.5%; }
-  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(6) { width: 12.5%; }
-  .daily-cost-print-sheet .dcr-cost-panel table th:nth-child(7) { width: 7%; }
+  .daily-cost-print-sheet .dcr-cost-panel col:nth-child(1) { width: 22%; }
+  .daily-cost-print-sheet .dcr-cost-panel col:nth-child(2) { width: 10%; }
+  .daily-cost-print-sheet .dcr-cost-panel col:nth-child(3),
+  .daily-cost-print-sheet .dcr-cost-panel col:nth-child(4) { width: 11%; }
+  .daily-cost-print-sheet .dcr-cost-panel col:nth-child(n+5):nth-child(-n+8) { width: 7.5%; }
+  .daily-cost-print-sheet .dcr-cost-panel col:nth-child(9) { width: 10%; }
+  .daily-cost-print-sheet .dcr-cost-panel col:nth-child(10) { width: 6%; }
   /* Group caption prints once at the start of each reporting group. */
   .daily-cost-print-sheet .dcr-group { font-size: 4.2pt; font-weight: 800; letter-spacing: .2pt; text-transform: uppercase; color: #4A6F96; }
   /* Long AFE schedules stay on page one by stepping the density down. */

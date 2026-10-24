@@ -98,28 +98,33 @@ assert.deepEqual(consumableNames, ['Mud Chemicals', 'Cement Additives', 'Fuel', 
 assert.equal(consumableNames.filter(name => name === 'Drill Bits').length, 1, 'drill bits print as one cumulative row')
 
 // Every cost table prints AFE, cumulative up to the previous day, the cost on
-// the report day, the cumulative total, the balance and the used percentage.
+// the report day, cumulative activity costs, balance and used percentage.
 const servicePanel = coverPanels[0]
-const serviceHeaders = [...servicePanel.querySelectorAll('thead th')].map(cell => cell.textContent)
-assert.equal(serviceHeaders.length, 7, 'a cost table prints AFE, last day, this day, cumulative, balance and used')
-assert.ok(serviceHeaders[0] === 'Cost item' && serviceHeaders[1] === 'AFE' && serviceHeaders[4] === 'Cumulative',
-  'the cost table keeps the item, AFE and cumulative columns')
-assert.ok(serviceHeaders[2].startsWith('Up to') && serviceHeaders[3].startsWith('Cost on'),
+const serviceHeaderRows = [...servicePanel.querySelectorAll('thead tr')]
+const primaryHeaders = [...serviceHeaderRows[0].querySelectorAll('th')].map(cell => cell.textContent)
+const cumulativeHeaders = [...serviceHeaderRows[1].querySelectorAll('th')].map(cell => cell.textContent)
+assert.ok(primaryHeaders[0] === 'Cost item' && primaryHeaders[1] === 'AFE' && primaryHeaders[4] === 'Cumulative',
+  'the cost table keeps the item, AFE and cumulative headings')
+assert.equal(serviceHeaderRows[0].querySelectorAll('th')[4].colSpan, 4, 'cumulative groups four activity-cost columns')
+assert.deepEqual(cumulativeHeaders, ['Planned', 'NPT', 'UPA', 'Total'], 'cumulative cost is split by activity and total')
+assert.equal(servicePanel.querySelectorAll('colgroup col').length, 10, 'the expanded report defines all ten leaf-column widths')
+assert.ok(primaryHeaders[2].startsWith('Up to') && primaryHeaders[3].startsWith('Cost on'),
   'the last-day and report-day columns are labelled with their dates')
 const serviceBodyRows = [...servicePanel.querySelectorAll('tbody tr')]
-assert.equal(serviceBodyRows[0].cells.length, 7, 'a service row prints seven cells')
+assert.equal(serviceBodyRows[0].cells.length, 10, 'a service row prints all ten cost columns')
 const mudLoggingSplit = serviceBodyRows.find(row => row.cells[0].textContent === 'Supervisions · Mud logging')
 assert.deepEqual([...mudLoggingSplit.cells].map(cell => cell.textContent),
-  ['Supervisions · Mud logging', '€1,000.00', '€250.00', '€50.00', '€300.00', '€700.00', '30.00%'],
-  'a service row prints the AFE, cost up to last day, cost on the report day and the cumulative total')
+  ['Supervisions · Mud logging', '€1,000.00', '€250.00', '€50.00', '€250.00', '€0.00', '€50.00', '€300.00', '€700.00', '30.00%'],
+  'a service row prints planned, NPT and UPA activity costs beside its cumulative total')
 const serviceFooter = [...servicePanel.querySelectorAll('tfoot tr:last-child th')].map(cell => cell.textContent)
 assert.deepEqual(serviceFooter,
-  ['Group total', '€3,000.00', '€500.00', '€200.00', '€700.00', '€2,300.00', '23.33%'],
-  'the services footer totals the last day, the report day and the cumulative cost')
-assert.equal(coverPanels[1].querySelectorAll('thead th').length, 7, 'consumables print the same seven columns')
+  ['Group total', '€3,000.00', '€500.00', '€200.00', '€650.00', '€0.00', '€50.00', '€700.00', '€2,300.00', '23.33%'],
+  'the services footer totals each cumulative activity classification')
+assert.deepEqual([...coverPanels[1].querySelectorAll('thead tr:last-child th')].map(cell => cell.textContent),
+  ['Planned', 'NPT', 'UPA', 'Total'], 'consumables print the same four cumulative columns')
 const fuelRow = [...coverPanels[1].querySelectorAll('tbody tr')].find(row => row.cells[0].textContent === 'Fuel')
-assert.deepEqual([...fuelRow.cells].map(cell => cell.textContent).slice(2, 5), ['€0.00', '€100.00', '€100.00'],
-  'a consumable with no earlier cost prints zero up to the last day and its full cost on the report day')
+assert.deepEqual([...fuelRow.cells].map(cell => cell.textContent).slice(2, 8), ['€0.00', '€100.00', '€100.00', '€0.00', '€0.00', '€100.00'],
+  'a consumable prints its day cost and planned/NPT/UPA/total cumulative values')
 assert.ok(!sheet.textContent.includes('USD '), 'the printed report uses the $ symbol instead of the USD code')
 
 // The report title names the well scope it costs.

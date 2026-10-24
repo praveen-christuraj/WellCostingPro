@@ -403,22 +403,33 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     position: { planned: number; actual: number }
     day: { prior: number; today: number }
     grouped?: boolean
-  }) => <section className="dcr-panel dcr-cost-panel">
-    <h2>{title}</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Cost item</th>
-          <th>AFE</th>
-          <th>Up to<br/>{displayDate(priorDate)}</th>
-          <th>Cost on<br/>{displayDate(String(reportDate))}</th>
-          <th>Cumulative</th>
-          <th>Balance</th>
-          <th>Used</th>
-        </tr>
-      </thead>
+  }) => {
+    const cumulative = rows.reduce((totals, row) => {
+      const split = classificationSplit(row)
+      totals.planned += asNumber(split.planned)
+      totals.npt += asNumber(split.npt)
+      totals.upa += asNumber(split.upa)
+      return totals
+    }, { planned: 0, npt: 0, upa: 0 })
+    return <section className="dcr-panel dcr-cost-panel">
+      <h2>{title}</h2>
+      <table>
+        <colgroup>{Array.from({ length: 10 }, (_, index) => <col key={index}/>)}</colgroup>
+        <thead>
+          <tr>
+            <th rowSpan={2}>Cost item</th>
+            <th rowSpan={2}>AFE</th>
+            <th rowSpan={2}>Up to<br/>{displayDate(priorDate)}</th>
+            <th rowSpan={2}>Cost on<br/>{displayDate(String(reportDate))}</th>
+            <th colSpan={4}>Cumulative</th>
+            <th rowSpan={2}>Balance</th>
+            <th rowSpan={2}>Used</th>
+          </tr>
+          <tr><th>Planned</th><th>NPT</th><th>UPA</th><th>Total</th></tr>
+        </thead>
       <tbody>{rows.map((row, index) => {
-        const split = daySplit(row)
+        const dayCost = daySplit(row)
+        const activityCost = classificationSplit(row)
         const groupLabel = printedServiceGroup(row.service_group)
         return <tr key={row.budget_key}>
           <td>
@@ -427,26 +438,33 @@ function ReportCover({ report }: { report: CostPrintReport }) {
             {costName(row.item_name)}
           </td>
           <td className="num">{printMoney(row.planned, currency)}</td>
-          <td className="num">{printMoney(split.prior, currency)}</td>
-          <td className="num">{printMoney(split.today, currency)}</td>
-          <td className="num">{printMoney(split.total, currency)}</td>
-          <td className="num">{printMoney(asNumber(row.planned) - split.total, currency)}</td>
-          <td className="num">{percent(split.total, asNumber(row.planned))}</td>
+          <td className="num">{printMoney(dayCost.prior, currency)}</td>
+          <td className="num">{printMoney(dayCost.today, currency)}</td>
+          <td className="num">{printMoney(activityCost.planned, currency)}</td>
+          <td className="num">{printMoney(activityCost.npt, currency)}</td>
+          <td className="num">{printMoney(activityCost.upa, currency)}</td>
+          <td className="num">{printMoney(dayCost.total, currency)}</td>
+          <td className="num">{printMoney(asNumber(row.planned) - dayCost.total, currency)}</td>
+          <td className="num">{percent(dayCost.total, asNumber(row.planned))}</td>
         </tr>
       })}
-      {!rows.length && <tr><td colSpan={7} className="dcr-none">No AFE allowance recorded.</td></tr>}
+      {!rows.length && <tr><td colSpan={10} className="dcr-none">No AFE allowance recorded.</td></tr>}
       </tbody>
       <tfoot><tr>
         <th>{rows.length ? 'Group total' : 'No cost lines recorded'}</th>
         <th className="num">{printMoney(position.planned, currency)}</th>
         <th className="num">{printMoney(day.prior, currency)}</th>
         <th className="num">{printMoney(day.today, currency)}</th>
+        <th className="num">{printMoney(cumulative.planned, currency)}</th>
+        <th className="num">{printMoney(cumulative.npt, currency)}</th>
+        <th className="num">{printMoney(cumulative.upa, currency)}</th>
         <th className="num">{printMoney(position.actual, currency)}</th>
         <th className="num">{printMoney(position.planned - position.actual, currency)}</th>
         <th className="num">{percent(position.actual, position.planned)}</th>
       </tr></tfoot>
-    </table>
-  </section>
+      </table>
+    </section>
+  }
 
   const IncidentTable = ({ title, rows, total }: { title: string; rows: CoverIncident[]; total: number }) => <section className="dcr-panel dcr-incident">
     <h2>{title}</h2>
