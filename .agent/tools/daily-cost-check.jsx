@@ -252,6 +252,69 @@ assert.equal(summaryMud.querySelector('tbody tr td:nth-child(2)').textContent, '
 assert.equal(summaryMud.querySelector('.dcr-mud-note').textContent,
   'AFE mud chemicals allowance €9,000.00 · every section allowance is shown above.',
   'the well-summary note ties the printed mud plan back to the AFE')
+
+// Loss (bbl/m) divides a section's surface loss by the interval that section
+// drilled, not by its total depth: the first section starts at the depth set in
+// the well configuration (here 800 m, not 0) and each later section starts at
+// the previous section's actual depth (1,608 m), so the second section's
+// metreage is 2,140 − 1,608 = 532 m.
+const intervalSections = [
+  { hole_section_id: 'sec-surface', section_code: 'SURFACE', section_name: 'Surface hole', from_depth: '800', to_depth: '1800', total_days: '5', phases: [] },
+  { hole_section_id: 'sec-intermediate', section_code: 'INTER', section_name: 'Intermediate hole', from_depth: '1800', to_depth: '2600', total_days: '9', phases: [] },
+]
+const intervalDay = {
+  ...day,
+  entry: { ...day.entry, section_depths: [
+    { hole_section_id: 'sec-surface', section_code: 'SURFACE', section_name: 'Surface hole', actual_depth: '1608', depth_unit: 'm', entered_depth: '1608', entered_unit: 'm', daily_cost_code: 'DC-1' },
+    { hole_section_id: 'sec-intermediate', section_code: 'INTER', section_name: 'Intermediate hole', actual_depth: '2140', depth_unit: 'm', entered_depth: '2140', entered_unit: 'm', daily_cost_code: 'DC-1' },
+  ] },
+}
+const intervalMud = { currency: 'EUR', total_planned_cost: '0', sections: [
+  { section_id: 'mud-surface', hole_section_id: 'sec-surface', section_scope: 'drilling', section_code: 'SURFACE', section_name: 'Surface hole',
+    section_label: 'SURFACE · Surface hole · Drilling · 800–1,800', mud_type: 'OBM', planned_cost: null, surface_loss_total: '161.6' },
+  { section_id: 'mud-intermediate', hole_section_id: 'sec-intermediate', section_scope: 'drilling', section_code: 'INTER', section_name: 'Intermediate hole',
+    section_label: 'INTER · Intermediate hole · Drilling · 1,800–2,600', mud_type: 'WBM', planned_cost: null, surface_loss_total: '266' },
+] }
+await act(async () => root.render(<DailyCostPrintSheet coversOnly report={{
+  title: 'Daily Cost Report', period: '10 Oct 2026', days: [intervalDay], overviewDays: [intervalDay],
+  mudReconciliation: intervalMud, sections: intervalSections,
+}}/>))
+const lossRowCells = () => {
+  const row = [...document.querySelectorAll('.afe-print-sheet .dcr-loss-matrix tbody tr')]
+    .find(candidate => candidate.querySelector('th')?.textContent === 'Loss (bbl/m)')
+  return [...row.querySelectorAll('td')].map(cell => cell.textContent)
+}
+// Dividing by the total depth instead would print 0.10 (161.6 ÷ 1,608) and
+// 0.12 (266 ÷ 2,140), so these two values separate the new interval rule from
+// the formula it replaces.
+assert.deepEqual(lossRowCells(), ['0.20', '0.50'],
+  'loss per metre divides by the configured start depth for the first section and the previous actual depth for the next section')
+
+// A later section with no recorded previous depth starts at its own configured
+// boundary instead of falling back to zero, and a section with no current depth
+// still prints an em dash.
+const fallbackSections = [
+  { hole_section_id: 'sec-surface', section_code: 'SURFACE', section_name: 'Surface hole', from_depth: '0', to_depth: '1500', total_days: '4', phases: [] },
+  { hole_section_id: 'sec-intermediate', section_code: 'INTER', section_name: 'Intermediate hole', from_depth: '1500', to_depth: '3000', total_days: '8', phases: [] },
+]
+const fallbackDay = {
+  ...day,
+  entry: { ...day.entry, section_depths: [
+    { hole_section_id: 'sec-intermediate', section_code: 'INTER', section_name: 'Intermediate hole', actual_depth: '2000', depth_unit: 'm', entered_depth: '2000', entered_unit: 'm', daily_cost_code: 'DC-1' },
+  ] },
+}
+const fallbackMud = { currency: 'EUR', total_planned_cost: '0', sections: [
+  { section_id: 'mud-surface', hole_section_id: 'sec-surface', section_scope: 'drilling', section_code: 'SURFACE', section_name: 'Surface hole',
+    section_label: 'SURFACE · Surface hole · Drilling · 0–1,500', mud_type: 'OBM', planned_cost: null, surface_loss_total: '0' },
+  { section_id: 'mud-intermediate', hole_section_id: 'sec-intermediate', section_scope: 'drilling', section_code: 'INTER', section_name: 'Intermediate hole',
+    section_label: 'INTER · Intermediate hole · Drilling · 1,500–3,000', mud_type: 'WBM', planned_cost: null, surface_loss_total: '100' },
+] }
+await act(async () => root.render(<DailyCostPrintSheet coversOnly report={{
+  title: 'Daily Cost Report', period: '10 Oct 2026', days: [fallbackDay], overviewDays: [fallbackDay],
+  mudReconciliation: fallbackMud, sections: fallbackSections,
+}}/>))
+assert.deepEqual(lossRowCells(), ['—', '0.20'],
+  'an undrilled section prints no rate and a section without a previous actual depth starts at its configured boundary')
 let trigger
 function PrintHarness() { const hook = useCostPrint(); trigger = hook.print; return hook.printSheet }
 await act(async () => root.render(<PrintHarness/>))
@@ -644,7 +707,7 @@ const rigWellDeletedPage = readFileSync('../frontend/src/pages/RigWellDeleted.ts
 for (const required of ['row => `${row.entity_type}:${row.id}:${row.scope ?? \'all\'}`', '? `?scope=${encodeURIComponent(target.scope)}`']) {
   assert.ok(rigWellDeletedPage.includes(required), `rig-well deleted page retains ${required}`)
 }
-console.log('Daily cost checks passed: single-window multi-activity and multi-charge entry, one-time charging, scoped activity depths, explicit bulk rate upgrades, advanced consumable/tangible bulk selection with required usage, locked prices and show-selected-only review, the same selector reused by the AFE tangible estimate, bulk depth/quantity/unit controls, AFE / last day / report day / cumulative cost columns with currency symbols, the milestone label and lead/lag read from the register, bulk first-page-only printing, scope-aware report titles, transposed mud and loss matrices, group-ordered/name-only services with every AFE allowance listed, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
+console.log('Daily cost checks passed: single-window multi-activity and multi-charge entry, one-time charging, scoped activity depths, explicit bulk rate upgrades, advanced consumable/tangible bulk selection with required usage, locked prices and show-selected-only review, the same selector reused by the AFE tangible estimate, bulk depth/quantity/unit controls, AFE / last day / report day / cumulative cost columns with currency symbols, the milestone label and lead/lag read from the register, bulk first-page-only printing, scope-aware report titles, transposed mud and loss matrices with interval-based loss per metre, group-ordered/name-only services with every AFE allowance listed, four cumulative consumable categories, item-wise tangible cumulative costs, cumulative-only continuation pages, two-decimal presentation, landscape model-report cover, escaped remarks, synchronous print portal, cleanup and register wiring.')
 
 dom.window.close()
 process.exit(0)
