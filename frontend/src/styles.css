@@ -456,6 +456,14 @@ html[data-theme='dark'] .field-label { color: #A7B8CB; }
     grid-template-rows: max-content minmax(auto, 1.25fr) minmax(auto, .75fr) max-content var(--dcr-lower-row-height);
     gap: 1.05mm;
   }
+  /* Only NDT-bearing covers reclaim the unused area beneath the intrinsic
+     Consumables total. Its table rows keep the exact shared cost-table rules;
+     only the panel track becomes max-content. The recovered 24 mm is assigned
+     to the existing lower row so the compact NDT schedule fits without overlap. */
+  .daily-cost-print-sheet .dcr-has-ndt .dcr-layout { --dcr-lower-row-height: 82mm; }
+  .daily-cost-print-sheet .dcr-has-ndt .dcr-main {
+    grid-template-rows: max-content minmax(auto, 1fr) max-content max-content var(--dcr-lower-row-height);
+  }
   .daily-cost-print-sheet .dcr-side {
     min-width: 0;
     display: grid;

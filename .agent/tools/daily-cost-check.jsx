@@ -153,6 +153,7 @@ assert.deepEqual([...lowerRow.children].map(node => node.classList.contains('dcr
 assert.deepEqual([...lowerRow.querySelector('.dcr-stack').children].map(node => node.classList.contains('dcr-lih') ? 'LIH' : node.classList.contains('dcr-overall') ? 'AFE' : 'NDT'),
   ['LIH', 'AFE', 'NDT'], 'NDT follows LIH and AFE at the bottom-left only when records exist')
 const ndtTable = lowerRow.querySelector('.dcr-ndt')
+assert.ok(sheet.querySelector('.daily-report-cover').classList.contains('dcr-has-ndt'), 'NDT-bearing cover opts into the reclaimed consumables space')
 assert.ok(ndtTable.textContent.includes('Drill pipe inspection') && ndtTable.textContent.includes('20.00') && ndtTable.textContent.includes('18.00') && ndtTable.textContent.includes('15.00') && ndtTable.textContent.includes('3.00'), 'NDT table prints received, consumed and good/bad backloaded quantities')
 assert.ok(ndtTable.textContent.includes('Batch A'), 'NDT table keeps the compact line remark')
 assert.ok(sheet.querySelector('.dcr-side > .dcr-incident:last-child').textContent.includes('UPA summary'), 'UPA remains the far-right lower panel')
@@ -439,6 +440,8 @@ assert.ok(styles.includes('size: A4 landscape'), 'daily reports print in landsca
 assert.ok(styles.includes('margin: 4mm'), 'daily reports use minimal print margins')
 assert.ok(styles.includes('--dcr-lower-row-height: 58mm'), 'the four lower columns share one compact physical height')
 assert.ok(styles.includes('grid-template-rows: minmax(0, 1.05fr) minmax(0, 1fr) var(--dcr-lower-row-height)'), 'UPA resolves to the shared lower-row height')
+assert.ok(styles.includes('.dcr-has-ndt .dcr-layout { --dcr-lower-row-height: 82mm; }'), 'NDT cover assigns the reclaimed space to a taller lower row')
+assert.ok(styles.includes('grid-template-rows: max-content minmax(auto, 1fr) max-content max-content var(--dcr-lower-row-height)'), 'NDT cover makes only the consumables panel track intrinsic-height')
 assert.ok(styles.includes('height: var(--dcr-lower-row-height); display: grid; grid-template-columns: 1fr 1fr 1.18fr'), 'LIH/AFE, mud cost and losses resolve to the same lower-row height')
 assert.ok(styles.includes('.dcr-cost-panel table { align-self: start; height: auto; font-size: 6.4pt'), 'service and consumable tables use the same intrinsic row and font sizing')
 assert.ok(styles.includes('.dcr-cost-panel td { padding: .57mm .34mm; }'), 'normal cost rows use 1.5x their previous vertical padding')

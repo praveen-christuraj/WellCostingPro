@@ -484,7 +484,7 @@ function ReportCover({ report }: { report: CostPrintReport }) {
     </table>
   </section>
 
-  return <section className={`daily-report-cover ps-page dcr-density-${densityStep}`}>
+  return <section className={`daily-report-cover ps-page dcr-density-${densityStep}${ndtInspections.length ? ' dcr-has-ndt' : ''}`}>
     <header className="dcr-titlebar">
       <div><div className="dcr-eyebrow">Daily Cost Management · {report.reportKind === 'daily' ? 'Daily cost report' : 'Well cost report'}</div><h1>{reportTitle(report)}</h1></div>
       <div className="dcr-report-meta"><strong>{latest.entry.well_name}</strong><span>{latest.entry.rig_name}</span><span>{report.period}</span></div>
