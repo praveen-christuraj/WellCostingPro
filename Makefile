@@ -1,4 +1,4 @@
-.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check mud-cost-reconciliation-check lih-worksheet-check fuel-cost-check usage-reports-check
+.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check daily-cost-scope-check mud-cost-reconciliation-check lih-worksheet-check fuel-cost-check usage-reports-check
 
 test:
 	cd backend && ../.venv/bin/python -m pytest -q
@@ -31,6 +31,15 @@ daily-cost-check:
 		--bundle --platform=node --format=esm --jsx=automatic \
 		--outfile=node_modules/.cache/daily-cost-check.mjs --external:jsdom && \
 		node node_modules/.cache/daily-cost-check.mjs
+
+# Daily Cost register shortcuts: the current rig and well load as defaults and
+# every related register opens already scoped to them (still changeable).
+daily-cost-scope-check:
+	cd frontend && npm install --no-save jsdom && \
+		NODE_PATH="$$PWD/node_modules" ./node_modules/.bin/esbuild ../.agent/tools/daily-cost-scope-check.jsx \
+		--bundle --platform=node --format=esm --jsx=automatic --log-level=error \
+		--outfile=node_modules/.cache/daily-cost-scope-check.mjs --external:jsdom && \
+		node node_modules/.cache/daily-cost-scope-check.mjs
 
 # Mud type / Cost/BBL configuration dialog rules (section-scoped reconciliation).
 mud-cost-reconciliation-check:

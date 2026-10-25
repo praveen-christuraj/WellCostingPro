@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Add, DeleteForever, DeleteOutline, EditOutlined, Refresh, RestoreFromTrash, Upload } from '@mui/icons-material'
 import { Alert, Box, Button, IconButton, MenuItem, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material'
 import type { ColDef, ICellRendererParams } from 'ag-grid-community'
@@ -7,6 +8,7 @@ import { DataTable } from '../components/DataTable'
 import { ImportDialog } from '../components/ImportDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
+import { readActiveScope, requestedScope, resolveRequestedScope, writeActiveScope, type ActiveScope } from '../lib/activeScope'
 import type { ImportRow } from '../lib/export'
 import { NDT_IMPORT_HEADERS, NDT_IMPORT_OPTIONAL, NDT_IMPORT_SAMPLE, importNdtRow, newNdtLine, quantity, type NdtEntry, type NdtLine, type NdtReference, type NdtScope } from '../lib/ndtInspection'
 
@@ -14,13 +16,21 @@ const numericFields = ['quantity_received', 'quantity_consumed', 'quantity_backl
 const dateText = (value: string) => new Date(value).toLocaleString()
 
 export default function NdtInspectionRegister() {
-  const { can } = useAuth()
+  const { can, user } = useAuth()
+  const [searchParams] = useSearchParams()
+  // The scope a daily cost register shortcut carried. The scope remembered from the
+  // last register visit is read once the workspace is known (see below).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const linkedScope = useMemo(() => requestedScope(searchParams), [])
+  const scopeApplied = useRef(false)
   const [rows, setRows] = useState<NdtEntry[]>([])
   const [reference, setReference] = useState<NdtReference>({ rigs: [], wells: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [showDeleted, setShowDeleted] = useState(false)
+  // The scope is applied once the reference data is loaded (below); starting from
+  // empty keeps the register from clearing a well it cannot verify yet.
   const [rigFilter, setRigFilter] = useState('')
   const [wellFilter, setWellFilter] = useState('')
   const [scopeFilter, setScopeFilter] = useState('')
@@ -57,14 +67,50 @@ export default function NdtInspectionRegister() {
   }, [query, showDeleted])
   useEffect(() => { void load() }, [load])
 
+  // Select the rig and well the register was opened with once the reference is
+  // known; both the list filter and the new-inspection dialog start there.
+  useEffect(() => {
+    if (!reference.rigs.length || !user || scopeApplied.current) return
+    scopeApplied.current = true
+    const remembered = readActiveScope(user.organization_slug)
+    const next = resolveRequestedScope(
+      { rigId: rigFilter || linkedScope.rigId || remembered.rigId, wellId: wellFilter || linkedScope.wellId || remembered.wellId },
+      reference.wells, reference.rigs,
+    )
+    if (next.wellId) {
+      setRigFilter(next.rigId); setWellFilter(next.wellId)
+      setRigId(next.rigId); setWellId(next.wellId)
+    } else if (next.rigId) {
+      setRigFilter(next.rigId); setRigId(next.rigId)
+    }
+  }, [reference, user, rigFilter, wellFilter])
+
   const filterWells = reference.wells.filter(w => !rigFilter || w.rig_id === rigFilter)
   const editorWells = reference.wells.filter(w => w.rig_id === rigId && (scope === 'completion' ? w.completion_available : w.drilling_available))
-  useEffect(() => { if (wellFilter && !filterWells.some(w => w.id === wellFilter)) setWellFilter('') }, [rigFilter]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (wellId && !editorWells.some(w => w.id === wellId)) setWellId('') }, [rigId, scope]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Only drop a selection the loaded reference proves is invalid.
+  useEffect(() => { if (reference.wells.length && wellFilter && !filterWells.some(w => w.id === wellFilter)) setWellFilter('') }, [rigFilter]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (reference.wells.length && wellId && !editorWells.some(w => w.id === wellId)) setWellId('') }, [rigId, scope]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Picking a register filter also makes that rig and well the current scope, so
+  // the daily cost register and the other registers follow.
+  const rememberScope = (scope: ActiveScope) => writeActiveScope(scope, user?.organization_slug)
+  const chooseRigFilter = (value: string) => {
+    setRigFilter(value)
+    const keptWell = reference.wells.find(w => w.id === wellFilter && (!value || w.rig_id === value))
+    rememberScope({ rigId: value, wellId: keptWell?.id ?? '' })
+  }
+  const chooseWellFilter = (value: string) => {
+    setWellFilter(value)
+    const well = reference.wells.find(w => w.id === value)
+    if (well) { setRigFilter(well.rig_id); rememberScope({ rigId: well.rig_id, wellId: well.id }) }
+    else rememberScope({ rigId: rigFilter, wellId: '' })
+  }
 
   const openAdd = () => {
-    const firstRig = reference.rigs[0]?.id ?? ''
-    const firstWell = reference.wells.find(w => w.rig_id === firstRig && w.drilling_available)?.id ?? ''
+    // Start on the register's current rig and well; the dialog can still change them.
+    const currentWell = reference.wells.find(w => w.id === (wellFilter || wellId))
+    const firstRig = currentWell?.rig_id || rigFilter || reference.rigs[0]?.id || ''
+    const firstWell = currentWell?.id || reference.wells.find(w => w.rig_id === firstRig && w.drilling_available)?.id || ''
     setEditing(null); setRigId(firstRig); setWellId(firstWell); setScope('drilling'); setLines([newNdtLine()]); setFormError(''); setEditorOpen(true)
   }
   const openEdit = (row: NdtEntry) => {
@@ -123,8 +169,8 @@ export default function NdtInspectionRegister() {
     </Stack>}/>
     {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}{notice && <Alert severity="success" onClose={() => setNotice('')}>{notice}</Alert>}
     <Paper variant="outlined" sx={{ p: 1.5 }}><Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2}>
-      <TextField select size="small" label="Rig" value={rigFilter} onChange={e => setRigFilter(e.target.value)} sx={{ minWidth: 190 }}><MenuItem value="">All rigs</MenuItem>{reference.rigs.map(r => <MenuItem key={r.id} value={r.id}>{r.display_name}</MenuItem>)}</TextField>
-      <TextField select size="small" label="Well" value={wellFilter} onChange={e => setWellFilter(e.target.value)} sx={{ minWidth: 210 }}><MenuItem value="">All wells</MenuItem>{filterWells.map(w => <MenuItem key={w.id} value={w.id}>{w.display_name}</MenuItem>)}</TextField>
+      <TextField select size="small" label="Rig" value={rigFilter} onChange={e => chooseRigFilter(e.target.value)} sx={{ minWidth: 190 }}><MenuItem value="">All rigs</MenuItem>{reference.rigs.map(r => <MenuItem key={r.id} value={r.id}>{r.display_name}</MenuItem>)}</TextField>
+      <TextField select size="small" label="Well" value={wellFilter} onChange={e => chooseWellFilter(e.target.value)} sx={{ minWidth: 210 }}><MenuItem value="">All wells</MenuItem>{filterWells.map(w => <MenuItem key={w.id} value={w.id}>{w.display_name}</MenuItem>)}</TextField>
       <TextField select size="small" label="Scope" value={scopeFilter} onChange={e => setScopeFilter(e.target.value)} sx={{ minWidth: 145 }}><MenuItem value="">All scopes</MenuItem><MenuItem value="drilling">Drilling</MenuItem><MenuItem value="completion">Completion</MenuItem></TextField>
       <TextField size="small" type="date" label="From" value={dateFrom} onChange={e => setDateFrom(e.target.value)} InputLabelProps={{ shrink: true }}/><TextField size="small" type="date" label="To" value={dateTo} onChange={e => setDateTo(e.target.value)} InputLabelProps={{ shrink: true }}/>
       {(rigFilter || wellFilter || scopeFilter || dateFrom || dateTo) && <Button onClick={() => { setRigFilter(''); setWellFilter(''); setScopeFilter(''); setDateFrom(''); setDateTo('') }}>Clear</Button>}

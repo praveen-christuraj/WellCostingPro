@@ -20,6 +20,7 @@ import { useCostPrint } from '../components/daily-cost/DailyCostPrintSheet'
 import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
+import { scopeLink } from '../lib/activeScope'
 import { listEntryAmendments, type DailyCostAmendment } from '../lib/sowAdjustment'
 import { downloadTemplate, parseImportFile, type ImportRow } from '../lib/export'
 import {
@@ -1224,7 +1225,7 @@ export default function DailyCostSheet() {
             <Typography fontSize={17} fontWeight={800} color={lihToDate ? 'warning.main' : 'text.primary'}>{dailyMoney(lihToDate, standard)}</Typography>
             <Typography fontSize={10.5} color="text.secondary">Actual incl. LIH {dailyMoney(actualIncludingLih + (hasPreviewForEdits ? workingAmount - savedAmount : 0), standard)}</Typography>
           </Box>
-          <Button component={RouterLink} to="/daily-cost/lih-register" size="small" variant="outlined" endIcon={<ArrowForwardRounded fontSize="small"/>}>
+          <Button component={RouterLink} to={scopeLink('/daily-cost/lih-register', { rigId: entry.rig_id, wellId: entry.well_id })} size="small" variant="outlined" endIcon={<ArrowForwardRounded fontSize="small"/>}>
             Open LIH register
           </Button>
         </Box>
