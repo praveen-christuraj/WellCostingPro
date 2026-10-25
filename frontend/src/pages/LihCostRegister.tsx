@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   AddRounded, DeleteForeverOutlined, DeleteOutlineRounded, EventNoteOutlined, FilterAltOffOutlined,
   OpenInNewRounded, RefreshRounded, RestoreRounded,
@@ -13,6 +14,7 @@ import { ImportDialog } from '../components/ImportDialog'
 import { LihWorksheet } from '../components/lih-cost/LihWorksheet'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
+import { readActiveScope, requestedScope, resolveRequestedScope, writeActiveScope } from '../lib/activeScope'
 import { dailyMoney, displayDate, localToday } from '../lib/dailyCost'
 import { exportCsv, exportPdf, exportXlsx, type ExportColumn, type ImportRow } from '../lib/export'
 import {
@@ -24,7 +26,13 @@ import {
 type PendingAction = { kind: 'delete' | 'restore' | 'purge'; rows: LihCostEntry[] }
 
 export default function LihCostRegister() {
-  const { can } = useAuth()
+  const { can, user } = useAuth()
+  const [searchParams] = useSearchParams()
+  // The scope a daily cost register shortcut carried. The scope remembered from the
+  // last register visit is read once the workspace is known (see below).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const linkedScope = useMemo(() => requestedScope(searchParams), [])
+  const scopeApplied = useRef(false)
   const [reference, setReference] = useState<LihCostReference | null>(null)
   const [referenceError, setReferenceError] = useState('')
   const [register, setRegister] = useState<LihCostEntry[]>([])
@@ -33,8 +41,8 @@ export default function LihCostRegister() {
   const [showDeleted, setShowDeleted] = useState(false)
   const [notice, setNotice] = useState('')
 
-  const [rigId, setRigId] = useState('')
-  const [wellId, setWellId] = useState('')
+  const [rigId, setRigId] = useState(linkedScope.rigId)
+  const [wellId, setWellId] = useState(linkedScope.wellId)
   const [afeId, setAfeId] = useState('')
   const [costDate, setCostDate] = useState(localToday())
   const [day, setDay] = useState<LihCostDay | null>(null)
@@ -116,6 +124,28 @@ export default function LihCostRegister() {
   useEffect(() => { void loadReference() }, [loadReference])
   useEffect(() => { void loadRegister() }, [loadRegister])
   useEffect(() => { void loadDay(wellId, costDate) }, [wellId, costDate, loadDay])
+
+  // Select the rig, well and AFE the register was opened with once the reference
+  // is known. A plain visit without a remembered scope keeps the deliberate
+  // "choose a rig and well" start.
+  useEffect(() => {
+    if (!reference || !user || scopeApplied.current) return
+    scopeApplied.current = true
+    const remembered = readActiveScope(user.organization_slug)
+    const next = resolveRequestedScope(
+      { rigId: rigId || remembered.rigId, wellId: wellId || remembered.wellId }, reference.wells, reference.rigs,
+    )
+    if (next.wellId) {
+      setRigId(next.rigId)
+      setWellId(next.wellId)
+      setAfeId(reference.afes.find(afe => afe.well_id === next.wellId)?.id ?? '')
+    } else if (next.rigId) setRigId(next.rigId)
+  }, [reference, user, rigId, wellId])
+
+  // The scope chosen here becomes the current scope everywhere in Daily Cost Management.
+  useEffect(() => {
+    if (rigId && wellId && user) writeActiveScope({ rigId, wellId }, user.organization_slug)
+  }, [rigId, wellId, user])
 
   // Reset the worksheet whenever a different day is loaded, or after any save
   // (the revision changes), so the sheet always mirrors what is stored.

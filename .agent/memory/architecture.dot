@@ -156,6 +156,7 @@ digraph WellCostingPro {
   "frontend/src/context/AuthContext.tsx";
   "frontend/src/context/ThemeContext.tsx";
   "frontend/src/designSystem.ts";
+  "frontend/src/lib/activeScope.ts";
   "frontend/src/lib/afe.ts";
   "frontend/src/lib/api.ts";
   "frontend/src/lib/businessDashboard.ts";
@@ -860,6 +861,7 @@ digraph WellCostingPro {
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/components/daily-cost/BulkDailyCostPrintDialog.tsx";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/components/daily-cost/WellCostPrintDialog.tsx";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/lib/activeScope.ts";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/pages/DailyCostManagement.tsx" -> "frontend/src/lib/units.ts";
@@ -873,6 +875,7 @@ digraph WellCostingPro {
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/daily-cost/WellCostPrintDialog.tsx";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/components/daily-cost/WellProgressPanel.tsx";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/lib/activeScope.ts";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/lib/costingSets.ts";
   "frontend/src/pages/DailyCostSheet.tsx" -> "frontend/src/lib/dailyCost.ts";
@@ -918,6 +921,7 @@ digraph WellCostingPro {
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/components/ImportDialog.tsx";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/components/lih-cost/LihWorksheet.tsx";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/lib/activeScope.ts";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/lib/export.ts";
@@ -944,6 +948,7 @@ digraph WellCostingPro {
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostSectionSettingsDialog.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/designSystem.ts";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/lib/activeScope.ts";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/lib/dailyCost.ts";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/lib/export.ts";
@@ -952,6 +957,7 @@ digraph WellCostingPro {
   "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/components/ImportDialog.tsx";
   "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/lib/activeScope.ts";
   "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/lib/ndtInspection.ts";

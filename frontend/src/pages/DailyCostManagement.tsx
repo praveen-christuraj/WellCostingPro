@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   AddRounded, DeleteForeverOutlined, DeleteOutlineRounded, EventNoteOutlined,
-  FilterAltOffOutlined, InsightsOutlined, RestoreRounded, RefreshRounded, PrintOutlined,
+  FactCheckOutlined, FilterAltOffOutlined, InsightsOutlined, PlaylistAddCheckRounded,
+  RestoreRounded, RefreshRounded, PrintOutlined, WaterDropOutlined,
 } from '@mui/icons-material'
 import {
-  Alert, Box, Button, CircularProgress, MenuItem, Paper, Tab, Tabs, TextField, Typography,
+  Alert, Box, Button, CircularProgress, Divider, MenuItem, Paper, Tab, Tabs, TextField, Typography,
 } from '@mui/material'
 import type { ColDef, ICellRendererParams } from 'ag-grid-community'
 import { DataTable } from '../components/DataTable'
@@ -14,6 +15,9 @@ import { WellCostPrintDialog } from '../components/daily-cost/WellCostPrintDialo
 import { BulkDailyCostPrintDialog } from '../components/daily-cost/BulkDailyCostPrintDialog'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
+import {
+  readActiveScope, requestedScope, resolveWorkingScope, scopeLink, writeActiveScope, type ActiveScope,
+} from '../lib/activeScope'
 import {
   dailyMoney, DAILY_COST_STATUSES, displayDate, entryQuery, localToday,
   type DailyCostDay, type DailyCostEntry, type DailyCostReference,
@@ -31,6 +35,17 @@ const TABS: { key: CostTab; label: string }[] = [
 
 type PendingAction = { kind: 'delete' | 'restore' | 'purge'; rows: DailyCostEntry[] }
 
+/**
+ * The registers that capture the detail behind a daily sheet. Each shortcut opens
+ * its register with the register's working scope, so the rig and well are already
+ * selected there (and can still be changed on the target page).
+ */
+const SCOPED_REGISTERS: { label: string; path: string; icon: typeof WaterDropOutlined }[] = [
+  { label: 'Mud cost analysis', path: '/daily-cost/mud-cost-analysis', icon: WaterDropOutlined },
+  { label: 'LIH Cost Register', path: '/daily-cost/lih-register', icon: PlaylistAddCheckRounded },
+  { label: 'NDT Inspection Register', path: '/daily-cost/ndt-inspections', icon: FactCheckOutlined },
+]
+
 function isValidCostDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const parsed = new Date(`${value}T00:00:00Z`)
@@ -44,12 +59,20 @@ function scopeState(well: DailyCostReference['wells'][number], scope: 'drilling'
 }
 
 export default function DailyCostManagement() {
-  const { can } = useAuth()
+  const { can, user } = useAuth()
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const deletedView = params.get('view') === 'deleted'
   const requested = params.get('tab')
   const active: CostTab = TABS.some(tab => tab.key === requested) ? (requested as CostTab) : 'register'
+  // The rig and well the user is costing right now: the scope a link carried, or
+  // the one remembered from the last register visit. The link is read at once; the
+  // remembered scope is read once the workspace is known (see below).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const linkedScope = useMemo<ActiveScope>(() => requestedScope(params), [])
+  const [scopeRigId, setScopeRigId] = useState(linkedScope.rigId)
+  const [scopeWellId, setScopeWellId] = useState(linkedScope.wellId)
+  const scopeInitialised = useRef(false)
   const [rows, setRows] = useState<DailyCostEntry[]>([])
   const [reference, setReference] = useState<DailyCostReference | null>(null)
   const [loading, setLoading] = useState(true)
@@ -159,18 +182,72 @@ export default function DailyCostManagement() {
   )
   const missingSubActivities = Boolean(selectedWell) && wellSubActivities.length === 0
 
+  // The current rig and well. They default from the last register visit (or the
+  // link that opened the page), drive the shortcuts and the new sheet, and stay
+  // changeable by the user here or on any register they open.
+  const scopeRigs = reference?.rigs ?? []
+  const scopeWellOptions = useMemo(
+    () => (reference?.wells ?? []).filter(well => !scopeRigId || well.rig_id === scopeRigId),
+    [reference, scopeRigId],
+  )
+  const scopeRig = scopeRigs.find(rig => rig.id === scopeRigId) ?? null
+  const scopeWell = reference?.wells.find(well => well.id === scopeWellId) ?? null
+  const scopeLinks: ActiveScope = { rigId: scopeRigId, wellId: scopeWellId }
+
+  useEffect(() => {
+    if (!reference || !user || scopeInitialised.current) return
+    scopeInitialised.current = true
+    const remembered = readActiveScope(user.organization_slug)
+    const newest = [...rows].sort((left, right) => right.cost_date.localeCompare(left.cost_date))[0]
+    const next = resolveWorkingScope(
+      // A well or rig named in the link outranks the remembered one.
+      { rigId: scopeRigId || remembered.rigId, wellId: scopeWellId || remembered.wellId },
+      reference.wells, reference.rigs,
+      // The sheet last costed here, then the first well that can take a new sheet.
+      [newest?.well_id, wells[0]?.id],
+    )
+    if (next.wellId !== scopeWellId) setScopeWellId(next.wellId)
+    if (next.rigId !== scopeRigId) setScopeRigId(next.rigId)
+  }, [reference, user, rows, scopeRigId, scopeWellId, wells])
+
+  useEffect(() => {
+    if (!scopeInitialised.current || !user) return
+    writeActiveScope({ rigId: scopeRigId, wellId: scopeWellId }, user.organization_slug)
+  }, [scopeRigId, scopeWellId, user])
+
+  const chooseScopeRig = (value: string) => {
+    setScopeRigId(value)
+    const nextWells = (reference?.wells ?? []).filter(well => !value || well.rig_id === value)
+    if (!nextWells.some(well => well.id === scopeWellId)) setScopeWellId(nextWells[0]?.id ?? '')
+  }
+  const chooseScopeWell = (value: string) => {
+    setScopeWellId(value)
+    const well = reference?.wells.find(item => item.id === value)
+    if (well) setScopeRigId(well.rig_id)
+  }
+  // Opening a sheet makes its well the current scope, so the register and its
+  // shortcuts resume on the well the user was last costing.
+  const rememberRowScope = useCallback((row: DailyCostEntry) => {
+    const well = wellsById[row.well_id]
+    if (!well) return
+    setScopeWellId(well.id)
+    setScopeRigId(well.rig_id)
+  }, [wellsById])
+
   useEffect(() => {
     if (!createOpen || !reference) return
-    if (!wellId && wells.length) setWellId(wells[0].id)
+    if (!wellId && wells.length) setWellId(wells.find(well => well.id === scopeWellId)?.id ?? wells[0].id)
     if (wellId && !afes.some(afe => afe.id === afeId)) setAfeId(afes[0]?.id ?? '')
-  }, [createOpen, reference, wellId, afeId, wells, afes])
+  }, [createOpen, reference, wellId, afeId, wells, scopeWellId, afes])
 
   const openCreate = () => {
     setCreateError('')
     setRemarks('')
     setUsdExchangeRate('')
     setCostDate(localToday())
-    const firstWell = wells[0]
+    // A new sheet starts on the current rig and well; the dialog still lets the
+    // user pick another configured well or AFE.
+    const firstWell = wells.find(well => well.id === scopeWellId) ?? wells[0]
     const firstAfe = reference?.afes.find(item => item.well_id === firstWell?.id)
     setWellId(firstWell?.id ?? '')
     setAfeId(firstAfe?.id ?? '')
@@ -296,14 +373,14 @@ export default function DailyCostManagement() {
         const record = params.data
         if (!record) return null
         return <Box display="flex" alignItems="center" height="100%" gap={.35}>
-          <Button size="small" component={RouterLink} to={`/daily-cost/entries/${record.id}`}>Open</Button>
+          <Button size="small" component={RouterLink} to={`/daily-cost/entries/${record.id}`} onClick={() => rememberRowScope(record)}>Open</Button>
           {deletedView ? <>
             {can('daily-cost:restore') && <Button size="small" onClick={() => { setActionError(''); setPending({ kind: 'restore', rows: [record] }) }}>Restore</Button>}
             {can('daily-cost:permanent-delete') && <Button size="small" color="error" aria-label={`Permanently delete ${record.daily_cost_code}`} onClick={() => { setActionError(''); setPending({ kind: 'purge', rows: [record] }) }}><DeleteForeverOutlined sx={{ fontSize: 17 }}/></Button>}
           </> : can('daily-cost:delete') && record.status === 'draft' && <Button size="small" color="error" aria-label={`Move ${record.daily_cost_code} to Deleted Entries`} onClick={() => { setActionError(''); setPending({ kind: 'delete', rows: [record] }) }}><DeleteOutlineRounded sx={{ fontSize: 17 }}/></Button>}
         </Box>
       } },
-  ], [can, deletedView, reference])
+  ], [can, deletedView, reference, rememberRowScope])
 
   const pendingCount = pending?.rows.length ?? 0
   const actionTitle = pending?.kind === 'delete'
@@ -328,7 +405,7 @@ export default function DailyCostManagement() {
         {!deletedView && can('daily-cost:read') && <Button
           variant="outlined" startIcon={<InsightsOutlined/>}
           component={RouterLink}
-          to={filterWell ? `/daily-cost/analysis/${filterWell}` : '/daily-cost/analysis'}
+          to={scopeWellId ? `/daily-cost/analysis/${scopeWellId}` : filterWell ? `/daily-cost/analysis/${filterWell}` : '/daily-cost/analysis'}
         >Well cost analysis</Button>}
         {!deletedView && can('daily-cost:export') && <Button variant="outlined" startIcon={<PrintOutlined/>} onClick={() => setPrintOpen(true)}>Print well costing sheet</Button>}
         <Button variant="outlined" startIcon={<RefreshRounded/>} onClick={() => void load()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</Button>
@@ -338,6 +415,41 @@ export default function DailyCostManagement() {
         {!deletedView && can('daily-cost:create') && <Button variant="contained" startIcon={<AddRounded/>} onClick={openCreate} disabled={!wells.length || !reference?.afes.length}>New daily sheet</Button>}
       </Box>}
     />
+
+    {!deletedView && <Paper variant="outlined" data-testid="daily-cost-working-scope" sx={{ p: 1.6, borderRadius: 2, mb: 1.8 }}>
+      <Box display="flex" gap={1.4} flexWrap="wrap" alignItems="flex-end">
+        <Box flex="1 1 260px" minWidth={230}>
+          <Typography fontWeight={800} fontSize={13}>Working scope · rig and well</Typography>
+          <Typography color="text.secondary" fontSize={11} mt={.25}>
+            The rig and well you are costing. New daily sheets and the shortcuts below load with this
+            scope; change it here or on the register you open.
+          </Typography>
+        </Box>
+        <TextField select size="small" label="Rig" value={scopeRigId} onChange={event => chooseScopeRig(event.target.value)}
+          helperText="Current rig" sx={{ minWidth: 200 }} disabled={!scopeRigs.length}>
+          {!scopeRigs.length && <MenuItem value="">No rig</MenuItem>}
+          {scopeRigs.map(rig => <MenuItem key={rig.id} value={rig.id}>{rig.display_name}</MenuItem>)}
+        </TextField>
+        <TextField select size="small" label="Well" value={scopeWellId} onChange={event => chooseScopeWell(event.target.value)}
+          helperText="Current well" sx={{ minWidth: 250 }} disabled={!scopeWellOptions.length}>
+          {!scopeWellOptions.length && <MenuItem value="">No well</MenuItem>}
+          {scopeWellOptions.map(well => <MenuItem key={well.id} value={well.id}>{well.well_code} · {well.well_name}</MenuItem>)}
+        </TextField>
+      </Box>
+      <Divider sx={{ my: 1.3 }} />
+      <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
+        <Typography fontSize={10.5} fontWeight={800} letterSpacing={.7} color="text.secondary" mr={.5}>SHORTCUTS</Typography>
+        {SCOPED_REGISTERS.map(register => <Button
+          key={register.path} size="small" variant="outlined"
+          component={RouterLink} to={scopeLink(register.path, scopeLinks)}
+          startIcon={<register.icon sx={{ fontSize: 18 }}/>}
+        >{register.label}</Button>)}
+        <Typography fontSize={11} color="text.secondary">
+          Open on {scopeRig?.display_name ?? 'the selected rig'} · {scopeWell ? `${scopeWell.well_code} · ${scopeWell.well_name}` : 'the selected well'}.
+          Change the rig or well there at any time.
+        </Typography>
+      </Box>
+    </Paper>}
 
     {!deletedView && <Box borderBottom={1} borderColor="divider" mb={2}>
       <Tabs value={active} onChange={(_event, value: CostTab) => setParams(value === 'register' ? {} : { tab: value })} aria-label="Daily cost tabs">
@@ -359,7 +471,7 @@ export default function DailyCostManagement() {
             const next = event.target.value
             setFilterWell(next)
             setFilterAfe('')
-          }} helperText="Daily basis for one well">
+          }} helperText="Narrows this register list only">
             <MenuItem value="">All wells</MenuItem>
             {(reference?.wells ?? []).map(well => <MenuItem key={well.id} value={well.id}>{well.well_code} · {well.well_name}</MenuItem>)}
           </TextField>

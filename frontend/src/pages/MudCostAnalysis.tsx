@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link as RouterLink } from 'react-router-dom'
+import { Link as RouterLink, useSearchParams } from 'react-router-dom'
 import {
   AddRounded, CalculateOutlined, DeleteForeverOutlined, DeleteOutlineRounded, DownloadRounded, EventNoteOutlined,
   PrintOutlined, RefreshRounded, RestoreRounded, SettingsOutlined, WaterDropOutlined,
@@ -17,6 +17,7 @@ import { MudCostSectionSettingsDialog } from '../components/mud-cost/MudCostSect
 import { useMudCostPrint } from '../components/mud-cost/MudCostPrintSheet'
 import { useAuth } from '../context/AuthContext'
 import { api, body } from '../lib/api'
+import { readActiveScope, requestedScope, resolveRequestedScope, writeActiveScope } from '../lib/activeScope'
 import { exportCsv, exportXlsx, type ExportColumn } from '../lib/export'
 import { dailyMoney } from '../lib/dailyCost'
 import { radius, space } from '../designSystem'
@@ -48,13 +49,18 @@ function Stat({ label, value, hint }: { label: string; value: string; hint: stri
 }
 
 export default function MudCostAnalysis() {
-  const { can } = useAuth()
+  const { can, user } = useAuth()
   const { print, printSheet } = useMudCostPrint()
+  const [searchParams] = useSearchParams()
+  // The scope a daily cost register shortcut carried. The scope remembered from the
+  // last register visit is read once the workspace is known (see below).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const linkedScope = useMemo(() => requestedScope(searchParams), [])
   const [reference, setReference] = useState<MudCostReference | null>(null)
   const [referenceLoading, setReferenceLoading] = useState(true)
   const [referenceError, setReferenceError] = useState('')
-  const [rigId, setRigId] = useState('')
-  const [wellId, setWellId] = useState('')
+  const [rigId, setRigId] = useState(linkedScope.rigId)
+  const [wellId, setWellId] = useState(linkedScope.wellId)
   const [entrySectionId, setEntrySectionId] = useState('')
   const [balanceSectionId, setBalanceSectionId] = useState(ALL_SECTIONS)
   const [tab, setTab] = useState(0)
@@ -124,22 +130,45 @@ export default function MudCostAnalysis() {
   const entrySection = sectionOptions.find(section => section.id === entrySectionId) ?? null
   const balanceSection = sectionOptions.find(section => section.id === balanceSectionId) ?? null
 
+  // Apply the scope the page was opened with (link first, then the remembered one)
+  // before the fallback defaults run, so a requested well also selects its rig.
+  // The defaults wait for `scopeReady` so they can never overwrite that choice.
+  const [scopeReady, setScopeReady] = useState(false)
   useEffect(() => {
-    if (!reference) return
+    if (!reference || !user || scopeReady) return
+    const remembered = readActiveScope(user.organization_slug)
+    const next = resolveRequestedScope(
+      { rigId: rigId || remembered.rigId, wellId: wellId || remembered.wellId }, reference.wells, reference.rigs,
+    )
+    if (next.wellId) {
+      setRigId(next.rigId)
+      setWellId(next.wellId)
+    } else if (next.rigId) setRigId(next.rigId)
+    setScopeReady(true)
+  }, [reference, user, scopeReady, rigId, wellId])
+
+  useEffect(() => {
+    if (!reference || !scopeReady) return
     if (!rigId || !rigOptions.some(rig => rig.id === rigId)) {
       setRigId(rigOptions.find(rig => !rig.is_deleted)?.id ?? rigOptions[0]?.id ?? '')
     }
-  }, [reference, rigId, rigOptions])
+  }, [reference, scopeReady, rigId, rigOptions])
 
   useEffect(() => {
-    if (!reference || !rigId) {
+    if (!reference || !scopeReady) return
+    if (!rigId) {
       setWellId('')
       return
     }
     if (!wellOptions.some(well => well.id === wellId)) {
       setWellId(wellOptions.find(well => !well.is_deleted)?.id ?? wellOptions[0]?.id ?? '')
     }
-  }, [reference, rigId, wellId, wellOptions])
+  }, [reference, scopeReady, rigId, wellId, wellOptions])
+
+  // The scope chosen here becomes the current scope everywhere in Daily Cost Management.
+  useEffect(() => {
+    if (rigId && wellId && user) writeActiveScope({ rigId, wellId }, user.organization_slug)
+  }, [rigId, wellId, user])
 
   useEffect(() => {
     if (!selectedWell?.sections.length) {
