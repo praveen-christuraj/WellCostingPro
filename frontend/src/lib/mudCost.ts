@@ -344,16 +344,26 @@ export const MUD_COST_IMPORT_SAMPLE: Record<string, string> = {
 
 export function mudQuantity(value: string | number | null | undefined): string {
   const text = String(value ?? '0').trim()
-  const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(text)
+  // Decimal values from the API can use exponent notation (notably "0E-10").
+  // Expand the decimal as text instead of using Number, which loses precision
+  // for large stock quantities. Keep the existing three-place display policy.
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(text)
   if (!match || (!match[2] && !match[3])) return '—'
-  const negative = match[1] === '-'
-  const whole = BigInt(match[2] || '0')
-  const fractional = (match[3] ?? '').slice(0, 3).padEnd(3, '0')
+  const exponent = Number(match[4] ?? '0')
+  if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 1000) return '—'
+  const digits = (match[2] || '') + (match[3] || '')
+  const decimalAt = (match[2] || '').length + exponent
+  const wholeDigits = decimalAt <= 0 ? '0' : decimalAt >= digits.length
+    ? digits + '0'.repeat(decimalAt - digits.length)
+    : digits.slice(0, decimalAt)
+  const fractionDigits = decimalAt < 0 ? '0'.repeat(Math.min(-decimalAt, 3)) + digits : digits.slice(decimalAt)
+  const whole = BigInt(wholeDigits || '0')
+  const fractional = fractionDigits.slice(0, 3).padEnd(3, '0')
   const milli = whole * 1000n + BigInt(fractional || '0')
   if (milli === 0n) return '0'
   const groupedWhole = whole.toLocaleString()
   const trimmedFraction = fractional.replace(/0+$/, '')
-  return `${negative ? '−' : ''}${groupedWhole}${trimmedFraction ? `.${trimmedFraction}` : ''}`
+  return `${match[1] === '-' ? '−' : ''}${groupedWhole}${trimmedFraction ? `.${trimmedFraction}` : ''}`
 }
 
 export function localMudToday(): string {
