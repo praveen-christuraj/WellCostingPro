@@ -145,6 +145,7 @@ digraph WellCostIQ {
   "frontend/src/components/fuel-cost/FuelLinesLedger.tsx";
   "frontend/src/components/lih-cost/LihWorksheet.tsx";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx";
+  "frontend/src/components/mud-cost/MudCostKpis.tsx";
   "frontend/src/components/mud-cost/MudCostOpeningStockDialog.tsx";
   "frontend/src/components/mud-cost/MudCostPrintSheet.tsx";
   "frontend/src/components/mud-cost/MudCostSectionSettingsDialog.tsx";
@@ -743,6 +744,9 @@ digraph WellCostIQ {
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/designSystem.ts";
   "frontend/src/components/mud-cost/MudCostEntryDialog.tsx" -> "frontend/src/lib/mudCost.ts";
+  "frontend/src/components/mud-cost/MudCostKpis.tsx" -> "frontend/src/designSystem.ts";
+  "frontend/src/components/mud-cost/MudCostKpis.tsx" -> "frontend/src/lib/dailyCost.ts";
+  "frontend/src/components/mud-cost/MudCostKpis.tsx" -> "frontend/src/lib/mudCost.ts";
   "frontend/src/components/mud-cost/MudCostOpeningStockDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/mud-cost/MudCostOpeningStockDialog.tsx" -> "frontend/src/lib/mudCost.ts";
   "frontend/src/components/mud-cost/MudCostPrintSheet.tsx" -> "frontend/src/lib/appInfo.ts";
@@ -951,6 +955,7 @@ digraph WellCostIQ {
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/DataTable.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/ImportDialog.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostEntryDialog.tsx";
+  "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostKpis.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostOpeningStockDialog.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostPrintSheet.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx" -> "frontend/src/components/mud-cost/MudCostSectionSettingsDialog.tsx";

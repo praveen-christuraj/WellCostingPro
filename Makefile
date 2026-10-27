@@ -1,4 +1,4 @@
-.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check daily-cost-scope-check mud-cost-reconciliation-check lih-worksheet-check fuel-cost-check usage-reports-check
+.PHONY: test build graph up seed-admin check-admin ui-check ui-rollback daily-cost-check daily-cost-scope-check mud-cost-reconciliation-check mud-cost-kpi-check lih-worksheet-check fuel-cost-check usage-reports-check
 
 test:
 	cd backend && ../.venv/bin/python -m pytest -q
@@ -48,6 +48,14 @@ mud-cost-reconciliation-check:
 		--bundle --platform=node --format=esm --jsx=automatic \
 		--outfile=node_modules/.cache/mud-cost-reconciliation-check.mjs --external:jsdom && \
 		node node_modules/.cache/mud-cost-reconciliation-check.mjs
+
+# Mud Cost Analysis: section KPI balances, grouped latest stock/rates and refresh.
+mud-cost-kpi-check:
+	cd frontend && npm install --no-save jsdom && \
+		NODE_PATH="$$PWD/node_modules" ./node_modules/.bin/esbuild ../.agent/tools/mud-cost-kpi-check.jsx \
+		--bundle --platform=node --format=esm --jsx=automatic --log-level=error \
+		--outfile=node_modules/.cache/mud-cost-kpi-check.mjs --external:jsdom && \
+		node node_modules/.cache/mud-cost-kpi-check.mjs
 
 # LIH worksheet: multi-row entry, duplicate, paste, shortcuts and the one-save payload.
 lih-worksheet-check:

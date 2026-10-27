@@ -13,6 +13,7 @@ import { ErrorMessage, FormDialog, PageHeading, Tag } from '../components/Common
 import { ImportDialog } from '../components/ImportDialog'
 import { MudCostEntryDialog, type MudCostEditorPayload } from '../components/mud-cost/MudCostEntryDialog'
 import { MudCostOpeningStockDialog } from '../components/mud-cost/MudCostOpeningStockDialog'
+import { MudCostKpis, MudCostReconciliationRateKpi, type MudCostKpiSnapshot } from '../components/mud-cost/MudCostKpis'
 import { MudCostSectionSettingsDialog } from '../components/mud-cost/MudCostSectionSettingsDialog'
 import { useMudCostPrint } from '../components/mud-cost/MudCostPrintSheet'
 import { useAuth } from '../context/AuthContext'
@@ -80,6 +81,8 @@ export default function MudCostAnalysis() {
   const [settingsError, setSettingsError] = useState('')
   const [configRow, setConfigRow] = useState<MudCostSectionSetting | null>(null)
   const [reconciliation, setReconciliation] = useState<MudCostReconciliation | null>(null)
+  const [kpiSnapshot, setKpiSnapshot] = useState<MudCostKpiSnapshot | null>(null)
+  const [kpiLoading, setKpiLoading] = useState(false)
   const [reconLoading, setReconLoading] = useState(false)
   const [reconError, setReconError] = useState('')
   const [reconSectionId, setReconSectionId] = useState(ALL_SECTIONS)
@@ -104,6 +107,9 @@ export default function MudCostAnalysis() {
   const balanceRequest = useRef(0)
   const reconciliationRequest = useRef(0)
   const settingsRequest = useRef(0)
+  const kpiRequest = useRef(0)
+  const kpiScope = useRef({ rigId, wellId })
+  kpiScope.current = { rigId, wellId }
 
   const loadReference = useCallback(async () => {
     setReferenceLoading(true)
@@ -300,10 +306,42 @@ export default function MudCostAnalysis() {
     }
   }, [rigId, wellId, reconSectionId, reconDateFrom, reconDateTo])
 
+  // KPIs always cover the entire well, irrespective of the tab-level filters.
+  // The inception balance is server-aggregated (first opening, summed movements,
+  // latest closing). Reconciliation normally defaults to today; request the last
+  // supported date here so its latest rate covers all saved dates just like the
+  // latest-closing KPI, including future-dated records.
+  const loadKpis = useCallback(async () => {
+    if (kpiScope.current.rigId !== rigId || kpiScope.current.wellId !== wellId) return
+    const version = ++kpiRequest.current
+    setKpiSnapshot(null)
+    if (!rigId || !wellId) {
+      setKpiLoading(false)
+      return
+    }
+    setKpiLoading(true)
+    const balanceParams = new URLSearchParams({ rig_id: rigId, well_id: wellId, view: 'inception' })
+    const reconParams = new URLSearchParams({ rig_id: rigId, well_id: wellId, include_draft: 'true', to: '9999-12-31' })
+    const [balanceResult, reconResult] = await Promise.allSettled([
+      api<MudCostMaterialBalance>(`/mud-cost/material-balance?${balanceParams}`),
+      api<MudCostReconciliation>(`/mud-cost/reconciliation?${reconParams}`),
+    ])
+    if (version !== kpiRequest.current || kpiScope.current.rigId !== rigId || kpiScope.current.wellId !== wellId) return
+    setKpiSnapshot({
+      rigId, wellId,
+      balance: balanceResult.status === 'fulfilled' ? balanceResult.value : null,
+      reconciliation: reconResult.status === 'fulfilled' ? reconResult.value : null,
+      balanceError: balanceResult.status === 'rejected' ? (balanceResult.reason instanceof Error ? balanceResult.reason.message : 'Material balance could not be loaded') : '',
+      reconciliationError: reconResult.status === 'rejected' ? (reconResult.reason instanceof Error ? reconResult.reason.message : 'Reconciliation could not be calculated') : '',
+    })
+    setKpiLoading(false)
+  }, [rigId, wellId])
+
   useEffect(() => { void loadEntries() }, [loadEntries])
   useEffect(() => { void loadBalance() }, [loadBalance])
   useEffect(() => { void loadSettings() }, [loadSettings])
   useEffect(() => { void loadReconciliation() }, [loadReconciliation])
+  useEffect(() => { void loadKpis() }, [loadKpis])
 
   const activeEntries = useMemo(() => entries
     .filter(entry => entry.rig_id === rigId && entry.well_id === wellId && !entry.is_deleted)
@@ -322,27 +360,21 @@ export default function MudCostAnalysis() {
     .filter(entry => entry.rig_id === rigId && entry.well_id === wellId
       && (entrySectionId === ALL_SECTIONS || !entrySectionId || entry.section_id === entrySectionId))
     .sort((a, b) => b.entry_date.localeCompare(a.entry_date)), [entries, rigId, wellId, entrySectionId])
-  const selectedSectionEntries = activeEntries.filter(entry => entry.section_id === entrySectionId)
-  const trackedSections = new Set(activeEntries.map(entry => entry.section_id)).size
-  const latestEntry = selectedSectionEntries[0]
   const hasScope = Boolean(selectedRig && selectedWell)
   const canCreateHere = Boolean(hasScope && selectedRig && !selectedRig.is_deleted && selectedWell && !selectedWell.is_deleted && entrySection?.is_current)
   const invalidBalanceDates = balanceView !== 'inception' && dateFrom && dateTo && dateFrom > dateTo
   const currentSettings = settings.filter(row => row.is_current)
   const unconfiguredSettings = currentSettings.filter(row => !row.is_configured)
-  const latestCost = reconciliation?.latest_cost_per_bbl ?? null
-  const latestCostHint = latestCost
-    ? `${reconciliation?.latest_cost_per_bbl_section ?? ''}${reconciliation?.latest_cost_per_bbl_date ? ` · ${dateLabel(reconciliation.latest_cost_per_bbl_date)}` : ''}`
-    : reconciliation && reconciliation.configured_section_count > 0
-      ? 'A configured section needs additions before Cost/BBL can be derived'
-      : 'Configure a section mud type to derive Cost/BBL'
+  // Never render a prior well's figures during a scope change, before effects run.
+  const scopedKpis = kpiSnapshot?.rigId === rigId && kpiSnapshot.wellId === wellId ? kpiSnapshot : null
+  const scopedSettings = settings.filter(row => row.rig_id === rigId && row.well_id === wellId)
 
   const saveConfig = async (payload: MudCostSectionSettingPayload) => {
     const saved = await api<MudCostSectionSetting>('/mud-cost/section-settings', { method: 'PUT', body: body(payload) })
     setSettings(rows => rows.map(row => row.section_id === saved.section_id ? saved : row))
     setNotice(`Mud type for ${saved.section_label} was saved.`)
     setConfigRow(null)
-    await Promise.all([loadSettings(), loadReconciliation()])
+    await Promise.all([loadSettings(), loadReconciliation(), loadKpis()])
   }
 
   const auditExport = useCallback(async (payload: MudCostExportPayload) => {
@@ -472,7 +504,7 @@ export default function MudCostAnalysis() {
   }
 
   const refresh = async () => {
-    await Promise.all([loadReference(), loadEntries(), loadBalance(), loadSettings(), loadReconciliation()])
+    await Promise.all([loadReference(), loadEntries(), loadBalance(), loadSettings(), loadReconciliation(), loadKpis()])
   }
 
   const openCreate = () => {
@@ -506,7 +538,7 @@ export default function MudCostAnalysis() {
       }
       setEntryDialogOpen(false)
       setEditingEntry(null)
-      await Promise.all([loadEntries(), loadBalance(), loadSettings(), loadReconciliation()])
+      await Promise.all([loadEntries(), loadBalance(), loadSettings(), loadReconciliation(), loadKpis()])
     } catch (caught) {
       setEntryError(caught instanceof Error ? caught.message : 'Mud Cost entry could not be saved')
     } finally {
@@ -522,7 +554,7 @@ export default function MudCostAnalysis() {
     })
     if (result.imported_count) {
       setNotice(`${result.imported_count} Mud Cost row(s) imported${result.error_count ? `; ${result.error_count} row(s) need correction` : ''}.`)
-      await Promise.all([loadEntries(), loadBalance(), loadSettings(), loadReconciliation()])
+      await Promise.all([loadEntries(), loadBalance(), loadSettings(), loadReconciliation(), loadKpis()])
     }
     return result.errors
   }
@@ -549,7 +581,7 @@ export default function MudCostAnalysis() {
         setNotice(`${ids.length} Mud Cost entry/entries permanently deleted.`)
       }
       setPendingAction(null)
-      await Promise.all([loadEntries(), loadBalance(), loadSettings(), loadReconciliation()])
+      await Promise.all([loadEntries(), loadBalance(), loadSettings(), loadReconciliation(), loadKpis()])
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : 'The requested action could not be completed')
     } finally {
@@ -746,13 +778,12 @@ export default function MudCostAnalysis() {
         </Alert>}
       </Paper>
 
-      {!deletedView && <Box className="stat-grid" sx={{ gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(5, minmax(0, 1fr))' }, mb: `${space[4]}px` }}>
-        <Stat label="Daily entries" value={activeEntries.length.toLocaleString()} hint="Active records for the selected well"/>
-        <Stat label="Sections used" value={trackedSections.toLocaleString()} hint="Each section reconciles independently"/>
-        <Stat label="Latest entry" value={dateLabel(activeEntries[0]?.entry_date)} hint={activeEntries[0]?.section_label ?? 'No records yet'}/>
-        <Stat label="Latest closing stock" value={entrySectionId === ALL_SECTIONS ? 'Per section' : latestEntry ? mudQuantity(latestEntry.closing_stock) : '—'} hint={entrySection?.display_name ?? 'Choose one section to see its latest closing stock'}/>
-        <Stat label="Latest Cost/BBL" value={latestCost ? dailyMoney(latestCost, reconciliation?.currency) : '—'} hint={latestCostHint}/>
-      </Box>}
+      {!deletedView && <MudCostKpis
+        sections={sectionOptions}
+        settings={scopedSettings}
+        snapshot={scopedKpis}
+        loading={kpiLoading || !scopedKpis}
+      />}
 
       <Paper variant="outlined" sx={{ borderRadius: `${radius.lg}px`, overflow: 'hidden' }}>
         <Tabs value={tab} onChange={(_event, value: number) => setTab(value)} aria-label="Mud Cost Analysis pages" sx={{ px: 1.2, borderBottom: 1, borderColor: 'divider' }}>
@@ -881,7 +912,7 @@ export default function MudCostAnalysis() {
               <MenuItem value="daily">Daily detail</MenuItem>
               <MenuItem value="section">Section summary</MenuItem>
             </TextField>
-            <Button size="small" variant="outlined" startIcon={<CalculateOutlined/>} onClick={() => void loadReconciliation()} disabled={reconLoading}>
+            <Button size="small" variant="outlined" startIcon={<CalculateOutlined/>} onClick={() => { void loadReconciliation(); void loadKpis() }} disabled={reconLoading || kpiLoading}>
               {reconLoading ? 'Calculating…' : 'Recalculate'}
             </Button>
           </Box>
@@ -898,7 +929,7 @@ export default function MudCostAnalysis() {
             : reconciliation
               ? <>
                   <Box className="stat-grid" sx={{ gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, mb: 1.6 }}>
-                    <Stat label="Latest Cost/BBL" value={reconciliation.latest_cost_per_bbl ? dailyMoney(reconciliation.latest_cost_per_bbl, reconciliation.currency) : '—'} hint={reconciliation.latest_cost_per_bbl ? `${reconciliation.latest_cost_per_bbl_section}${reconciliation.latest_cost_per_bbl_date ? ` · ${dateLabel(reconciliation.latest_cost_per_bbl_date)}` : ''}` : reconciliation.configured_section_count ? 'Additions are required to derive Cost/BBL' : 'No section mud type configured'}/>
+                    <MudCostReconciliationRateKpi reconciliation={reconciliation}/>
                     <Stat label="Actual mud chemicals" value={dailyMoney(reconciliation.total_actual_cost, reconciliation.currency)} hint="Daily Cost register, section-scoped, in the AFE standard currency"/>
                     <Stat label="Reconciled mud cost" value={dailyMoney(reconciliation.total_reconciled_cost, reconciliation.currency)} hint="WBM uses actual cost; other mud types value Consumption/Losses at Cost/BBL"/>
                     <Stat label="Reconciliation difference" value={dailyMoney(reconciliation.total_adjustment, reconciliation.currency)} hint={`${reconciliation.configured_section_count} configured · ${reconciliation.unconfigured_section_count} unconfigured section(s)`}/>
@@ -953,7 +984,7 @@ export default function MudCostAnalysis() {
         await api(`/mud-cost/entries/${entry.id}/opening-stock`, { method: 'PUT', body: body(payload) })
         setOpeningStockEntry(null)
         setNotice('Initial opening stock saved. Section balances and reconciliation recalculated.')
-        await Promise.all([loadEntries(), loadBalance(), loadReconciliation()])
+        await Promise.all([loadEntries(), loadBalance(), loadReconciliation(), loadKpis()])
       }}
     />
 

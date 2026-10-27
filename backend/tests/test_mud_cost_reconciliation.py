@@ -702,3 +702,64 @@ def test_opening_stock_correction_permission_recalculates_balances_and_well_cost
             assert audit.actor_email == "editor@example.com"
             assert "100" in audit.summary and "200" in audit.summary
             assert "Corrected tank survey" in audit.summary
+
+
+def test_well_wide_kpi_sources_use_inception_balances_and_latest_saved_rates():
+    """The dashboard's unfiltered sources remain section-wise, including future records."""
+    with TestClient(app) as client:
+        headers = login(client)
+        scope = setup_well(client, headers)
+        first = create_mud_entry(client, headers, scope, "2020-01-01", 0, [
+            line("opening_stock", "100"), line("extra_obm_received", "20"),
+            line("drill_water", "10"), line("shakers", "5"), line("backloads", "2"),
+        ])
+        create_mud_entry(client, headers, scope, "2020-01-02", 1, [
+            line("opening_stock", "200"), line("drill_water", "25"),
+            line("trips", "10"),
+        ])
+        future = create_mud_entry(client, headers, scope, "2099-01-01", 0, [
+            line("other_receipts", "3"), line("barite", "4"),
+            line("trips", "2"), line("backloads", "1"),
+        ])
+        seed_daily_cost(scope, section_costs=[
+            ("2020-01-01", 0, Decimal("10")), ("2099-01-01", 0, Decimal("100")),
+        ])
+        configure_section(client, headers, scope, 0, "OBM", "2")
+        configure_section(client, headers, scope, 1, "WBM", None)
+        query = f"rig_id={scope['rig']['id']}&well_id={scope['well']['id']}"
+        balance = _json(client, "get", f"/api/v1/mud-cost/material-balance?{query}&view=inception", headers)
+        rows = {row["section_id"]: row for row in balance["rows"]}
+        surface, intermediate = (rows[section["id"]] for section in scope["sections"])
+        assert Decimal(surface["opening_stock"]) == 100  # first opening, not the sum of daily openings
+        assert Decimal(surface["receipt"]) == 23
+        assert Decimal(surface["additions"]) == 14
+        assert Decimal(surface["consumption_losses"]) == 7
+        assert Decimal(surface["others"]) == 3
+        assert Decimal(surface["closing_stock"]) == 127
+        assert Decimal(intermediate["opening_stock"]) == 200
+        assert Decimal(intermediate["closing_stock"]) == 215
+
+        all_dates = _json(client, "get", f"/api/v1/mud-cost/reconciliation?{query}&include_draft=true&to=9999-12-31", headers)
+        report_to_future = _json(client, "get", f"/api/v1/mud-cost/reconciliation?{query}&include_draft=true&to=2099-01-01", headers)
+        by_section = {row["section_id"]: row for row in all_dates["sections"]}
+        report_by_section = {row["section_id"]: row for row in report_to_future["sections"]}
+        obm = by_section[scope["sections"][0]["id"]]
+        wbm = by_section[scope["sections"][1]["id"]]
+        assert obm["cost_per_bbl"] == report_by_section[scope["sections"][0]["id"]]["cost_per_bbl"]
+        assert Decimal(obm["total_mud"]) == 134  # other receipts affect stock, not the pricing basis
+        assert Decimal(obm["cost_per_bbl"]) == Decimal("2.6119402985")
+        assert Decimal(wbm["cost_per_bbl"]) == 0  # zero is a valid rate, not an absent rate
+
+        # Soft delete recalculates the inception balance; restore brings it back.
+        response = client.delete(f"/api/v1/mud-cost/entries/{future['id']}", headers=headers)
+        assert response.status_code == 200, response.text
+        after = _json(client, "get", f"/api/v1/mud-cost/material-balance?{query}&view=inception", headers)
+        surface_after = next(row for row in after["rows"] if row["section_id"] == scope["sections"][0]["id"])
+        assert Decimal(surface_after["closing_stock"]) == Decimal(first["closing_stock"]) == 123
+        rates_after = _json(client, "get", f"/api/v1/mud-cost/reconciliation?{query}&include_draft=true&to=9999-12-31", headers)
+        surface_rate_after = next(row for row in rates_after["sections"] if row["section_id"] == scope["sections"][0]["id"])
+        assert Decimal(surface_rate_after["cost_per_bbl"]) == Decimal("2.6923076923")
+        restored = client.post(f"/api/v1/mud-cost/entries/{future['id']}/restore", headers=headers)
+        assert restored.status_code == 200, restored.text
+        after_restore = _json(client, "get", f"/api/v1/mud-cost/material-balance?{query}&view=inception", headers)
+        assert Decimal(next(row for row in after_restore["rows"] if row["section_id"] == scope["sections"][0]["id"])["closing_stock"]) == 127
