@@ -109,10 +109,10 @@ body {
 .mono { font-family: var(--wcp-font-mono); font-variant-numeric: tabular-nums; }
 .tnum { font-variant-numeric: tabular-nums; }
 
-.brand-mark { width: 38px; height: 38px; border-radius: var(--wcp-radius-md); background: #123A63; position: relative; overflow: hidden; flex: none; }
-.brand-line { position: absolute; left: 9px; top: 9px; width: 19px; height: 22px; border: 2.7px solid white; border-bottom: 0; border-radius: 10px 10px 0 0; transform: rotate(18deg); }
-.brand-line:after { content: ''; position: absolute; width: 12px; height: 2.5px; background: white; left: 2px; top: 12px; transform: rotate(-35deg); border-radius: 2px; }
-.brand-dot { position: absolute; right: 6px; top: 8px; width: 5px; height: 5px; border-radius: 50%; background: #8FB8E4; }
+.brand-mark { width: 46px; height: 46px; border-radius: var(--wcp-radius-md); background: #123A63; position: relative; overflow: hidden; flex: none; }
+.brand-line { position: absolute; left: 11px; top: 11px; width: 23px; height: 26px; border: 3px solid white; border-bottom: 0; border-radius: 10px 10px 0 0; transform: rotate(18deg); }
+.brand-line:after { content: ''; position: absolute; width: 14px; height: 3px; background: white; left: 3px; top: 14px; transform: rotate(-35deg); border-radius: 2px; }
+.brand-dot { position: absolute; right: 8px; top: 10px; width: 6px; height: 6px; border-radius: 50%; background: #8FB8E4; }
 
 .topnav-item {
   display: inline-flex; align-items: center; gap: 6px;
@@ -159,15 +159,14 @@ body {
 .login-shell { min-height: 100vh; display: grid; grid-template-columns: 48% 52%; background: #fff; }
 html[data-theme='dark'] .login-shell { background: #0E1B29; }
 .login-story { background: var(--login-panel); color: var(--login-panel-fg); padding: 38px clamp(30px, 5vw, 88px) 30px; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+
+.login-bg-image { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.15; pointer-events: none; z-index: 0; }
 .story-top, .story-bottom { display: flex; align-items: center; justify-content: space-between; gap: 25px; position: relative; z-index: 1; } .story-top > p { max-width: 220px; text-align: right; line-height: 1.5; }
-.story-main { position: relative; z-index: 1; margin: auto 0; padding: 60px 0 30px; }
+.story-main { position: relative; z-index: 1; margin: auto 0; padding: 40px 0 30px; }
 .story-eyebrow { font-size: 10px; letter-spacing: 2px; font-weight: 800; color: var(--login-panel-muted); }
 .story-headline { font-size: clamp(44px, 5vw, 76px) !important; line-height: 1.12 !important; letter-spacing: -3.6px !important; margin: 23px 0 !important; } .story-headline em { font-style: normal; color: #8FB8E4; }
 .story-copy { max-width: 450px; color: var(--login-panel-muted); font-size: 14px !important; line-height: 1.9 !important; }
-.story-visual { height: 260px; max-width: 460px; margin-top: 32px; position: relative; } .visual-grid { position: absolute; inset: 0; background-image: linear-gradient(#ffffff10 1px, transparent 1px), linear-gradient(90deg, #ffffff10 1px, transparent 1px); background-size: 36px 36px; mask-image: linear-gradient(to bottom, black, transparent); }
-.visual-card { position: absolute; top: 24px; left: 10px; width: 78%; height: 190px; border-radius: 12px; background: #123A63cc; border: 1px solid #8FB8E440; padding: 22px; }
-.visual-bars { height: 49px; display: flex; align-items: end; gap: 8px; margin-top: 19px; } .visual-bars span { flex: 1; background: #8FB8E4; border-radius: 2px 2px 0 0; opacity: .85; }
-.visual-float { position: absolute; right: 0; bottom: 28px; background: white; color: #123A63; border-radius: 7px; padding: 13px 17px; display: flex; align-items: center; gap: 9px; font-size: 11px; font-weight: 800; }
+
 .login-form-side { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 50px 30px; }
 .login-form-wrap { width: min(100%, 390px); } .login-icon { width: 47px; height: 47px; border-radius: var(--wcp-radius-lg); background: var(--surface-accent); color: var(--surface-accent-fg); display: grid; place-items: center; }
 .field-label { color: #334E57; font-size: 10px !important; font-weight: 800 !important; letter-spacing: 1.2px !important; margin-bottom: 9px !important; display: block; cursor: pointer; }
