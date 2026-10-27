@@ -1,4 +1,4 @@
-"""Standardized engineering unit helpers for WellCostingPro.
+"""Standardized engineering unit helpers for WellCostIQ.
 
 All well configuration depths and daily cost actual depths are standardized to
 metres (``m``) using the fixed conversion factor ``1 m = 3.281 ft``

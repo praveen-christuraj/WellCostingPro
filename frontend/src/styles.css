@@ -174,7 +174,9 @@ html[data-theme='dark'] .login-shell { background: #0E1B29; }
 html[data-theme='dark'] .field-label { color: #A7B8CB; }
 .login-trust { display: flex; gap: 9px; align-items: center; background: var(--surface-muted); border: 1px solid var(--line-soft); padding: 14px 16px; border-radius: 7px; margin-top: 38px; }
 .login-help { position: absolute; bottom: 26px; color: #8293A6; font-size: 11px !important; text-align: center; } .login-mobile-brand { display: none; }
-@media (max-width: 1000px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } .overview-grid { grid-template-columns: 1fr; } .story-top > p { display: none; } }
+/* The lockup now carries the product subtitle, so the story's side note steps aside sooner. */
+@media (max-width: 1180px) { .story-top > p { display: none; } }
+@media (max-width: 1000px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } .overview-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .login-shell { grid-template-columns: 1fr; } .login-story { display: none; } .login-form-side { min-height: 100vh; justify-content: center; padding: 70px 25px; } .login-mobile-brand { display: block; position: absolute; left: 25px; top: 25px; } .welcome-strip { flex-wrap: wrap; } }
 @media (max-width: 520px) { .stat-grid { gap: 10px; } .stat-card { padding: 16px; } .stat-value { font-size: 24px !important; } .content-card { padding: 18px; } }
 

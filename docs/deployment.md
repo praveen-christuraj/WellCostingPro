@@ -1,4 +1,4 @@
-# Deploying WellCosting Pro: Vercel + Render + Supabase
+# Deploying WellCostIQ: Vercel + Render + Supabase
 
 This guide deploys the three parts of the application to three managed services:
 
@@ -161,7 +161,7 @@ service from `render.yaml`.
 | `DATABASE_URL` | **Yes** | The Session pooler URI from §1, with the `postgresql+psycopg://` driver prefix and `sslmode=require` |
 | `SECRET_KEY` | **Yes** | Generate a unique key with `openssl rand -hex 32`; on Windows PowerShell, `py -c "import secrets; print(secrets.token_hex(32))"` also works. Use at least 32 characters per environment; the app rejects a missing, short, or default key with PostgreSQL. |
 | `SECURE_COOKIES` | **Yes** | `true` — Vercel serves HTTPS, and the refresh cookie is set with the `Secure` flag |
-| `CORS_ORIGINS` | **Yes** | Exact Vercel origin(s), comma-separated, e.g. `https://wellcosting-pro.vercel.app`. Add custom domains too. No paths or trailing slash. |
+| `CORS_ORIGINS` | **Yes** | Exact Vercel origin(s), comma-separated, e.g. `https://wellcostiq.vercel.app`. Add custom domains too. No paths or trailing slash. |
 | `BOOTSTRAP_ADMIN_ON_STARTUP` | No | `true` (default). Set `false` only if you seed manually. |
 | `SEED_ORG_SLUG` | First boot | Workspace ID, e.g. `my-company` |
 | `SEED_ORG_NAME` | First boot | Display name, e.g. `My Company` |
@@ -170,7 +170,8 @@ service from `render.yaml`.
 | `SEED_ADMIN_PASSWORD` | First boot | Password, **12+ characters**. **Delete this variable only after logs confirm seeding and a login succeeds** (see §4). |
 | `ACCESS_TOKEN_MINUTES` | No | Default `15` |
 | `REFRESH_TOKEN_DAYS` | No | Default `7` |
-| `APP_NAME` | No | Default `WellCosting Pro` |
+| `APP_NAME` | No | Default `WellCostIQ` |
+| `APP_TAGLINE` | No | Default `Well Cost Estimation & Tracking`; shown as the API description in `/docs` and OpenAPI |
 
 Notes:
 
@@ -239,7 +240,7 @@ Notes:
 6. In Vercel, open the project's **Deployments** page and wait for the latest
    deployment to finish. Open the assigned production domain (not a preview
    deployment URL) and record its origin, e.g.
-   `https://wellcosting-pro.vercel.app`.
+   `https://wellcostiq.vercel.app`.
 7. Return to Render → service → **Environment**. Set `CORS_ORIGINS` to that
    exact origin (scheme + hostname, with no path/trailing slash); include any
    custom domain as another comma-separated origin. Save and redeploy. No

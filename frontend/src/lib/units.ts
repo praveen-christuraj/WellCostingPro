@@ -1,5 +1,5 @@
 /**
- * Shared unit & FX helpers for WellCostingPro.
+ * Shared unit & FX helpers for WellCostIQ.
  *
  * Standing rules:
  *  - Every depth across well configuration, AFE scope, daily cost sheets,

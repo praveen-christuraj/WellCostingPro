@@ -5,6 +5,7 @@ import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOut
 import Brand from './Brand'
 import { FormDialog, ErrorMessage } from './Common'
 import { api, body } from '../lib/api'
+import { pageTitle } from '../lib/appInfo'
 import { useAuth } from '../context/AuthContext'
 import { useColorMode } from '../context/ThemeContext'
 
@@ -116,7 +117,7 @@ export default function Layout() {
       : modulesForUser.flatMap(m => m.items)
         .filter(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`))
         .sort((a, b) => b.path.length - a.path.length)[0]?.label
-    document.title = page ? `${page} · WellCosting Pro` : 'WellCosting Pro'
+    document.title = pageTitle(page)
   }, [location.pathname]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return <Box display="flex" flexDirection="column" minHeight="100vh">

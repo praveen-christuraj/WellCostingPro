@@ -1,5 +1,5 @@
 /**
- * Design tokens — the single source of truth for the WellCosting Pro interface.
+ * Design tokens — the single source of truth for the WellCostIQ interface.
  *
  * Aesthetic direction: an "enterprise navy instrument panel". Dense, quiet and
  * data-first: navy on white, one accent, no decorative motion, generous use of

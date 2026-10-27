@@ -2,6 +2,7 @@ import { createPortal } from 'react-dom'
 import { depthToMeters } from '../../lib/units'
 import { amountText, type AfeEstimate, type AfeStatusEvent, type CurrencySetup, type ServiceLineOut } from '../../lib/afe'
 import { groupServiceOptions, sortServicesByGroup } from '../../lib/serviceGroups'
+import { APP_NAME } from '../../lib/appInfo'
 
 // Print layout for a saved AFE, in the fixed two-page AFE format:
 //   page 1 - title, compact well / AFE metadata, one categorized cost table,
@@ -269,7 +270,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
       </div>
 
       <footer className="ps-pagefoot">
-        <span>WellCosting Pro · AFE cost estimate · {afe.afe_name}</span>
+        <span>{APP_NAME} · AFE cost estimate · {afe.afe_name}</span>
       </footer>
     </div>
 
@@ -401,7 +402,7 @@ export function AfePrintSheet({ estimate }: { estimate: AfeEstimate }) {
       </div>
 
       <footer className="ps-pagefoot">
-        <span>WellCosting Pro · AFE cost estimate · {afe.afe_name}</span>
+        <span>{APP_NAME} · AFE cost estimate · {afe.afe_name}</span>
       </footer>
     </div>
   </div>, document.body)

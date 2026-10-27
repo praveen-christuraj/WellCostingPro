@@ -1,6 +1,6 @@
-# WellCosting Pro
+# WellCostIQ
 
-A tenant-aware foundation for a well-costing SaaS: login, workspace access management, and well-costing master reference data, with costing workflows next.
+**Well Cost Estimation & Tracking** — a tenant-aware foundation for a well-costing SaaS: login, workspace access management, and well-costing master reference data, with costing workflows next.
 
 ## Stack
 

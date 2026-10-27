@@ -5,7 +5,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-    app_name: str = "WellCosting Pro"
+    app_name: str = "WellCostIQ"
+    app_tagline: str = "Well Cost Estimation & Tracking"
     database_url: str = "sqlite:///./wellcosting.db"
     secret_key: str = "development-only-change-this-secret-before-deploying"
     access_token_minutes: int = 15
