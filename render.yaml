@@ -1,4 +1,4 @@
-# Render blueprint for the WellCosting Pro API.
+# Render blueprint for the WellCostIQ API.
 # Apply via Render Dashboard -> Blueprints -> New Blueprint Instance (repo root).
 # Secrets (sync: false) are entered in the Render dashboard, never committed here.
 # Full walkthrough: docs/deployment.md
@@ -27,7 +27,7 @@ services:
       # Vercel is HTTPS, so the refresh cookie must be Secure.
       - key: SECURE_COOKIES
         value: "true"
-      # Exact Vercel origin(s), comma-separated, e.g. https://wellcosting-pro.vercel.app
+      # Exact Vercel origin(s), comma-separated, e.g. https://wellcostiq.vercel.app
       - key: CORS_ORIGINS
         sync: false
       - key: BOOTSTRAP_ADMIN_ON_STARTUP

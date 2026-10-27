@@ -1,6 +1,6 @@
 # AFE Management: design and open questions
 
-This document describes the AFE Management module added to WellCostingPro. It was ported for
+This document describes the AFE Management module added to WellCostIQ. It was ported for
 functionality from the reference Nuxt application (praveen-christuraj/Well-Costing). The UI is
 redesigned for this app's structure and models; the reference tab layout is not copied.
 

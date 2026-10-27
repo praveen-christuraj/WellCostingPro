@@ -10,6 +10,7 @@ import { lihMeasure, type LihCostReport } from '../../lib/lihCost'
 import type { NdtEntry } from '../../lib/ndtInspection'
 import { compareServiceCodes, compareServiceGroups, serviceGroupLabel } from '../../lib/serviceGroups'
 import { depthToMeters } from '../../lib/units'
+import { APP_NAME } from '../../lib/appInfo'
 
 export type CostPrintReport = {
   title: string
@@ -654,7 +655,7 @@ function CumulativeReportDetails({ report }: { report: CostPrintReport }) {
     })
   return <div className="daily-report-details">
     <header>
-      <div className="ps-eyebrow">WellCosting Pro · cumulative saved costs</div>
+      <div className="ps-eyebrow">{APP_NAME} · cumulative saved costs</div>
       <h1>{reportTitle(report)}</h1>
       <p>{report.period} · Printed {new Date().toLocaleString()}</p>
       <p>These schedules consolidate saved daily sheets. Daily line-by-line breakdowns are intentionally omitted; currencies and incompatible AFEs remain separate.</p>

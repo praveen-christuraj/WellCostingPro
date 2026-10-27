@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { mudQuantity, type MudCostBalanceRow } from '../../lib/mudCost'
+import { APP_NAME } from '../../lib/appInfo'
 
 export type MudCostPrintReport = {
   rig: string
@@ -18,7 +19,7 @@ export function MudCostPrintSheet({ report }: { report: MudCostPrintReport | nul
   return createPortal(<article className="afe-print-sheet mud-cost-print-sheet" aria-hidden="true">
     <header className="ps-titlebar">
       <div className="ps-title">
-        <div className="ps-eyebrow">WellCosting Pro · Daily Cost Management</div>
+        <div className="ps-eyebrow">{APP_NAME} · Daily Cost Management</div>
         <h1>Mud Cost Analysis — Material Balance</h1>
       </div>
       <div className="ps-titlemeta">

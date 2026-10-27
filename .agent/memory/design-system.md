@@ -1,4 +1,4 @@
-# Design system — WellCosting Pro UI
+# Design system — WellCostIQ UI
 
 Read this before writing or reviewing any interface code. It is the committed record of the
 design decisions, in the spirit of the `docs/UI_skills` cheatsheet (frontend-design, UI/UX Pro
