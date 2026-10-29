@@ -142,13 +142,20 @@ export interface NptUpaWellRow {
   well_name: string
   rig_code: string
   block_code: string
-  planned_days: number
-  upa_days: number
-  npt_days: number
+  planned_affected_dates: number
+  upa_affected_dates: number
+  npt_affected_dates: number
+  planned_hours: string
+  upa_hours: string
+  npt_hours: string
+  planned_days: string
+  upa_days: string
+  npt_days: string
   planned_amount: string
   upa_amount: string
   npt_amount: string
   total_amount: string
+  overallocated_dates: number
 }
 export interface NptUpaDetailRow {
   row_id: string
@@ -159,7 +166,9 @@ export interface NptUpaDetailRow {
   block_code: string
   scope: string
   classification: string
-  days: number
+  affected_dates: number
+  hours: string
+  days: string
   amount: string
   currency: string
 }
@@ -173,6 +182,7 @@ export interface NptUpaReport {
   totals: NptUpaWellRow
   entry_count: number
   excluded_entry_count: number
+  overallocated_date_count: number
 }
 
 export interface ReportDefinition {

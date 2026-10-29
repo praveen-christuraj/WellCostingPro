@@ -96,12 +96,12 @@ const filters = {
 const nptReport = {
   currency: 'USD', date_from: null, date_to: null, include_draft: true,
   wells: [
-    { well_id: 'w1', well_code: 'WELL-01', well_name: 'Well One', rig_code: 'RIG-01', block_code: 'BLOCK-A', planned_days: 1, upa_days: 1, npt_days: 1, planned_amount: '100.00', upa_amount: '650.00', npt_amount: '200.00', total_amount: '950.00' },
-    { well_id: 'w2', well_code: 'WELL-02', well_name: 'Well Two', rig_code: 'RIG-02', block_code: 'BLOCK-B', planned_days: 1, upa_days: 0, npt_days: 0, planned_amount: '150.00', upa_amount: '0.00', npt_amount: '0.00', total_amount: '150.00' },
+    { well_id: 'w1', well_code: 'WELL-01', well_name: 'Well One', rig_code: 'RIG-01', block_code: 'BLOCK-A', planned_affected_dates: 1, upa_affected_dates: 1, npt_affected_dates: 1, planned_hours: '24.00', upa_hours: '12.00', npt_hours: '12.00', planned_days: '1.0000', upa_days: '0.5000', npt_days: '0.5000', planned_amount: '100.00', upa_amount: '650.00', npt_amount: '200.00', total_amount: '950.00', overallocated_dates: 0 },
+    { well_id: 'w2', well_code: 'WELL-02', well_name: 'Well Two', rig_code: 'RIG-02', block_code: 'BLOCK-B', planned_affected_dates: 2, upa_affected_dates: 0, npt_affected_dates: 0, planned_hours: '24.00', upa_hours: '0.00', npt_hours: '0.00', planned_days: '1.0000', upa_days: '0.0000', npt_days: '0.0000', planned_amount: '150.00', upa_amount: '0.00', npt_amount: '0.00', total_amount: '150.00', overallocated_dates: 0 },
   ],
   detail: [],
-  totals: { well_id: '', well_code: '', well_name: 'All wells (USD)', rig_code: '', block_code: '', planned_days: 2, upa_days: 1, npt_days: 1, planned_amount: '250.00', upa_amount: '650.00', npt_amount: '200.00', total_amount: '1100.00' },
-  entry_count: 3, excluded_entry_count: 0,
+  totals: { well_id: '', well_code: '', well_name: 'All wells (USD)', rig_code: '', block_code: '', planned_affected_dates: 3, upa_affected_dates: 1, npt_affected_dates: 1, planned_hours: '48.00', upa_hours: '12.00', npt_hours: '12.00', planned_days: '2.0000', upa_days: '0.5000', npt_days: '0.5000', planned_amount: '250.00', upa_amount: '650.00', npt_amount: '200.00', total_amount: '1100.00', overallocated_dates: 0 },
+  entry_count: 3, excluded_entry_count: 0, overallocated_date_count: 0,
 }
 
 const container = w.document.getElementById('root')
@@ -185,8 +185,8 @@ for (const mode of ['light', 'dark']) {
     )
   })
   const nptText = doc.body.textContent || ''
-  check(`${mode}: NPT/UPA matrix lists the four measures`, nptText.includes('NPT days') && nptText.includes('NPT cost') && nptText.includes('UPA days') && nptText.includes('UPA cost'))
-  check(`${mode}: NPT/UPA totals and per-well days render`, nptText.includes('650.00 USD') && nptText.includes('All wells'))
+  check(`${mode}: NPT/UPA matrix separates duration, affected dates and cost`, nptText.includes('NPT allocated days') && nptText.includes('NPT affected cost dates') && nptText.includes('NPT cost') && nptText.includes('UPA allocated hours') && nptText.includes('UPA affected cost dates') && nptText.includes('UPA cost'))
+  check(`${mode}: NPT/UPA totals and per-well allocations render`, nptText.includes('650.00 USD') && nptText.includes('All wells') && nptText.includes('0.5'))
 
   // Filter panel.
   await act(async () => {

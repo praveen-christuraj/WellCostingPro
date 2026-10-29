@@ -1,5 +1,5 @@
 import { Alert, Box, Paper, Typography } from '@mui/material'
-import { formatMoney, type NptUpaReport } from '../../lib/usageReports'
+import { formatMoney, formatQuantity, type NptUpaReport } from '../../lib/usageReports'
 
 const cellSx = {
   border: '1px solid',
@@ -13,17 +13,23 @@ const cellSx = {
 type Measure = {
   key: string
   label: string
-  kind: 'days' | 'money'
-  field: 'planned_days' | 'upa_days' | 'npt_days' | 'planned_amount' | 'upa_amount' | 'npt_amount'
+  kind: 'duration' | 'hours' | 'dates' | 'money'
+  field: 'planned_days' | 'upa_days' | 'npt_days' | 'planned_hours' | 'upa_hours' | 'npt_hours' | 'planned_affected_dates' | 'upa_affected_dates' | 'npt_affected_dates' | 'planned_amount' | 'upa_amount' | 'npt_amount'
   total: boolean
 }
 
 const MEASURES: Measure[] = [
-  { key: 'npt-days', label: 'NPT days', kind: 'days', field: 'npt_days', total: true },
+  { key: 'npt-days', label: 'NPT allocated days', kind: 'duration', field: 'npt_days', total: true },
+  { key: 'npt-hours', label: 'NPT allocated hours', kind: 'hours', field: 'npt_hours', total: true },
+  { key: 'npt-dates', label: 'NPT affected cost dates', kind: 'dates', field: 'npt_affected_dates', total: true },
   { key: 'npt-cost', label: `NPT cost`, kind: 'money', field: 'npt_amount', total: true },
-  { key: 'upa-days', label: 'UPA days', kind: 'days', field: 'upa_days', total: true },
+  { key: 'upa-days', label: 'UPA allocated days', kind: 'duration', field: 'upa_days', total: true },
+  { key: 'upa-hours', label: 'UPA allocated hours', kind: 'hours', field: 'upa_hours', total: true },
+  { key: 'upa-dates', label: 'UPA affected cost dates', kind: 'dates', field: 'upa_affected_dates', total: true },
   { key: 'upa-cost', label: `UPA cost`, kind: 'money', field: 'upa_amount', total: true },
-  { key: 'planned-days', label: 'Planned days (reference)', kind: 'days', field: 'planned_days', total: false },
+  { key: 'planned-days', label: 'Planned allocated days (reference)', kind: 'duration', field: 'planned_days', total: false },
+  { key: 'planned-hours', label: 'Planned allocated hours (reference)', kind: 'hours', field: 'planned_hours', total: false },
+  { key: 'planned-dates', label: 'Planned affected cost dates (reference)', kind: 'dates', field: 'planned_affected_dates', total: false },
   { key: 'planned-cost', label: 'Planned cost (reference)', kind: 'money', field: 'planned_amount', total: false },
 ]
 
@@ -36,7 +42,7 @@ export default function NptUpaMatrix({ report, currency }: { report: NptUpaRepor
         <Box>
           <Typography fontWeight={800} fontSize={14}>NPT / UPA matrix</Typography>
           <Typography color="text.secondary" fontSize={11.2}>
-            Days are distinct cost dates carrying that classification; costs are in {currency}.
+            Duration uses deduplicated explicit service-hour allocations. Billing-day quantities, affected cost dates and costs remain separate measures; costs are in {currency}.
           </Typography>
         </Box>
         <Typography color="text.secondary" fontSize={11.2} className="tnum">
@@ -80,11 +86,11 @@ export default function NptUpaMatrix({ report, currency }: { report: NptUpaRepor
                 <th>{measure.label}{measure.kind === 'money' ? ` (${currency})` : ''}</th>
                 {report.wells.map(well => {
                   const value = well[measure.field]
-                  return <td key={well.well_id}>{measure.kind === 'money' ? formatMoney(value, currency) : value}</td>
+                  return <td key={well.well_id}>{measure.kind === 'money' ? formatMoney(value, currency) : formatQuantity(value)}</td>
                 })}
                 <td>{measure.kind === 'money'
                   ? formatMoney(report.totals[measure.field], currency)
-                  : report.totals[measure.field]}</td>
+                  : formatQuantity(report.totals[measure.field])}</td>
               </tr>
             ))}
             <tr data-total="true">
@@ -97,7 +103,7 @@ export default function NptUpaMatrix({ report, currency }: { report: NptUpaRepor
       )}
       {wellById.size === 0 ? null : (
         <Typography color="text.secondary" fontSize={11} mt={1}>
-          A cost date can count for more than one classification when the sheet carries both NPT and UPA lines.
+          An affected cost date may appear in both NPT and UPA. Allocated duration is not derived from date counts: repeated charges with the same date, activity, sub-activity, section and phase contribute time once.
         </Typography>
       )}
     </Paper>

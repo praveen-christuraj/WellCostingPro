@@ -1790,6 +1790,8 @@ def _reject_duplicate_service_sub_activity(services: list[dict[str, Any]]) -> No
     charge categories or section/phase scopes can coexist under a sub activity;
     an identical service/sub-activity/category/scope tuple is still a duplicate.
     Time-based hourly allocations are limited to 24 hours per service/category.
+    The deduplicated whole-well operational allocation is also limited to 24
+    hours, so repeated simultaneous service charges cannot inflate MIS duration.
     """
     hours: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     for fields in services:
@@ -1812,6 +1814,33 @@ def _reject_duplicate_service_sub_activity(services: list[dict[str, Any]]) -> No
                 ),
             )
         seen[key] = code
+
+    operational_hours: dict[tuple[str, str, str, str, str], Decimal] = {}
+    for fields in services:
+        if (
+            fields["charging_basis"] != "Day Rate"
+            or fields["charge_category"] in SERVICE_ONE_TIME
+            or fields["quantity_unit"] != "hours"
+        ):
+            continue
+        duration = Decimal(fields["quantity"])
+        key = (
+            fields.get("classification") or "Planned",
+            fields.get("activity_id") or "",
+            fields.get("sub_activity_id") or "",
+            fields.get("hole_section_id") or "",
+            fields.get("phase_id") or "",
+        )
+        operational_hours[key] = max(operational_hours.get(key, Decimal("0")), duration)
+    total_operational_hours = sum(operational_hours.values(), Decimal("0"))
+    if total_operational_hours > Decimal("24"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Whole-well operational allocations total {total_operational_hours:g} hours on this daily sheet. "
+                "After repeated service charges are deduplicated, Planned, NPT and UPA time together cannot exceed 24 hours."
+            ),
+        )
 
 
 def _max_depth_seq_for_well_date(

@@ -36,7 +36,7 @@ const USAGE_REPORT_CARDS = [
   },
   {
     path: '/reports/npt-upa', title: 'NPT/UPA report', icon: ScheduleRounded,
-    description: 'NPT and UPA days and costs per well, alongside planned activity, for the selected filters.',
+    description: 'NPT and UPA allocated duration, affected cost dates and costs per well, alongside planned activity.',
   },
 ]
 

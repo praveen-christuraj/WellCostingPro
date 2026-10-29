@@ -285,14 +285,17 @@ def _setup(client, headers):
     entry_2 = _entry(client, headers, well_one["well"], afe_one, "2026-10-11")
     rate_2 = _baseline_rate(client, headers, entry_2)
     upa_line = _service_line(act_upa, well_one["subs"][1], vendor, service, rate_2, hole_2, phase)
-    upa_line.update({"override_rate": "300", "override_reason": "Unplanned diagnostic call-out",
+    upa_line.update({"quantity": "12", "quantity_unit": "hours", "override_rate": "576", "override_reason": "Unplanned diagnostic call-out",
                      "baseline_service_rate_id": None, "remarks": "UPA work"})
+    # A second cost line for the same operational allocation must increase cost,
+    # but must not repeat its 12 hours in the NPT/UPA duration report.
+    upa_personnel = {**upa_line, "charge_category": "Personnel-Operation", "override_rate": "24", "remarks": "UPA personnel"}
     npt_line = _service_line(act_npt, well_one["subs"][2], vendor, service, rate_2, hole_2, phase)
-    npt_line.update({"override_rate": "200", "override_reason": "Rig repair standby time",
+    npt_line.update({"quantity": "12", "quantity_unit": "hours", "override_rate": "400", "override_reason": "Rig repair standby time",
                      "baseline_service_rate_id": None, "remarks": "NPT standby"})
     _save(client, headers, entry_2, {
         "remarks": "day 2",
-        "services": [upa_line, npt_line],
+        "services": [upa_line, upa_personnel, npt_line],
         "consumables": [
             _consumable(act_upa, well_one["subs"][1], vendor, hole_2, phase,
                         category="Mud Chemicals", item_kind="mud_chemical",
@@ -475,7 +478,7 @@ def test_service_and_vendor_reports_are_cost_only_and_vendor_spans_groups():
         assert groups == {"Services", "Consumables", "Tangibles"}
 
 
-def test_npt_upa_report_counts_distinct_days_and_classification_costs():
+def test_npt_upa_report_separates_allocated_duration_affected_dates_and_costs():
     with TestClient(app) as client:
         headers = login(client)
         setup = _setup(client, headers)
@@ -483,9 +486,14 @@ def test_npt_upa_report_counts_distinct_days_and_classification_costs():
         assert data["currency"] == "USD"
         assert data["excluded_entry_count"] == 0
         well_one = next(row for row in data["wells"] if row["well_code"] == "WELL-01")
-        assert well_one["npt_days"] == 1
-        assert well_one["upa_days"] == 1
-        assert well_one["planned_days"] == 1  # only day 1 carries a planned line
+        assert Decimal(well_one["npt_days"]) == Decimal("0.5000")
+        assert Decimal(well_one["upa_days"]) == Decimal("0.5000")
+        assert Decimal(well_one["planned_days"]) == Decimal("0.0000")  # billing-day quantity is not elapsed time
+        assert Decimal(well_one["npt_hours"]) == Decimal("12.00")
+        assert Decimal(well_one["upa_hours"]) == Decimal("12.00")  # repeated UPA charge is deduplicated
+        assert well_one["npt_affected_dates"] == 1
+        assert well_one["upa_affected_dates"] == 1
+        assert well_one["planned_affected_dates"] == 1
         assert Decimal(well_one["npt_amount"]) == Decimal("200.00")
         # UPA = 300 service + 250 barite + 100 bentonite.
         assert Decimal(well_one["upa_amount"]) == Decimal("650.00")
@@ -493,10 +501,13 @@ def test_npt_upa_report_counts_distinct_days_and_classification_costs():
             Decimal(well_one["planned_amount"]) + Decimal(well_one["upa_amount"]) + Decimal(well_one["npt_amount"])
         )
         well_two = next(row for row in data["wells"] if row["well_code"] == "WELL-02")
-        # Two planned cost dates: the USD sheet (12 Oct) and the EUR sheet (13 Oct).
-        assert well_two["planned_days"] == 2
-        assert well_two["npt_days"] == 0
-        assert data["totals"]["npt_days"] == 1
+        # Two affected planned cost dates, but neither carries an explicit hour allocation.
+        assert well_two["planned_affected_dates"] == 2
+        assert Decimal(well_two["planned_days"]) == Decimal("0.0000")
+        assert Decimal(well_two["npt_days"]) == Decimal("0")
+        assert Decimal(data["totals"]["npt_days"]) == Decimal("0.5000")
+        assert data["totals"]["npt_affected_dates"] == 1
+        assert data["overallocated_date_count"] == 0
         assert Decimal(data["totals"]["npt_amount"]) == Decimal("200.00")
         classifications = {(row["well_code"], row["classification"]) for row in data["detail"]}
         assert ("WELL-01", "NPT") in classifications

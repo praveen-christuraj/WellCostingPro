@@ -1735,6 +1735,34 @@ def test_current_afe_rates_are_versioned_without_repricing_history():
         assert foreign.status_code == 404
 
 
+def test_whole_well_time_validation_deduplicates_repeated_service_charges():
+    common = {
+        "charging_basis": "Day Rate", "charge_category": "Operation",
+        "quantity": Decimal("16"), "quantity_unit": "hours",
+        "classification": "NPT", "activity_id": "activity-npt",
+        "sub_activity_id": "sub-npt", "hole_section_id": "section-1",
+        "phase_id": "phase-1", "sub_activity_code_snapshot": "NPT-01",
+    }
+    # Two services charged against the same operational allocation still
+    # represent 16 whole-well hours, not 32.
+    repeated = [
+        {**common, "service_id": "service-a", "service_code_snapshot": "SVC-A"},
+        {**common, "service_id": "service-b", "service_code_snapshot": "SVC-B"},
+    ]
+    daily_cost_service._reject_duplicate_service_sub_activity(repeated)
+
+    # A distinct sequential allocation is additional well time and must keep
+    # the combined Planned/NPT/UPA operational day within 24 hours.
+    distinct = {
+        **common, "service_id": "service-c", "service_code_snapshot": "SVC-C",
+        "quantity": Decimal("9"), "activity_id": "activity-upa",
+        "sub_activity_id": "sub-upa", "sub_activity_code_snapshot": "UPA-01",
+        "classification": "UPA",
+    }
+    with pytest.raises(HTTPException, match="Whole-well operational allocations total 25 hours"):
+        daily_cost_service._reject_duplicate_service_sub_activity([*repeated, distinct])
+
+
 def test_ndt_inspections_bulk_lines_filters_and_deleted_lifecycle():
     with TestClient(app) as client:
         headers = login(client)

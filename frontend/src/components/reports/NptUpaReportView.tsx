@@ -7,7 +7,7 @@ import { DataTable } from '../DataTable'
 import { ErrorMessage, PageHeading } from '../Common'
 import { useAuth } from '../../context/AuthContext'
 import {
-  auditExport, EMPTY_FILTERS, fetchNptUpa, fetchReference, formatDateText, formatMoney,
+  auditExport, EMPTY_FILTERS, fetchNptUpa, fetchReference, formatDateText, formatMoney, formatQuantity,
   type NptUpaDetailRow, type NptUpaReport, type UsageReference, type UsageReportFilters,
 } from '../../lib/usageReports'
 import FiltersCard from './UsageReportFilters'
@@ -70,7 +70,9 @@ export default function NptUpaReportView() {
     { headerName: 'RIG', field: 'rig_code', minWidth: 110 },
     { headerName: 'SCOPE', field: 'scope', minWidth: 110 },
     { headerName: 'CLASSIFICATION', field: 'classification', minWidth: 140 },
-    { headerName: 'DAYS', field: 'days', minWidth: 100, type: 'numericColumn' },
+    { headerName: 'AFFECTED DATES', field: 'affected_dates', minWidth: 135, type: 'numericColumn' },
+    { headerName: 'ALLOCATED HOURS', field: 'hours', minWidth: 140, type: 'numericColumn', valueFormatter: params => formatQuantity(params.value) },
+    { headerName: 'ALLOCATED DAYS', field: 'days', minWidth: 135, type: 'numericColumn', valueFormatter: params => formatQuantity(params.value) },
     {
       headerName: `COST (${filters.currency || 'USD'})`, field: 'amount', minWidth: 150, type: 'numericColumn',
       valueFormatter: params => formatMoney(params.value === undefined ? '' : String(params.value), filters.currency || 'USD'),
@@ -85,7 +87,7 @@ export default function NptUpaReportView() {
     <PageHeading
       eyebrow="REPORTS / NPT / UPA"
       title="NPT/UPA report"
-      subtitle="Non-productive time and unplanned activity days and costs per well, derived from the activity classification of every daily cost line under the selected filters."
+      subtitle="NPT and UPA allocated duration, affected cost dates and costs per well. Duration comes only from deduplicated explicit service-hour allocations; affected dates remain a separate measure."
       action={<Box display="flex" gap={1} flexWrap="wrap">
         <Button component={RouterLink} to="/reports" variant="outlined" startIcon={<ArrowBackRounded />}>Reports</Button>
         <Button variant="outlined" startIcon={<RefreshRounded />} onClick={() => setRefreshKey(value => value + 1)} disabled={loading}>Refresh</Button>
@@ -101,15 +103,20 @@ export default function NptUpaReportView() {
         {report.excluded_entry_count} cost sheet{report.excluded_entry_count === 1 ? '' : 's'} use a different standard currency and {report.excluded_entry_count === 1 ? 'is' : 'are'} excluded from {report.currency} totals. Switch the report currency to include them.
       </Alert>
     ) : null}
+    {report?.overallocated_date_count ? (
+      <Alert severity="warning" sx={{ mb: 1.5 }}>
+        {report.overallocated_date_count} legacy well-date{report.overallocated_date_count === 1 ? '' : 's'} exceed 24 allocated hours after duplicate service charges are removed. Correct those daily sheets before treating their duration as MIS-ready.
+      </Alert>
+    ) : null}
     {loading && !report ? (
       <Paper variant="outlined" sx={{ minHeight: 220, display: 'grid', placeItems: 'center', borderRadius: 2 }}>
         <CircularProgress size={28} />
       </Paper>
     ) : report ? <>
       <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }} gap={1.4} mb={1.7}>
-        <Stat label="NPT days" value={String(report.totals.npt_days)} note="Distinct NPT cost dates" />
+        <Stat label="NPT allocated days" value={formatQuantity(report.totals.npt_days)} note={`${formatQuantity(report.totals.npt_hours)} h · ${report.totals.npt_affected_dates} affected date${report.totals.npt_affected_dates === 1 ? '' : 's'}`} />
         <Stat label={`NPT cost (${report.currency})`} value={formatMoney(report.totals.npt_amount)} note="Non-productive time lines" />
-        <Stat label="UPA days" value={String(report.totals.upa_days)} note="Distinct unplanned cost dates" />
+        <Stat label="UPA allocated days" value={formatQuantity(report.totals.upa_days)} note={`${formatQuantity(report.totals.upa_hours)} h · ${report.totals.upa_affected_dates} affected date${report.totals.upa_affected_dates === 1 ? '' : 's'}`} />
         <Stat label={`UPA cost (${report.currency})`} value={formatMoney(report.totals.upa_amount)} note="Unplanned activity lines" />
       </Box>
       <NptUpaMatrix report={report} currency={report.currency} />

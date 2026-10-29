@@ -178,13 +178,20 @@ class NptUpaWellRow(_Strict):
     well_name: str
     rig_code: str = ""
     block_code: str = ""
-    planned_days: int = 0
-    upa_days: int = 0
-    npt_days: int = 0
+    planned_affected_dates: int = 0
+    upa_affected_dates: int = 0
+    npt_affected_dates: int = 0
+    planned_hours: Decimal = Decimal("0")
+    upa_hours: Decimal = Decimal("0")
+    npt_hours: Decimal = Decimal("0")
+    planned_days: Decimal = Decimal("0")
+    upa_days: Decimal = Decimal("0")
+    npt_days: Decimal = Decimal("0")
     planned_amount: Decimal = Decimal("0")
     upa_amount: Decimal = Decimal("0")
     npt_amount: Decimal = Decimal("0")
     total_amount: Decimal = Decimal("0")
+    overallocated_dates: int = 0
 
 
 class NptUpaDetailRow(_Strict):
@@ -196,7 +203,9 @@ class NptUpaDetailRow(_Strict):
     block_code: str = ""
     scope: str = ""
     classification: str
-    days: int = 0
+    affected_dates: int = 0
+    hours: Decimal = Decimal("0")
+    days: Decimal = Decimal("0")
     amount: Decimal = Decimal("0")
     currency: str
 
@@ -211,6 +220,7 @@ class NptUpaReportOut(_Strict):
     totals: NptUpaWellRow
     entry_count: int = 0
     excluded_entry_count: int = 0
+    overallocated_date_count: int = 0
 
 
 # ---------------------------------------------------------------------------
