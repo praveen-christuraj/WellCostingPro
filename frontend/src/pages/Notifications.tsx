@@ -9,7 +9,7 @@ import {
 } from '@mui/icons-material'
 import { useNavigate } from 'react-router-dom'
 import { ErrorMessage, FormDialog, PageHeading, Tag, type Tone } from '../components/Common'
-import { api, body } from '../lib/api'
+import { ApiError, api, body } from '../lib/api'
 import { exportCsv, exportPdf, exportXlsx, type ExportColumn } from '../lib/export'
 import type { Announcement, AnnouncementPage, NotificationOverview, NotificationPage, UserNotification } from '../lib/workflowTypes'
 import { notifyNotificationsChanged, onNotificationsChanged } from '../lib/uiEvents'
@@ -71,6 +71,7 @@ export default function Notifications() {
   const [sentTotal, setSentTotal] = useState(0)
   const [sentPage, setSentPage] = useState(0)
   const [sentPageSize, setSentPageSize] = useState(20)
+  const [sentError, setSentError] = useState('')
   const [recallTarget, setRecallTarget] = useState<Announcement | null>(null)
 
   const loadInbox = useCallback(async (quiet = false) => {
@@ -100,13 +101,22 @@ export default function Notifications() {
 
   const loadSent = useCallback(async () => {
     if (!canManage) return
+    setSentError('')
     try {
       const params = new URLSearchParams({ page: String(sentPage + 1), page_size: String(sentPageSize) })
-      const data = await api<AnnouncementPage>(`/notifications/announcements?${params.toString()}`, { action: 'Load sent announcements' })
+      const data = await api<AnnouncementPage>(`/notifications/announcements?${params.toString()}`, { action: 'Load sent announcements', silent: true })
       setSent(data.items); setSentTotal(data.total)
-    } catch (caught) { setError((caught as Error).message) }
+    } catch (caught) {
+      setSent([]); setSentTotal(0)
+      setSentError(caught instanceof ApiError && caught.status === 404
+        ? 'Sent-announcement history is temporarily unavailable while the API update completes. Your notification inbox is still available; refresh this tab shortly.'
+        : (caught as Error).message)
+    }
   }, [canManage, sentPage, sentPageSize])
-  useEffect(() => { void loadSent() }, [loadSent])
+  // Sent history is an administrative companion view. Do not let an optional
+  // endpoint requested in the background break the user's personal inbox,
+  // especially while the frontend and API are rolling to the same release.
+  useEffect(() => { if (tab === 'sent') void loadSent() }, [tab, loadSent])
 
   const clearFilters = () => {
     setStatus(''); setSeverity(''); setType(''); setSearch(''); setDateFrom(''); setDateTo(''); setPage(0)
@@ -189,7 +199,7 @@ export default function Notifications() {
       })
       const audience = form.audience === 'all' ? 'every active user' : `${form.audience === 'roles' ? chosenRoles.length : chosenUsers.length} selected ${form.audience === 'roles' ? 'role(s)' : 'user(s)'}`
       setComposer(false); setForm(emptyAnnouncement); setNotice(`Announcement sent to ${audience}.`)
-      await Promise.all([loadInbox(), loadSent()])
+      await Promise.all([loadInbox(), tab === 'sent' ? loadSent() : Promise.resolve()])
     } catch (caught) { setDialogError((caught as Error).message) } finally { setBusy(false) }
   }
 
@@ -252,7 +262,7 @@ export default function Notifications() {
           <MenuItem onClick={() => { setExportAnchor(null); exportWith('xlsx') }}>Excel (.xlsx)</MenuItem>
           <MenuItem onClick={() => { setExportAnchor(null); exportWith('pdf') }}>PDF (.pdf)</MenuItem>
         </Menu>
-        <Button startIcon={<RefreshRounded/>} onClick={() => void Promise.all([loadInbox(), loadSent()])} disabled={loading}>Refresh</Button>
+        <Button startIcon={<RefreshRounded/>} onClick={() => void Promise.all([loadInbox(), tab === 'sent' ? loadSent() : Promise.resolve()])} disabled={loading}>Refresh</Button>
         {canManage && <Button variant="contained" startIcon={<CampaignRounded/>} onClick={() => void openComposer()}>Send announcement</Button>}
       </>}
     />
@@ -360,7 +370,8 @@ export default function Notifications() {
             Each row is one broadcast. “Read” counts the recipients who opened it; recalling withdraws only the unread copies, so the
             message that people already saw stays in their record.
           </Typography>
-          {sent.length === 0 ? <Typography color="text.secondary" fontSize={13}>No announcement has been sent yet.</Typography>
+          {sentError && <Alert severity="warning" action={<Button color="inherit" size="small" onClick={() => void loadSent()}>Retry</Button>} sx={{ mb: 2 }}>{sentError}</Alert>}
+          {!sentError && (sent.length === 0 ? <Typography color="text.secondary" fontSize={13}>No announcement has been sent yet.</Typography>
             : <TableContainer><Table size="small">
               <TableHead><TableRow><TableCell>Announcement</TableCell><TableCell>Audience</TableCell><TableCell>Recipients</TableCell><TableCell>Read</TableCell><TableCell>Sent</TableCell><TableCell align="right">Action</TableCell></TableRow></TableHead>
               <TableBody>{sent.map(item => <TableRow key={item.id} hover>
@@ -381,10 +392,12 @@ export default function Notifications() {
                 </TableCell>
                 <TableCell align="right">{!item.recalled_at && <Button size="small" color="error" onClick={() => { setRecallTarget(item); setDialogError('') }}>Recall</Button>}</TableCell>
               </TableRow>)}</TableBody>
-            </Table></TableContainer>}
-          <TablePagination component="div" count={sentTotal} page={sentPage} rowsPerPage={sentPageSize} rowsPerPageOptions={PAGE_SIZES}
+            </Table></TableContainer>)}
+          {!sentError && <TablePagination
+            component="div" count={sentTotal} page={sentPage} rowsPerPage={sentPageSize} rowsPerPageOptions={PAGE_SIZES}
             onPageChange={(_, value) => setSentPage(value)}
-            onRowsPerPageChange={event => { setSentPageSize(Number(event.target.value)); setSentPage(0) }}/>
+            onRowsPerPageChange={event => { setSentPageSize(Number(event.target.value)); setSentPage(0) }}
+          />}
         </Box>
       </>}
     </Paper>
