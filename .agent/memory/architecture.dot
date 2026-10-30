@@ -92,6 +92,7 @@ digraph WellCostIQ {
   "backend/app/services/lih_cost.py";
   "backend/app/services/mud_cost.py";
   "backend/app/services/ndt_inspection.py";
+  "backend/app/services/password_policy.py";
   "backend/app/services/provisioning.py";
   "backend/app/services/retention.py";
   "backend/app/services/sow_adjustment.py";
@@ -109,6 +110,7 @@ digraph WellCostIQ {
   "frontend/src/components/NotificationBell.tsx";
   "frontend/src/components/OrderDocumentsDialog.tsx";
   "frontend/src/components/OrderFormDialog.tsx";
+  "frontend/src/components/PasswordChangeGate.tsx";
   "frontend/src/components/PlanAdjustmentDialog.tsx";
   "frontend/src/components/ServiceFormDialog.tsx";
   "frontend/src/components/VendorFormDialog.tsx";
@@ -183,6 +185,7 @@ digraph WellCostIQ {
   "frontend/src/lib/serviceMaster.ts";
   "frontend/src/lib/sowAdjustment.ts";
   "frontend/src/lib/types.ts";
+  "frontend/src/lib/uiEvents.ts";
   "frontend/src/lib/units.ts";
   "frontend/src/lib/usageReports.ts";
   "frontend/src/lib/vendorMaster.ts";
@@ -212,6 +215,7 @@ digraph WellCostIQ {
   "frontend/src/pages/MasterDataRecords.tsx";
   "frontend/src/pages/MudCostAnalysis.tsx";
   "frontend/src/pages/NdtInspectionRegister.tsx";
+  "frontend/src/pages/NotFound.tsx";
   "frontend/src/pages/Notifications.tsx";
   "frontend/src/pages/OtherManagementOverview.tsx";
   "frontend/src/pages/Overview.tsx";
@@ -315,7 +319,6 @@ digraph WellCostIQ {
   "backend/app/api/rig_well.py" -> "backend/app/services/retention.py";
   "backend/app/api/security.py" -> "backend/app/api/deps.py";
   "backend/app/api/security.py" -> "backend/app/core/config.py";
-  "backend/app/api/security.py" -> "backend/app/core/security.py";
   "backend/app/api/security.py" -> "backend/app/models/__init__.py";
   "backend/app/api/security.py" -> "backend/app/schemas/security.py";
   "backend/app/api/security.py" -> "backend/app/services/__init__.py";
@@ -491,6 +494,8 @@ digraph WellCostIQ {
   "backend/app/services/ndt_inspection.py" -> "backend/app/models/entities.py";
   "backend/app/services/ndt_inspection.py" -> "backend/app/schemas/ndt_inspection.py";
   "backend/app/services/ndt_inspection.py" -> "backend/app/services/__init__.py";
+  "backend/app/services/password_policy.py" -> "backend/app/core/security.py";
+  "backend/app/services/password_policy.py" -> "backend/app/models/__init__.py";
   "backend/app/services/provisioning.py" -> "backend/app/core/database.py";
   "backend/app/services/provisioning.py" -> "backend/app/core/security.py";
   "backend/app/services/provisioning.py" -> "backend/app/models/__init__.py";
@@ -510,6 +515,7 @@ digraph WellCostIQ {
   "backend/app/services/usage_reports.py" -> "backend/app/services/__init__.py";
   "backend/app/services/workflow.py" -> "backend/app/models/__init__.py";
   "frontend/src/App.tsx" -> "frontend/src/components/Layout.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/components/PasswordChangeGate.tsx";
   "frontend/src/App.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/AfeEstimate.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/AfeManagement.tsx";
@@ -535,6 +541,7 @@ digraph WellCostIQ {
   "frontend/src/App.tsx" -> "frontend/src/pages/MasterDataRecords.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/MudCostAnalysis.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/NdtInspectionRegister.tsx";
+  "frontend/src/App.tsx" -> "frontend/src/pages/NotFound.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Notifications.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/OtherManagementOverview.tsx";
   "frontend/src/App.tsx" -> "frontend/src/pages/Overview.tsx";
@@ -580,6 +587,7 @@ digraph WellCostIQ {
   "frontend/src/components/Layout.tsx" -> "frontend/src/lib/appInfo.ts";
   "frontend/src/components/MasterDataTabs.tsx" -> "frontend/src/lib/masterData.ts";
   "frontend/src/components/NotificationBell.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/components/NotificationBell.tsx" -> "frontend/src/lib/uiEvents.ts";
   "frontend/src/components/NotificationBell.tsx" -> "frontend/src/lib/workflowTypes.ts";
   "frontend/src/components/OrderDocumentsDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/OrderDocumentsDialog.tsx" -> "frontend/src/context/AuthContext.tsx";
@@ -587,6 +595,10 @@ digraph WellCostIQ {
   "frontend/src/components/OrderDocumentsDialog.tsx" -> "frontend/src/lib/vendorMaster.ts";
   "frontend/src/components/OrderFormDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/OrderFormDialog.tsx" -> "frontend/src/lib/vendorMaster.ts";
+  "frontend/src/components/PasswordChangeGate.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/components/PasswordChangeGate.tsx" -> "frontend/src/context/AuthContext.tsx";
+  "frontend/src/components/PasswordChangeGate.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/components/PasswordChangeGate.tsx" -> "frontend/src/lib/appInfo.ts";
   "frontend/src/components/PlanAdjustmentDialog.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/components/PlanAdjustmentDialog.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/components/PlanAdjustmentDialog.tsx" -> "frontend/src/lib/api.ts";
@@ -963,6 +975,7 @@ digraph WellCostIQ {
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/LihCostRegister.tsx" -> "frontend/src/lib/lihCost.ts";
   "frontend/src/pages/Login.tsx" -> "frontend/src/components/Brand.tsx";
+  "frontend/src/pages/Login.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/Login.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/Login.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/Login.tsx" -> "frontend/src/lib/appInfo.ts";
@@ -1000,9 +1013,14 @@ digraph WellCostIQ {
   "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/lib/api.ts";
   "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/NdtInspectionRegister.tsx" -> "frontend/src/lib/ndtInspection.ts";
+  "frontend/src/pages/NotFound.tsx" -> "frontend/src/components/Common.tsx";
+  "frontend/src/pages/NotFound.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/Notifications.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/Notifications.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/Notifications.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/Notifications.tsx" -> "frontend/src/lib/export.ts";
+  "frontend/src/pages/Notifications.tsx" -> "frontend/src/lib/types.ts";
+  "frontend/src/pages/Notifications.tsx" -> "frontend/src/lib/uiEvents.ts";
   "frontend/src/pages/Notifications.tsx" -> "frontend/src/lib/workflowTypes.ts";
   "frontend/src/pages/OtherManagementOverview.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/OtherManagementOverview.tsx" -> "frontend/src/context/AuthContext.tsx";
@@ -1061,6 +1079,7 @@ digraph WellCostIQ {
   "frontend/src/pages/SecurityCenter.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/SecurityCenter.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/SecurityCenter.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/SecurityCenter.tsx" -> "frontend/src/lib/export.ts";
   "frontend/src/pages/SecurityCenter.tsx" -> "frontend/src/lib/workflowTypes.ts";
   "frontend/src/pages/Services.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/Services.tsx" -> "frontend/src/components/DataTable.tsx";
@@ -1080,6 +1099,8 @@ digraph WellCostIQ {
   "frontend/src/pages/TaskManager.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/TaskManager.tsx" -> "frontend/src/context/AuthContext.tsx";
   "frontend/src/pages/TaskManager.tsx" -> "frontend/src/lib/api.ts";
+  "frontend/src/pages/TaskManager.tsx" -> "frontend/src/lib/export.ts";
+  "frontend/src/pages/TaskManager.tsx" -> "frontend/src/lib/types.ts";
   "frontend/src/pages/TaskManager.tsx" -> "frontend/src/lib/workflowTypes.ts";
   "frontend/src/pages/Users.tsx" -> "frontend/src/components/Common.tsx";
   "frontend/src/pages/Users.tsx" -> "frontend/src/components/DataTable.tsx";

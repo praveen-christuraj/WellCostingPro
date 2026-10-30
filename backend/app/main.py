@@ -27,7 +27,10 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title=settings.app_name, description=settings.app_tagline, version="0.1.0", lifespan=lifespan)
+# Bumped when the API surface changes in a way a browser tab could notice; the
+# health probe and the error messages quote it so a stale deployment is obvious.
+API_VERSION = "0.2.0"
+app = FastAPI(title=settings.app_name, description=settings.app_tagline, version=API_VERSION, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[s.strip() for s in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(security.router, prefix="/api/v1")
@@ -71,6 +74,19 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+@app.get("/", include_in_schema=False)
+def api_root():
+    """A browser that lands on the API host gets directions, not a bare "Not Found"."""
+    return {
+        "application": settings.app_name,
+        "message": f"{settings.app_name} serves the API on this host. Open the web application to sign in.",
+        "api": "/api/v1",
+        "health": "/api/health",
+        "documentation": "/docs",
+        "version": API_VERSION,
+    }
+
+
 @app.get("/api/health")
 def health(db: Db):
     # admin_seeded lets a fresh install tell the operator that seeding is still pending.
@@ -79,7 +95,7 @@ def health(db: Db):
     except Exception:  # a database problem must not turn liveness into a 500
         log.exception("Administrator check failed during health probe")
         seeded = False
-    return {"status": "ok", "admin_seeded": seeded}
+    return {"status": "ok", "admin_seeded": seeded, "api_version": API_VERSION}
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -89,6 +105,26 @@ async def http_error(request: Request, error: StarletteHTTPException) -> JSONRes
         detail = error.detail["detail"]
     else:
         detail = error.detail
+    # FastAPI's own defaults ("Not Found", "Method Not Allowed") say nothing about
+    # which call failed or why. Replace them with an actionable sentence — an
+    # unmatched API path almost always means the page and the API are different
+    # versions, which is exactly what a user needs to be told.
+    if error.status_code == 404 and str(detail).strip().lower() == "not found":
+        # Kept in the server log so an operator can see which call a browser is
+        # making against a route this build does not serve.
+        log.warning("Unmatched route: %s %s (API %s)", request.method, request.url.path, API_VERSION)
+        detail = (
+            f"The API has no {request.method} route at {request.url.path}. The page is probably newer than "
+            f"the API build (API {API_VERSION}); reload after the API is updated, or report this to the administrator."
+        )
+    elif error.status_code == 405 and str(detail).strip().lower() == "method not allowed":
+        detail = (
+            f"This action ({request.method}) is not offered at {request.url.path}. The record may not "
+            f"support it, or the page is newer than the API build (API {API_VERSION}). Reload the page and "
+            "try again; report it if the message repeats."
+        )
+    elif error.status_code == 401 and str(detail).strip().lower() == "unauthorized":
+        detail = "Authentication is required for this action. Sign in again to continue."
     return JSONResponse(status_code=error.status_code, content={"detail": detail})
 
 

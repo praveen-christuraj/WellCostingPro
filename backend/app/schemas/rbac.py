@@ -77,6 +77,9 @@ class MeOut(UserOut):
     organization_slug: str
     permission_keys: list[str]
     is_owner: bool
+    # A security-centre action can demand a new password before anything else is reachable.
+    must_change_password: bool = False
+    password_changed_at: datetime | None = None
 
 
 class Overview(BaseModel):

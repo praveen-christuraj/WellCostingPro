@@ -54,23 +54,45 @@ def owners():
         return provisioning.administrators(db)
 
 
+def insert_legacy_owner(organization_id: str, permission_keys: list[str]) -> None:
+    """Write a pre-existing owner with SQL only.
+
+    The test lands on an old revision on purpose, so it cannot use today's ORM
+    models: they carry columns that revision has never seen. Raw INSERTs are the
+    faithful simulation of a workspace that already exists before an upgrade.
+    """
+    import uuid
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO organizations (id, name, slug, created_at) VALUES (:id, :name, :slug, CURRENT_TIMESTAMP)"
+        ), {"id": organization_id, "name": "Legacy Energy", "slug": f"legacy-{organization_id[:8]}"})
+        role_id, user_id = str(uuid.uuid4()), str(uuid.uuid4())
+        connection.execute(text(
+            "INSERT INTO roles (id, organization_id, name, description, is_owner, created_at) "
+            "VALUES (:id, :org, 'Owner', '', 1, CURRENT_TIMESTAMP)"
+        ), {"id": role_id, "org": organization_id})
+        connection.execute(text(
+            "INSERT INTO users (id, organization_id, email, full_name, password_hash, is_active, "
+            "token_version, failed_logins, locked_until, created_at) "
+            "VALUES (:id, :org, :email, 'Legacy Owner', :password, 1, 0, 0, NULL, CURRENT_TIMESTAMP)"
+        ), {"id": user_id, "org": organization_id, "email": f"owner-{organization_id[:8]}@example.com",
+            "password": hash_password("correct-password-123")})
+        connection.execute(text("INSERT INTO user_roles (user_id, role_id) VALUES (:user, :role)"),
+                           {"user": user_id, "role": role_id})
+        for key in permission_keys:
+            permission_id = str(uuid.uuid4())
+            connection.execute(text(
+                "INSERT INTO permissions (id, organization_id, key, description, created_at) "
+                "VALUES (:id, :org, :key, :key, CURRENT_TIMESTAMP)"
+            ), {"id": permission_id, "org": organization_id, "key": key})
+            connection.execute(text("INSERT INTO role_permissions (role_id, permission_id) VALUES (:role, :permission)"),
+                               {"role": role_id, "permission": permission_id})
+
+
 def test_master_data_migration_backfills_capabilities_for_existing_owners(migrated_database):
     reset_schema(migrate=False)
     command.upgrade(alembic_config(), "3d9e6b51c4a0")
-    with SessionLocal() as db:
-        organization = Organization(slug="legacy", name="Legacy Energy")
-        db.add(organization)
-        db.flush()
-        audit_permission = Permission(organization_id=organization.id, key="audit:read", description="Read audit log")
-        owner_role = Role(organization_id=organization.id, name="Owner", is_owner=True, permissions=[audit_permission])
-        db.add(User(
-            organization_id=organization.id,
-            email="owner@example.com",
-            full_name="Legacy Owner",
-            password_hash=hash_password("correct-password-123"),
-            roles=[owner_role],
-        ))
-        db.commit()
+    insert_legacy_owner("legacy-org", ["audit:read"])
 
     upgrade_head()
     with SessionLocal() as db:
@@ -182,7 +204,9 @@ def test_provisioning_rejects_invalid_input(migrated_database):
 
 def test_startup_on_an_empty_database_never_blocks_or_prompts(migrated_database):
     with TestClient(app) as client:
-        assert client.get("/api/health").json() == {"status": "ok", "admin_seeded": False}
+        health = client.get("/api/health").json()
+        assert health["status"] == "ok" and health["admin_seeded"] is False
+        assert health["api_version"]
         assert client.post("/api/v1/auth/login", json={"organization": "acme-energy", "email": "jane@example.com", "password": "correct-password-123"}).status_code == 401
     assert owners() == []
 

@@ -20,6 +20,8 @@ const modules: NavModule[] = [
     { label: 'Roles', path: '/roles', icon: AdminPanelSettingsOutlined, permission: 'roles:read' },
     { label: 'Permissions', path: '/permissions', icon: VpnKeyOutlined, permission: 'permissions:read' },
     { label: 'Assignments', path: '/assignments', icon: AccountTreeOutlined, permission: 'assignments:write', requires: ['users:read', 'roles:read', 'permissions:read'] },
+    // The reset queue is readable with security:password-reset alone, so a reviewer
+    // reaches the page without needing the wider register capability.
     { label: 'Security centre', path: '/security', icon: SecurityRounded, anyOf: ['security:read', 'security:password-reset', 'security:unlock'] },
   ] },
   { label: 'Master Data Management', icon: DataObjectOutlined, items: [
@@ -92,7 +94,7 @@ export default function Layout() {
   const [passwordError, setPasswordError] = useState('')
   const [savingPassword, setSavingPassword] = useState(false)
   const [scrolled, setScrolled] = useState(false)
-  const [apiNotice, setApiNotice] = useState('')
+  const [apiNotice, setApiNotice] = useState<{ message: string; status: number } | null>(null)
 
   const changePassword = async () => {
     setSavingPassword(true)
@@ -128,9 +130,13 @@ export default function Layout() {
     setMobileOpen(false)
   }, [location.pathname, currentModule?.label]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
+    // One pop-up per distinct message: background polling must not stack duplicates,
+    // and a repeated failure keeps a single readable notice on screen.
     const show = (event: Event) => {
-      const message = (event as CustomEvent<{ message?: string }>).detail?.message
-      if (message) setApiNotice(message)
+      const detail = (event as CustomEvent<{ message?: string; status?: number }>).detail
+      const message = detail?.message?.trim()
+      if (!message || detail?.status === 401) return
+      setApiNotice(current => current?.message === message ? current : { message, status: detail?.status ?? 0 })
     }
     window.addEventListener('api-error', show)
     return () => window.removeEventListener('api-error', show)
@@ -241,14 +247,17 @@ export default function Layout() {
       </Box>
     </Box>
 
-    <Snackbar open={!!apiNotice} onClose={() => setApiNotice('')} anchorOrigin={{ vertical: 'top', horizontal: 'right' }} sx={{ mt: 7, maxWidth: 480 }}>
-      <Alert severity="error" variant="filled" onClose={() => setApiNotice('')} sx={{ width: '100%', boxShadow: 8 }}>{apiNotice}</Alert>
+    <Snackbar open={!!apiNotice} onClose={() => setApiNotice(null)} anchorOrigin={{ vertical: 'top', horizontal: 'right' }} sx={{ mt: 7, maxWidth: 480 }}>
+      <Alert severity={apiNotice && apiNotice.status === 403 ? 'warning' : 'error'} variant="filled" onClose={() => setApiNotice(null)}
+        sx={{ width: '100%', boxShadow: 8, alignItems: 'center' }}>{apiNotice?.message}</Alert>
     </Snackbar>
 
     <FormDialog open={passwordDialog} title="Change your password" subtitle="You will be signed out of all sessions after updating." onClose={() => setPasswordDialog(false)} onSubmit={changePassword} busy={savingPassword} submitLabel="Update password">
       <Box display="grid" gap={2} pt={.5}>
-        <TextField label="Current password" type="password" fullWidth value={currentPassword} onChange={event => setCurrentPassword(event.target.value)}/>
-        <TextField label="New password" type="password" fullWidth helperText="At least 12 characters" value={newPassword} onChange={event => setNewPassword(event.target.value)}/>
+        <TextField label="Current password" type="password" fullWidth autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)}/>
+        <TextField label="New password" type="password" fullWidth autoComplete="new-password"
+          helperText="12–128 characters, at least three of lowercase, uppercase, number and symbol. The last five passwords cannot be reused."
+          value={newPassword} onChange={event => setNewPassword(event.target.value)}/>
         <ErrorMessage message={passwordError}/>
       </Box>
     </FormDialog>

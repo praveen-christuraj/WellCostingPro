@@ -41,6 +41,9 @@ class PasswordResetOut(BaseModel):
     review_notes: str
     reset_token_expires_at: datetime | None
     completed_at: datetime | None
+    # "user" when the account holder asked for help, "administrator" when the
+    # security centre opened the request itself for a security reason.
+    initiated_by: str = "user"
 
 
 class ResetCodeOut(BaseModel):
@@ -56,6 +59,43 @@ class SecurityUserOut(BaseModel):
     is_active: bool
     failed_logins: int
     locked_until: datetime | None
+    must_change_password: bool
+    password_changed_at: datetime | None
+    last_login_at: datetime | None
+    active_sessions: int
+    role_names: list[str]
+    is_owner: bool
+
+
+class SecurityOverview(BaseModel):
+    users: int
+    active_users: int
+    locked_users: int
+    pending_requests: int
+    awaiting_use: int
+    must_change_password: int
+    completed_30d: int
+    announcements_30d: int
+    reset_minutes: int
+    recent_requests: list[PasswordResetOut]
+
+
+class SecurityActionIn(BaseModel):
+    """Reason recorded with an administrator-initiated account action."""
+
+    notes: str = Field(default="", max_length=1000)
+
+
+class SecurityBulkIn(BaseModel):
+    user_ids: list[str] = Field(min_length=1, max_length=200)
+    action: str = Field(pattern="^(force-password-change|revoke-sessions|lock|unlock)$")
+    notes: str = Field(default="", max_length=1000)
+
+
+class SecurityBulkOut(BaseModel):
+    action: str
+    affected: int
+    skipped: int
 
 
 class NotificationCreate(BaseModel):
@@ -63,6 +103,7 @@ class NotificationCreate(BaseModel):
     message: str = Field(min_length=3, max_length=1000)
     severity: str = Field(default="info", pattern="^(info|success|warning|error)$")
     recipient_user_ids: list[str] = Field(default_factory=list, max_length=500)
+    recipient_role_ids: list[str] = Field(default_factory=list, max_length=200)
     action_path: str = Field(default="", max_length=300)
 
 
@@ -76,13 +117,53 @@ class NotificationOut(BaseModel):
     action_path: str
     related_entity_type: str
     related_entity_id: str
+    announcement_id: str | None = None
     read_at: datetime | None
     created_at: datetime
 
 
 class NotificationPage(BaseModel):
     items: list[NotificationOut]
+    total: int
     unread_count: int
+    page: int = 1
+    page_size: int = 20
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class NotificationIdsIn(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=500)
+
+
+class NotificationOverview(BaseModel):
+    total: int
+    unread: int
+    by_severity: dict[str, int]
+    by_type: dict[str, int]
+    announcements_sent: int
+    oldest_unread_days: int
+
+
+class AnnouncementOut(BaseModel):
+    id: str
+    title: str
+    message: str
+    severity: str
+    action_path: str
+    audience: str
+    audience_label: str
+    recipient_count: int
+    created_by_name: str
+    created_at: datetime
+    recalled_at: datetime | None
+    read_count: int
+
+
+class AnnouncementPage(BaseModel):
+    items: list[AnnouncementOut]
+    total: int
+    page: int
+    page_size: int
 
 
 class TaskCreate(BaseModel):
@@ -99,7 +180,26 @@ class TaskUpdate(BaseModel):
     priority: str | None = Field(default=None, pattern="^(low|normal|high|critical)$")
     assignee_user_id: str | None = None
     due_at: datetime | None = None
+    title: str | None = Field(default=None, min_length=3, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
     notes: str = Field(default="", max_length=1000)
+
+
+class TaskCommentIn(BaseModel):
+    notes: str = Field(min_length=1, max_length=1000)
+
+
+class TaskBulkIn(BaseModel):
+    task_ids: list[str] = Field(min_length=1, max_length=200)
+    action: str = Field(pattern="^(claim|complete|reopen|cancel|assign)$")
+    assignee_user_id: str | None = None
+    notes: str = Field(default="", max_length=1000)
+
+
+class TaskBulkOut(BaseModel):
+    action: str
+    affected: int
+    skipped: int
 
 
 class TaskEventOut(BaseModel):
@@ -125,6 +225,7 @@ class TaskOut(BaseModel):
     assignee_user_id: str | None
     assignee_name: str
     created_by_user_id: str | None
+    created_by_name: str
     due_at: datetime | None
     related_entity_type: str
     related_entity_id: str
@@ -133,6 +234,9 @@ class TaskOut(BaseModel):
     completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    overdue: bool = False
+    is_mine: bool = False
+    can_manage: bool = False
 
 
 class TaskPage(BaseModel):
@@ -140,3 +244,15 @@ class TaskPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class TaskOverview(BaseModel):
+    open: int
+    in_progress: int
+    overdue: int
+    due_today: int
+    completed_7d: int
+    mine: int
+    unassigned: int
+    by_priority: dict[str, int]
+    by_type: dict[str, int]

@@ -11,10 +11,20 @@ from app.services import audit
 router = APIRouter(tags=["Access management"])
 
 
+# A bare "Not found" tells the user nothing. Every 404 names what was missing and
+# what to do next, because it is shown in the global error pop-up as-is.
+ENTITY_LABELS = {User: "user account", Role: "role", Permission: "permission"}
+
+
 def scoped(db, model, item_id, org_id):
     item = db.get(model, item_id)
     if not item or item.organization_id != org_id:
-        raise HTTPException(404, "Not found")
+        label = ENTITY_LABELS.get(model, "record")
+        raise HTTPException(
+            404,
+            f"That {label} is not in this workspace. It may have been deleted, or it belongs to "
+            "another workspace — refresh the list and try again.",
+        )
     return item
 
 

@@ -280,19 +280,40 @@ def test_permissions_are_declared_and_owners_receive_them():
     assert {"database-browser:read", "database-browser:export"} <= keys
 
 
+def insert_legacy_owner_sql(organization_id: str, email: str) -> None:
+    """A pre-existing owner written with SQL only.
+
+    The test stops at an old revision, so today's ORM models (which carry columns
+    that revision has never seen) cannot be used to seed the legacy row.
+    """
+    import uuid
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO organizations (id, name, slug, created_at) VALUES (:id, 'Legacy Energy', :slug, CURRENT_TIMESTAMP)"
+        ), {"id": organization_id, "slug": f"legacy-{organization_id[:8]}"})
+        role_id, user_id = str(uuid.uuid4()), str(uuid.uuid4())
+        connection.execute(text(
+            "INSERT INTO roles (id, organization_id, name, description, is_owner, created_at) "
+            "VALUES (:id, :org, 'Owner', '', 1, CURRENT_TIMESTAMP)"
+        ), {"id": role_id, "org": organization_id})
+        connection.execute(text(
+            "INSERT INTO users (id, organization_id, email, full_name, password_hash, is_active, "
+            "token_version, failed_logins, locked_until, created_at) "
+            "VALUES (:id, :org, :email, 'Legacy Owner', :password, 1, 0, 0, NULL, CURRENT_TIMESTAMP)"
+        ), {"id": user_id, "org": organization_id, "email": email, "password": hash_password(PASSWORD)})
+        connection.execute(text("INSERT INTO user_roles (user_id, role_id) VALUES (:user, :role)"),
+                           {"user": user_id, "role": role_id})
+
+
 def test_migration_backfills_existing_owners():
     with engine.begin() as connection:
         connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
     Base.metadata.drop_all(bind=engine)
     command.upgrade(alembic_config(), "9c4f20b8a631")
-    with SessionLocal() as db:
-        organization = Organization(slug="legacy", name="Legacy Energy")
-        db.add(organization)
-        db.flush()
-        owner_role = Role(organization_id=organization.id, name="Owner", is_owner=True, permissions=[])
-        db.add(User(organization_id=organization.id, email="legacy@example.com", full_name="Legacy Owner", password_hash=hash_password(PASSWORD), roles=[owner_role]))
-        db.commit()
+    legacy_org_id = "legacy-database-browser-org"
+    insert_legacy_owner_sql(legacy_org_id, "legacy@example.com")
     command.upgrade(alembic_config(), "head")
+    organization = type("Org", (), {"id": legacy_org_id})
     with SessionLocal() as db:
         owner_role = db.scalar(select(Role).where(Role.is_owner.is_(True), Role.name == "Owner", Role.organization_id == organization.id))
         keys = {permission.key for permission in owner_role.permissions}

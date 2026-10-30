@@ -61,17 +61,17 @@ export function BulkDailyCostPrintDialog({ open, onClose, entries, wells }: {
       rigId
         ? api<MudCostReconciliation>(`/mud-cost/reconciliation?${new URLSearchParams({
           rig_id: rigId, well_id: entry.well_id, to: entry.cost_date, include_draft: 'true',
-        })}`).catch(() => null)
+        })}`, { silent: true }).catch(() => null)
         : Promise.resolve(null),
       rigId
         ? api<MudCostMaterialBalance>(`/mud-cost/material-balance?${new URLSearchParams({
           rig_id: rigId, well_id: entry.well_id, view: 'section', to: entry.cost_date,
-        })}`).catch(() => null)
+        })}`, { silent: true }).catch(() => null)
         : Promise.resolve(null),
       api<LihCostReport>(`/lih-cost/wells/${entry.well_id}/report?${new URLSearchParams({
         well_id: entry.well_id, from: entry.cost_date, to: entry.cost_date,
-      })}`).catch(() => null),
-      api<NdtEntry[]>(`/ndt-inspections/entries?${ndtParams}`).catch(() => []),
+      })}`, { silent: true }).catch(() => null),
+      api<NdtEntry[]>(`/ndt-inspections/entries?${ndtParams}`, { silent: true }).catch(() => []),
     ])
     return { mudReconciliation, mudBalance, lihReport, ndtInspections }
   }
