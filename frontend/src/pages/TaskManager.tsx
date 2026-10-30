@@ -92,13 +92,30 @@ export default function TaskManager() {
     if (dateFrom) params.set('date_from', dateFrom)
     if (dateTo) params.set('date_to', dateTo)
     try {
-      const [data, summary] = await Promise.all([
-        api<TaskPage>(`/tasks?${params.toString()}`, { action: 'Load the task queue' }),
-        api<TaskOverview>('/tasks/overview', { action: 'Load the task summary' }),
-      ])
-      setRows(data.items); setTotal(data.total); setOverview(summary)
-      setTypes(current => Array.from(new Set([...current, ...Object.keys(summary.by_type)])))
+      // The queue is the page's authoritative data. The overview was added
+      // later and must not make the whole Task Manager fail while API nodes
+      // are rolling from an older release.
+      const data = await api<TaskPage>(`/tasks?${params.toString()}`, { action: 'Load the task queue' })
+      setRows(data.items); setTotal(data.total)
       setSelected(ids => ids.filter(id => data.items.some(row => row.id === id)))
+      setTypes(current => Array.from(new Set([...current, ...data.items.map(row => row.task_type)])))
+      try {
+        const summary = await api<TaskOverview>('/tasks/overview', { action: 'Load the task summary', silent: true })
+        setOverview(summary)
+        setTypes(current => Array.from(new Set([...current, ...Object.keys(summary.by_type)])))
+      } catch {
+        const active = data.items.filter(row => row.status === 'open' || row.status === 'in_progress')
+        setOverview({
+          open: data.items.filter(row => row.status === 'open').length,
+          in_progress: data.items.filter(row => row.status === 'in_progress').length,
+          overdue: active.filter(row => row.overdue).length,
+          due_today: active.filter(row => row.due_at && new Date(row.due_at).toDateString() === new Date().toDateString()).length,
+          completed_7d: data.items.filter(row => row.status === 'completed' && row.completed_at && Date.now() - new Date(row.completed_at).getTime() <= 7 * 86400000).length,
+          mine: active.filter(row => row.is_mine).length,
+          unassigned: active.filter(row => !row.assignee_user_id).length,
+          by_priority: {}, by_type: {},
+        })
+      }
     } catch (caught) { setError((caught as Error).message) } finally { setLoading(false) }
   }, [page, pageSize, status, priority, type, assignee, due, search, dateFrom, dateTo])
   useEffect(() => { void load() }, [load])

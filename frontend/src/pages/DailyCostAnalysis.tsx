@@ -387,7 +387,13 @@ export default function DailyCostAnalysis() {
           </Typography>
         </Box>
         <Box sx={{ overflowX: 'auto' }}>
-          <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 720, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
+          <Box component="table" sx={{
+            borderCollapse: 'collapse', width: '100%', minWidth: 720,
+            '& th': { textAlign: 'left', verticalAlign: 'bottom', color: 'text.secondary', fontSize: 10, lineHeight: 1.25, letterSpacing: .6, fontWeight: 800, px: 1, py: 1, borderBottom: '1px solid', borderColor: 'divider' },
+            '& td': { verticalAlign: 'middle', px: 1, py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 },
+            '& th[align="right"], & td[align="right"]': { textAlign: 'right' },
+            '& td[align="right"]': { whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
+          }}>
             <thead><tr><th>AFE</th><th>STATUS</th><th>SHEETS</th><th align="right">PLANNED</th>{hasAdjustment && <th align="right">ADJUSTED</th>}<th align="right">ACTUAL</th><th align="right">OTHER EXPENSES</th><th align="right">LIH COST</th><th align="right">ACTUAL INCL. LIH</th><th align="right">BALANCE</th>{hasAdjustment && <th align="right">ADJ BALANCE</th>}<th align="right">DAYS</th></tr></thead>
             <tbody>{summary.afes.map(afe => <tr key={afe.afe_id}>
               <td><Typography fontSize={12} fontWeight={700}>{afe.afe_code}</Typography><Typography fontSize={10.5} color="text.secondary">{afe.afe_name}</Typography></td>
@@ -416,7 +422,13 @@ export default function DailyCostAnalysis() {
           <Tag tone={mud.available ? 'success' : 'warning'}>{mud.available ? 'Reconciled in comparison' : 'Actual cost only'}</Tag>
         </Box>
         <Box sx={{ overflowX: 'auto' }}>
-          <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%', minWidth: 1000, '& th': { textAlign: 'left', color: 'text.secondary', fontSize: 10, letterSpacing: .6, fontWeight: 800, py: 1, borderBottom: '1px solid', borderColor: 'divider' }, '& td': { py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 } }}>
+          <Box component="table" sx={{
+            borderCollapse: 'collapse', width: '100%', minWidth: 1000,
+            '& th': { textAlign: 'left', verticalAlign: 'bottom', color: 'text.secondary', fontSize: 10, lineHeight: 1.25, letterSpacing: .6, fontWeight: 800, px: 1, py: 1, borderBottom: '1px solid', borderColor: 'divider' },
+            '& td': { verticalAlign: 'middle', px: 1, py: 1.1, borderBottom: '1px solid', borderColor: 'divider', fontSize: 12 },
+            '& th[align="right"], & td[align="right"]': { textAlign: 'right' },
+            '& td[align="right"]': { whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
+          }}>
             <thead><tr><th>SECTION</th><th>MUD TYPE</th><th align="right">PLANNED (AFE)</th><th align="right">COST/BBL</th><th align="right">BASE RATE</th><th align="right">ACTUAL MUD COST</th><th align="right">RECONCILED</th><th align="right">DIFFERENCE</th><th align="right">CONSUMPTION / LOSSES</th></tr></thead>
             <tbody>{mud.sections.map(row => <tr key={row.section_id}>
               <td>{row.section_label}</td>
