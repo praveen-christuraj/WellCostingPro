@@ -228,7 +228,7 @@ export default function CatalogueLists() {
       <Box minWidth={0}>
         {activeSummary && <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={2} flexWrap="wrap" mb={1.5}>
           <Box>
-            <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>{activeSummary.label}</Typography>
+            <Typography fontWeight={800} fontSize={16}>{activeSummary.label}</Typography>
             <Typography color="text.secondary" fontSize={12} mt={.35}>
               {activeSummary.parent_label
                 ? `Each value belongs to one ${singular(activeSummary.parent_label)}. Choose it below to filter, or to add values under it.`

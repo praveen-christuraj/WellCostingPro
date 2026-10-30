@@ -51,7 +51,7 @@ function KpiCard({ label, value, hint, icon, tone = 'default', onClick, title }:
       <Typography color="text.secondary" fontSize={10.5} fontWeight={800} letterSpacing={.75} textTransform="uppercase" lineHeight={1.35}>{label}</Typography>
       <Box className="table-icon" sx={{ width: 26, height: 26, flex: '0 0 auto' }}>{icon}</Box>
     </Box>
-    <Typography sx={{ fontSize: 20, my: .8, color, fontWeight: 800, fontFamily: 'Manrope', overflowWrap: 'anywhere' }}>{value}</Typography>
+    <Typography sx={{ fontSize: 20, my: .8, color, fontWeight: 800, overflowWrap: 'anywhere' }}>{value}</Typography>
     <Typography color="text.secondary" fontSize={11} lineHeight={1.4}>{hint}</Typography>
   </Paper>
 }
@@ -755,7 +755,7 @@ export default function BusinessDashboard() {
         <Paper variant="outlined" sx={{ p: 2.2, borderRadius: 2 }}>
           <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={1}>
             <Box>
-              <Typography fontWeight={800} fontFamily="Manrope" fontSize={15}>AFE against actual cost</Typography>
+              <Typography fontWeight={800} fontSize={15}>AFE against actual cost</Typography>
               <Typography color="text.secondary" fontSize={11.5} mt={.35}>Top wells by effective plan. Click a bar to drill into the well.</Typography>
             </Box>
             <Tag tone={data.kpis.over_budget_wells ? 'error' : 'success'}>{data.kpis.over_budget_wells ? `${data.kpis.over_budget_wells} over` : 'Within plan'}</Tag>
@@ -770,7 +770,7 @@ export default function BusinessDashboard() {
         <Paper variant="outlined" sx={{ p: 2.2, borderRadius: 2 }}>
           <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={1}>
             <Box>
-              <Typography fontWeight={800} fontFamily="Manrope" fontSize={15}>Planned days against actual time</Typography>
+              <Typography fontWeight={800} fontSize={15}>Planned days against actual time</Typography>
               <Typography color="text.secondary" fontSize={11.5} mt={.35}>Actual days split into productive, UPA and NPT. The marker is the plan.</Typography>
             </Box>
             <Tag tone="info">Time</Tag>
@@ -786,14 +786,14 @@ export default function BusinessDashboard() {
 
       <Box display="grid" gap={2} mt={2} sx={{ gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr)' } }}>
         <Paper variant="outlined" sx={{ p: 2.2, borderRadius: 2 }}>
-          <Typography fontWeight={800} fontFamily="Manrope" fontSize={15}>Cumulative actual cost</Typography>
+          <Typography fontWeight={800} fontSize={15}>Cumulative actual cost</Typography>
           <Typography color="text.secondary" fontSize={11.5} mt={.35} mb={1}>Every cost date in the filtered range, in {currency || 'the selected currency'}.</Typography>
           {data.daily.length
             ? <Box height={264}><ReactECharts option={trendOption} notMerge lazyUpdate style={{ height: '100%', width: '100%' }}/></Box>
             : <Typography color="text.secondary" fontSize={12.5} py={6} textAlign="center">No recorded cost in this range.</Typography>}
         </Paper>
         <Paper variant="outlined" sx={{ p: 2.2, borderRadius: 2 }}>
-          <Typography fontWeight={800} fontFamily="Manrope" fontSize={15}>Actual cost mix</Typography>
+          <Typography fontWeight={800} fontSize={15}>Actual cost mix</Typography>
           <Typography color="text.secondary" fontSize={11.5} mt={.35} mb={1}>Where the recorded money went.</Typography>
           {data.cost_groups.some(row => Number(row.actual ?? 0) > 0)
             ? <Box height={264}><ReactECharts option={mixOption} notMerge lazyUpdate style={{ height: '100%', width: '100%' }}/></Box>
@@ -802,7 +802,7 @@ export default function BusinessDashboard() {
         <Paper variant="outlined" sx={{ p: 2.2, borderRadius: 2 }}>
           <Box display="flex" justifyContent="space-between" alignItems="flex-start">
             <Box>
-              <Typography fontWeight={800} fontFamily="Manrope" fontSize={15}>Depth progress</Typography>
+              <Typography fontWeight={800} fontSize={15}>Depth progress</Typography>
               <Typography color="text.secondary" fontSize={11.5} mt={.35}>Deepest section carrying cost against the plan.</Typography>
             </Box>
             <StraightenRounded sx={{ fontSize: 18, color: 'text.secondary' }}/>
@@ -815,7 +815,7 @@ export default function BusinessDashboard() {
 
       <Box display="grid" gap={2} mt={2} sx={{ gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 2fr) minmax(0, 1fr)' } }}>
         <Paper variant="outlined" sx={{ p: 2.2, borderRadius: 2 }}>
-          <Typography fontWeight={800} fontFamily="Manrope" fontSize={15}>Cost group reconciliation</Typography>
+          <Typography fontWeight={800} fontSize={15}>Cost group reconciliation</Typography>
           <Typography color="text.secondary" fontSize={11.5} mt={.35} mb={1}>AFE planned against recorded actual, by cost group.</Typography>
           <Box sx={{ overflowX: 'auto' }}>
             <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -842,7 +842,7 @@ export default function BusinessDashboard() {
           </Box>
         </Paper>
         <Paper variant="outlined" sx={{ p: 2.2, borderRadius: 2 }}>
-          <Typography fontWeight={800} fontFamily="Manrope" fontSize={15}>Time classification</Typography>
+          <Typography fontWeight={800} fontSize={15}>Time classification</Typography>
           <Typography color="text.secondary" fontSize={11.5} mt={.35} mb={1}>Days and cost recorded under each classification.</Typography>
           {data.classification.map(row => <Box key={row.key} sx={{ borderTop: '1px solid', borderColor: 'divider', py: 1 }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" gap={1}>
@@ -867,7 +867,7 @@ export default function BusinessDashboard() {
       <Box mt={2.5}>
         <Box display="flex" alignItems="center" justifyContent="space-between" gap={1} flexWrap="wrap" mb={1}>
           <Box>
-            <Typography fontWeight={800} fontFamily="Manrope" fontSize={15}>Register drill-through</Typography>
+            <Typography fontWeight={800} fontSize={15}>Register drill-through</Typography>
             <Typography color="text.secondary" fontSize={11.5} mt={.35}>
               Each row carries its own search, advanced filters, date range, 20/50/100 paging and CSV/XLSX/PDF export. Use Drill in for the record-level panel.
             </Typography>

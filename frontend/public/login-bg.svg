@@ -94,7 +94,7 @@
   <circle cx="498" cy="340" r="3" fill="#8FB8E4" fill-opacity="0.6"/>
   
   <!-- Target label -->
-  <text x="505" y="355" fill="#A7B8CB" font-family="Manrope, Arial, sans-serif" font-size="9" font-weight="600" fill-opacity="0.6">TARGET</text>
+  <text x="505" y="355" fill="#A7B8CB" font-family="Inter, Arial, sans-serif" font-size="9" font-weight="600" fill-opacity="0.6">TARGET</text>
   
   <!-- Surface location marker -->
   <g transform="translate(420, 180)" stroke="#8FB8E4" stroke-width="1.5" fill="none" stroke-opacity="0.6">
@@ -102,13 +102,13 @@
   </g>
   
   <!-- Surface label -->
-  <text x="405" y="175" fill="#A7B8CB" font-family="Manrope, Arial, sans-serif" font-size="9" font-weight="600" fill-opacity="0.6">SURFACE</text>
+  <text x="405" y="175" fill="#A7B8CB" font-family="Inter, Arial, sans-serif" font-size="9" font-weight="600" fill-opacity="0.6">SURFACE</text>
   
   <!-- Kick-off point label -->
-  <text x="425" y="245" fill="#A7B8CB" font-family="Manrope, Arial, sans-serif" font-size="8" fill-opacity="0.5">KOP</text>
+  <text x="425" y="245" fill="#A7B8CB" font-family="Inter, Arial, sans-serif" font-size="8" fill-opacity="0.5">KOP</text>
   
   <!-- Depth annotation on right -->
-  <g fill="#A7B8CB" font-family="Manrope, Arial, sans-serif" font-size="8" fill-opacity="0.4">
+  <g fill="#A7B8CB" font-family="Inter, Arial, sans-serif" font-size="8" fill-opacity="0.4">
     <text x="475" y="55">500m</text>
     <text x="475" y="105">1000m</text>
     <text x="475" y="155">1500m</text>
@@ -122,5 +122,5 @@
   <g stroke="#8FB8E4" stroke-width="0.8" stroke-opacity="0.4" fill="none">
     <path d="M 485 305 L 495 305 L 495 295"/>
   </g>
-  <text x="478" y="298" fill="#8FB8E4" font-family="Manrope, Arial, sans-serif" font-size="7" fill-opacity="0.4">DIP</text>
+  <text x="478" y="298" fill="#8FB8E4" font-family="Inter, Arial, sans-serif" font-size="7" fill-opacity="0.4">DIP</text>
 </svg>

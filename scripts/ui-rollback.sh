@@ -28,8 +28,14 @@ fi
 
 # Files the design layer changed. Everything else in the repository is left alone.
 RESTORED=(
+  frontend/index.html
+  frontend/package.json
+  frontend/package-lock.json
+  frontend/src/main.tsx
   frontend/src/theme.ts
   frontend/src/styles.css
+  frontend/src/lib/api.ts
+  frontend/src/components/Brand.tsx
   frontend/src/components/Common.tsx
   frontend/src/components/DataTable.tsx
   frontend/src/components/ImportDialog.tsx

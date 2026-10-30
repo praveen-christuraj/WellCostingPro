@@ -278,7 +278,7 @@ export default function Services() {
       <Box sx={{ p: { xs: 1.5, sm: 2.5 } }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap" mb={1.5}>
           <Box>
-            <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>Service register</Typography>
+            <Typography fontWeight={800} fontSize={16}>Service register</Typography>
             <Typography color="text.secondary" fontSize={12} mt={.35}>
               {visibleRows.length} {groupFilter ? `${groupFilter} ` : 'active '}{visibleRows.length === 1 ? 'service' : 'services'}{groupFilter ? ` of ${rows.length} active` : ''}. Enter service codes manually and select a vendor for both provider types.
             </Typography>

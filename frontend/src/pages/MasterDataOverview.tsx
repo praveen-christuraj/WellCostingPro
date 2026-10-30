@@ -87,7 +87,7 @@ export default function MasterDataOverview() {
         <Paper className="content-card" variant="outlined">
           <Box display="flex" justifyContent="space-between" alignItems="start" mb={1.5}>
             <Box>
-              <Typography fontWeight={800} fontFamily="Manrope" fontSize={16}>Data by type</Typography>
+              <Typography fontWeight={800} fontSize={16}>Data by type</Typography>
               <Typography fontSize={12} color="text.secondary" mt={.5}>Active and deleted workspace records</Typography>
             </Box>
             <Tag tone="info">{data.active_records + data.deleted_records} total</Tag>
@@ -105,7 +105,7 @@ export default function MasterDataOverview() {
         <Paper className="content-card" variant="outlined">
           <Box display="flex" justifyContent="space-between" alignItems="start" mb={2.2}>
             <Box>
-              <Typography fontWeight={800} fontFamily="Manrope" fontSize={16}>Recent activity</Typography>
+              <Typography fontWeight={800} fontSize={16}>Recent activity</Typography>
               <Typography fontSize={12} color="text.secondary" mt={.5}>Changes and lifecycle events, audit logged</Typography>
             </Box>
             <Tag tone="success">Audit enabled</Tag>

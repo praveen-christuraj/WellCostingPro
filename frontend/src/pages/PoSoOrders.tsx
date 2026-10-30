@@ -246,7 +246,7 @@ export default function PoSoOrders() {
 
         <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap" mb={1.5}>
           <Box>
-            <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>Order register</Typography>
+            <Typography fontWeight={800} fontSize={16}>Order register</Typography>
             <Typography color="text.secondary" fontSize={12} mt={.35}>
               {filtered.length} of {rows.length} {rows.length === 1 ? 'revision' : 'revisions'}{amendments ? ` · ${amendments} amendments` : ''}. Use the header checkbox to select all matching rows.
             </Typography>

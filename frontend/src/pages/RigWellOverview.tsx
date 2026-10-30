@@ -121,7 +121,7 @@ export default function RigWellOverview() {
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2, mb: 2.2 }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap">
           <Box>
-            <Typography fontFamily="Manrope" fontWeight={800} fontSize={15}>Wells by block</Typography>
+            <Typography fontWeight={800} fontSize={15}>Wells by block</Typography>
             <Typography color="text.secondary" fontSize={12} mt={.35}>Active wells segregated by the block they belong to.</Typography>
           </Box>
           <Button component={RouterLink} to="/rig-well/wells" size="small" variant="outlined">Open well register</Button>
@@ -137,12 +137,12 @@ export default function RigWellOverview() {
 
       <Box display="grid" gridTemplateColumns={{ xs: '1fr', lg: '1.1fr .9fr' }} gap={2.2}>
         <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2, minHeight: 330 }}>
-          <Typography fontFamily="Manrope" fontWeight={800} fontSize={15}>Sub activities by Master Data Activity</Typography>
+          <Typography fontWeight={800} fontSize={15}>Sub activities by Master Data Activity</Typography>
           <Typography color="text.secondary" fontSize={12} mt={.35} mb={1.5}>Active well sub activities grouped by their assigned Activity.</Typography>
           {overview.activity_counts.length ? <ReactECharts option={barOption} style={{ height: 245, width: '100%' }}/> : <Box minHeight={220} display="grid" sx={{ placeItems: 'center' }}><Typography color="text.secondary" fontSize={13} textAlign="center">Activity distribution will appear after sub activities are entered under wells.</Typography></Box>}
         </Paper>
         <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2, minHeight: 330 }}>
-          <Typography fontFamily="Manrope" fontWeight={800} fontSize={15}>Well lifecycle</Typography>
+          <Typography fontWeight={800} fontSize={15}>Well lifecycle</Typography>
           <Typography color="text.secondary" fontSize={12} mt={.35} mb={1}>Draft, configured, final review and completed status across active wells.</Typography>
           <ReactECharts option={lifecycleOption} style={{ height: 268, width: '100%' }}/>
         </Paper>
@@ -150,7 +150,7 @@ export default function RigWellOverview() {
 
       {can('audit:read') && <Paper variant="outlined" sx={{ mt: 2.2, p: { xs: 2, sm: 2.5 }, borderRadius: 2 }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap" mb={.5}>
-          <Box><Typography fontFamily="Manrope" fontWeight={800} fontSize={15}>Recent module activity</Typography><Typography color="text.secondary" fontSize={12} mt={.35}>The latest audited rig, well, configuration and sub activity changes.</Typography></Box>
+          <Box><Typography fontWeight={800} fontSize={15}>Recent module activity</Typography><Typography color="text.secondary" fontSize={12} mt={.35}>The latest audited rig, well, configuration and sub activity changes.</Typography></Box>
           <Button component={RouterLink} to="/other-management/audit" size="small" variant="outlined">Open audit log</Button>
         </Box>
         {overview.recent_activity.length ? <List disablePadding>

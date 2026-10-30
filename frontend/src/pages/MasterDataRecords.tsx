@@ -221,7 +221,7 @@ export default function MasterDataRecords() {
       <Box sx={{ p: { xs: 1.5, sm: 2.5 } }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap" mb={1.5}>
           <Box>
-            <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>{currentModule.title}</Typography>
+            <Typography fontWeight={800} fontSize={16}>{currentModule.title}</Typography>
             <Typography color="text.secondary" fontSize={12} mt={.35}>
               {rows.length} active {rows.length === 1 ? 'record' : 'records'}. Use the header checkbox to select all matching rows.
             </Typography>

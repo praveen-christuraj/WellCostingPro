@@ -27,7 +27,7 @@ function SheetStatus({ status }: { status: string }) {
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return <Box sx={{ minWidth: 0 }}>
     <Typography color="text.secondary" fontSize={10} fontWeight={800} letterSpacing={.6} textTransform="uppercase" noWrap>{label}</Typography>
-    <Typography fontSize={16} fontWeight={800} fontFamily="Manrope" sx={{ mt: .35, overflowWrap: 'anywhere' }} noWrap title={value}>{value}</Typography>
+    <Typography fontSize={16} fontWeight={800} sx={{ mt: .35, overflowWrap: 'anywhere' }} noWrap title={value}>{value}</Typography>
     {hint && <Typography color="text.secondary" fontSize={10.5} noWrap title={hint}>{hint}</Typography>}
   </Box>
 }

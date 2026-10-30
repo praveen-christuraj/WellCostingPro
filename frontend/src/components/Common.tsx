@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
-import { Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Typography } from '@mui/material'
+import { Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Typography, useMediaQuery, useTheme } from '@mui/material'
 import { useBlocker } from 'react-router-dom'
 import { ErrorOutlineRounded } from '@mui/icons-material'
 
@@ -47,7 +47,7 @@ export function Tag({ children, tone = 'neutral' }: { children: ReactNode; tone?
 // Standard pop-up rule: a data-entry pop-up closes ONLY via its Cancel button (or after a successful save/import).
 // Backdrop clicks and the Escape key are deliberately ignored, so no onClose is passed to the MUI Dialog.
 // `danger` marks the irreversible actions (permanent delete, purge) in the primary button colour.
-export function FormDialog({ open, title, subtitle, onClose, onSubmit, busy, busyLabel, children, submitLabel = 'Save changes', maxWidth = 'sm', submitDisabled = false, danger = false, dirty }: {
+export function FormDialog({ open, title, subtitle, onClose, onSubmit, busy, busyLabel, children, submitLabel = 'Save changes', maxWidth = 'md', submitDisabled = false, danger = false, dirty }: {
   open: boolean
   title: string
   subtitle?: string
@@ -67,6 +67,8 @@ export function FormDialog({ open, title, subtitle, onClose, onSubmit, busy, bus
   const subtitleId = useId()
   const [typed, setTyped] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const theme = useTheme()
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'))
   const confirmTitleId = useId()
   const confirmBodyId = useId()
 
@@ -88,7 +90,8 @@ export function FormDialog({ open, title, subtitle, onClose, onSubmit, busy, bus
     else onClose()
   }
 
-  return <Dialog open={open} disableEscapeKeyDown fullWidth maxWidth={maxWidth} aria-labelledby={titleId} aria-describedby={subtitle ? subtitleId : undefined}>
+  return <Dialog open={open} disableEscapeKeyDown fullScreen={fullScreen} fullWidth maxWidth={maxWidth} aria-labelledby={titleId} aria-describedby={subtitle ? subtitleId : undefined}
+    sx={{ '& .MuiDialog-paper': { maxHeight: fullScreen ? '100%' : '94vh' } }}>
     {/* DialogTitle renders as an <h2> and takes the id from the Dialog's aria-labelledby, so the
         heading holds the title only; the subtitle is a paragraph the dialog points at with
         aria-describedby. That keeps one accessible name and no duplicated ids. */}
@@ -236,10 +239,13 @@ export function ErrorMessage({ message }: { message: string }) {
 
 // Same rule as FormDialog for panels that are not a single submit form (attachments,
 // revision history): no backdrop or Escape close, no close icon, footer button only.
-export function PanelDialog({ open, title, subtitle, onClose, footer, children, maxWidth = 'md' }: { open: boolean; title: string; subtitle?: string; onClose: () => void; footer?: ReactNode; children: ReactNode; maxWidth?: 'sm' | 'md' | 'lg' }) {
+export function PanelDialog({ open, title, subtitle, onClose, footer, children, maxWidth = 'lg' }: { open: boolean; title: string; subtitle?: string; onClose: () => void; footer?: ReactNode; children: ReactNode; maxWidth?: 'sm' | 'md' | 'lg' }) {
   const titleId = useId()
   const subtitleId = useId()
-  return <Dialog open={open} disableEscapeKeyDown fullWidth maxWidth={maxWidth} aria-labelledby={titleId} aria-describedby={subtitle ? subtitleId : undefined}>
+  const theme = useTheme()
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'))
+  return <Dialog open={open} disableEscapeKeyDown fullScreen={fullScreen} fullWidth maxWidth={maxWidth} aria-labelledby={titleId} aria-describedby={subtitle ? subtitleId : undefined}
+    sx={{ '& .MuiDialog-paper': { maxHeight: fullScreen ? '100%' : '94vh' } }}>
     {/* MUI renders DialogTitle as an <h2>; the title and subtitle are spans inside it so the
         heading is not nested inside another heading. */}
     <DialogTitle sx={{ px: 3, pt: 3, pb: subtitle ? 1 : 2 }}>

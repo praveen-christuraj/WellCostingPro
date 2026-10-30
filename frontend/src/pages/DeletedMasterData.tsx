@@ -360,7 +360,7 @@ export default function DeletedMasterData() {
 
     <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap" mb={1.5}>
       <Box>
-        <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>Deleted master data</Typography>
+        <Typography fontWeight={800} fontSize={16}>Deleted master data</Typography>
         <Typography color="text.secondary" fontSize={12} mt={.35}>
           {rows.length} deleted {rows.length === 1 ? 'entry' : 'entries'} across reference data, services, vendors, PO/SO orders and catalogue data. Use row checkboxes or the header checkbox to select entries for bulk actions.
         </Typography>

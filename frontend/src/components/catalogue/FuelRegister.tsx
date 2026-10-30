@@ -96,7 +96,7 @@ export function FuelRegister() {
     </Box>}
 
     <Box mb={1.5}>
-      <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>Fuel prices</Typography>
+      <Typography fontWeight={800} fontSize={16}>Fuel prices</Typography>
       <Typography color="text.secondary" fontSize={12} mt={.35}>Update a price only when it changes. Prices are per litre.</Typography>
     </Box>
     {notice && <Alert severity="success" onClose={() => setNotice('')} sx={{ mb: 1.5 }}>{notice}</Alert>}

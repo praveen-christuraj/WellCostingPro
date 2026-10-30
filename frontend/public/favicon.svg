@@ -32,6 +32,6 @@
   </g>
   <!-- Dollar sign overlay -->
   <g fill="#8FB8E4">
-    <text x="32" y="44" text-anchor="middle" font-family="Manrope, Arial, sans-serif" font-size="22" font-weight="700">$</text>
+    <text x="32" y="44" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">$</text>
   </g>
 </svg>

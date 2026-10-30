@@ -21,7 +21,7 @@ export const buildTheme = (mode: 'light' | 'dark'): Theme => {
     palette: {
       mode,
       primary: light
-        ? { main: navy[700], dark: navy[900], light: navy[100], contrastText: '#FFFFFF' }
+        ? { main: navy[800], dark: navy[900], light: navy[100], contrastText: '#FFFFFF' }
         : { main: navy[400], dark: navy[500], light: navy[900], contrastText: '#0B1A2B' },
       secondary: light ? { main: navy[600] } : { main: navy[400] },
       background: { default: s.canvas, paper: s.paper },
@@ -102,10 +102,10 @@ export const buildTheme = (mode: 'light' | 'dark'): Theme => {
             '&:hover': { boxShadow: 'none' },
             '&.Mui-disabled': { background: light ? '#E2E8EF' : '#1B2C40' },
           },
-          containedPrimary: { '&:hover': { backgroundColor: light ? navy[800] : navy[300] } },
+          containedPrimary: { '&:hover': { backgroundColor: light ? navy[700] : navy[300] } },
           outlined: {
             borderColor: s.dividerStrong,
-            '&:hover': { borderColor: light ? navy[700] : navy[400], backgroundColor: s.hover },
+            '&:hover': { borderColor: light ? navy[800] : navy[400], backgroundColor: s.hover },
             '&.Mui-disabled': { borderColor: s.divider },
           },
           text: { '&:hover': { backgroundColor: s.hover } },
@@ -148,7 +148,7 @@ export const buildTheme = (mode: 'light' | 'dark'): Theme => {
             backgroundColor: light ? '#FFFFFF' : 'rgba(255, 255, 255, 0.02)',
             '& .MuiOutlinedInput-notchedOutline': { borderColor: s.dividerStrong },
             '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: navy[500] },
-            '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: light ? navy[700] : navy[400] },
+            '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: light ? navy[800] : navy[400] },
             '&.Mui-focused': { boxShadow: `0 0 0 3px ${s.focusSoft}` },
             '&.Mui-disabled .MuiOutlinedInput-notchedOutline': { borderColor: s.divider },
           },
@@ -157,7 +157,7 @@ export const buildTheme = (mode: 'light' | 'dark'): Theme => {
       },
       MuiInputLabel: {
         styleOverrides: {
-          root: { fontSize: 13, color: s.textMuted, '&.Mui-focused': { color: light ? navy[700] : navy[400] } },
+          root: { fontSize: 13, color: s.textMuted, '&.Mui-focused': { color: light ? navy[800] : navy[400] } },
         },
       },
       MuiFormHelperText: {

@@ -13,6 +13,7 @@
 //
 // Exits non-zero when a rule fails, so it can gate a UI change.
 import { JSDOM } from 'jsdom'
+import { readFileSync } from 'node:fs'
 
 const dom = new JSDOM('<!doctype html><html><head></head><body><div id="root"></div></body></html>', { pretendToBeVisual: true, url: 'http://localhost/' })
 const w = dom.window
@@ -94,6 +95,16 @@ await act(async () => {
   check('panel dialog labelled', Boolean(dialog?.getAttribute('aria-labelledby')))
   check('panel dialog has a close button', [...doc.querySelectorAll('[role="dialog"] button')].some(b => b.textContent === 'Close'))
 }
+
+// Layout needs authenticated application context, so these source-level checks
+// protect the shared shell without duplicating a mock permission model here.
+const layoutSource = readFileSync('src/components/Layout.tsx', 'utf8')
+const apiSource = readFileSync('src/lib/api.ts', 'utf8')
+check('shell uses permission-aware side navigation', layoutSource.includes('aria-label="Primary navigation"') && layoutSource.includes('modulesForUser'))
+check('desktop navigation can collapse and persists', layoutSource.includes('wcp-nav-expanded') && layoutSource.includes('Collapse navigation'))
+check('mobile navigation uses a drawer', layoutSource.includes('<Drawer open={mobileOpen}'))
+check('main work area has no fixed width cap', !layoutSource.includes('maxWidth: 1600'))
+check('failed API actions emit visible feedback', apiSource.includes("CustomEvent('api-error'") && layoutSource.includes('<Snackbar open={!!apiNotice}'))
 
 let failed = 0
 for (const r of results) { if (!r.pass) failed++; console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.label}${r.detail ? `  [${r.detail}]` : ''}`) }

@@ -18,7 +18,7 @@ export default function Brand({ light = false }: { light?: boolean }) {
   return <Box display="flex" alignItems="center" gap={1.4}>
     <Box className="brand-mark"><span className="brand-line"/><span className="brand-dot"/></Box>
     <Box>
-      <Typography sx={{ display: 'block', fontFamily: 'Manrope', fontWeight: 800, letterSpacing: '-.4px', color: tone.text, lineHeight: 1.1, fontSize: { xs: 22, sm: 26, md: 30 } }}>
+      <Typography sx={{ display: 'block', fontFamily: '"Inter Variable", Inter, sans-serif', fontWeight: 750, letterSpacing: '-.55px', color: tone.text, lineHeight: 1.1, fontSize: { xs: 22, sm: 26, md: 28 } }}>
         WellCost<span style={{ color: dark ? navy[400] : navy[600] }}>IQ</span>
       </Typography>
       <Typography

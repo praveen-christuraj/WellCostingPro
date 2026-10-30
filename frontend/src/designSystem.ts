@@ -18,23 +18,23 @@ export type Mode = 'light' | 'dark'
 
 /** Navy ramp — the brand scale. `700` is the primary action colour. */
 export const navy = {
-  50: '#F2F6FB',
-  100: '#E8EEF6',
-  200: '#D6E1EE',
-  300: '#B9CCE0',
-  400: '#8FB8E4',
-  500: '#5B8CC0',
-  600: '#4A6F96',
-  700: '#123A63',
-  800: '#0F3157',
-  900: '#0B2A47',
+  50: '#F2F6FC',
+  100: '#E3EBF7',
+  200: '#C9D8ED',
+  300: '#93B0DD',
+  400: '#6F99D5',
+  500: '#2F63B3',
+  600: '#255091',
+  700: '#1B3F7A',
+  800: '#12315F',
+  900: '#0B2447',
 } as const
 
 export const fonts = {
-  /** Interface text. DM Sans is loaded in index.html; the stack degrades safely. */
-  ui: '"DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-  /** Headlines, KPI values and anything that has to read as a number or a title. */
-  display: 'Manrope, "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+  /** One bundled variable family keeps forms, tables and headings crisp and consistent. */
+  ui: '"Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif',
+  /** Weight, size and spacing carry hierarchy without mixing typefaces. */
+  display: '"Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif',
   /** Codes, order numbers, checksums, CLI snippets. */
   mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
 } as const
@@ -110,33 +110,33 @@ export type SurfaceTokens = {
 export const surface = (mode: Mode): SurfaceTokens =>
   mode === 'dark'
     ? {
-        canvas: '#0E1B29',
-        paper: '#15273B',
-        raised: '#1B2F48',
-        hover: '#1E3450',
-        selected: '#22364E',
-        divider: '#27405C',
-        dividerStrong: '#33506F',
-        text: '#E6EDF5',
-        textMuted: '#A7B8CB',
-        textDisabled: '#7E93AB',
+        canvas: '#0B1220',
+        paper: '#121B2E',
+        raised: '#182339',
+        hover: '#1F2B44',
+        selected: '#243552',
+        divider: '#27354D',
+        dividerStrong: '#3A4A66',
+        text: '#E7EDF6',
+        textMuted: '#A3B2C8',
+        textDisabled: '#7B8BA3',
         focus: navy[400],
         focusSoft: 'rgba(143, 184, 228, 0.28)',
-        accentSurface: navy[900],
+        accentSurface: '#192B47',
         accentForeground: navy[400],
-        mutedSurface: '#15273B',
+        mutedSurface: '#182339',
       }
     : {
-        canvas: '#F4F6F9',
+        canvas: '#F3F5F9',
         paper: '#FFFFFF',
         raised: '#FFFFFF',
-        hover: '#EDF2F8',
+        hover: navy[50],
         selected: navy[100],
-        divider: '#E3E9F0',
-        dividerStrong: '#D2DCE7',
-        text: '#16283F',
-        textMuted: '#5B6B7F',
-        textDisabled: '#8293A6',
+        divider: '#D8E0EA',
+        dividerStrong: '#B9C6D8',
+        text: '#0F1F3D',
+        textMuted: '#5B6B85',
+        textDisabled: '#8A98AD',
         focus: navy[900],
         focusSoft: 'rgba(18, 58, 99, 0.16)',
         accentSurface: navy[100],

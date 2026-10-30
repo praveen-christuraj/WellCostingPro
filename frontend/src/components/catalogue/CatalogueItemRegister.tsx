@@ -213,7 +213,7 @@ export function CatalogueItemRegister({ config }: { config: TypeConfig }) {
 
     <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap" mb={1.5}>
       <Box>
-        <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>{config.label} register</Typography>
+        <Typography fontWeight={800} fontSize={16}>{config.label} register</Typography>
         <Typography color="text.secondary" fontSize={12} mt={.35}>
           {rows.length} active {rows.length === 1 ? config.singular : `${config.singular}s`}. {uplift ? 'Final cost = rate as per PO × uplift ÷ 100.' : 'Rates are unit rates per the unit of measure.'} Rate changes go through Revise rate.
         </Typography>
@@ -243,7 +243,7 @@ export function CatalogueItemRegister({ config }: { config: TypeConfig }) {
     />}
 
     {overview && overview.recent_revisions.length > 0 && <Paper variant="outlined" sx={{ mt: 2.5, p: 2, borderRadius: 2 }}>
-      <Typography fontFamily="Manrope" fontWeight={800} fontSize={14}>Recent price changes</Typography>
+      <Typography fontWeight={800} fontSize={14}>Recent price changes</Typography>
       <Box mt={1}>
         {overview.recent_revisions.map(revision => <Box key={revision.id} display="flex" gap={1.5} alignItems="baseline" sx={{ borderTop: '1px solid', borderColor: 'divider', py: 1 }}>
           <Chip size="small" label={`${revision.item_code} · #${revision.revision_number}`}/>

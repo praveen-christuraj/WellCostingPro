@@ -340,7 +340,7 @@ export default function CostingSets() {
       <Box sx={{ p: { xs: 1.5, sm: 2.5 } }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap" mb={1.5}>
           <Box>
-            <Typography fontFamily="Manrope" fontWeight={800} fontSize={16}>Your saved set items</Typography>
+            <Typography fontWeight={800} fontSize={16}>Your saved set items</Typography>
             <Typography color="text.secondary" fontSize={12} mt={.35}>
               {sets.length} named set(s), {rows.length} item link(s). Export/import works one catalogue membership per row.
             </Typography>

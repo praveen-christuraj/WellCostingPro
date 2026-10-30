@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { AppBar, Avatar, Box, Button, Divider, IconButton, Menu, MenuItem, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
-import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, GridViewOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined, SettingsOutlined, StorageOutlined, PlaylistAddCheckRounded, WaterDropOutlined, AssessmentOutlined, LocalGasStationOutlined, ScienceOutlined, Inventory2Outlined, ScheduleRounded, FactCheckOutlined } from '@mui/icons-material'
+import { Alert, AppBar, Avatar, Box, Collapse, Drawer, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Menu, MenuItem, Snackbar, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
+import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, KeyboardArrowUpRounded, ChevronLeftRounded, ChevronRightRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, GridViewOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined, SettingsOutlined, StorageOutlined, PlaylistAddCheckRounded, WaterDropOutlined, AssessmentOutlined, LocalGasStationOutlined, ScienceOutlined, Inventory2Outlined, ScheduleRounded, FactCheckOutlined } from '@mui/icons-material'
 import Brand from './Brand'
 import { FormDialog, ErrorMessage } from './Common'
 import { api, body } from '../lib/api'
@@ -12,7 +12,6 @@ import { useColorMode } from '../context/ThemeContext'
 type NavItem = { label: string; path: string; icon: typeof DashboardOutlined; permission?: string; anyOf?: string[]; requires?: string[] }
 type NavModule = { label: string; icon: typeof DashboardOutlined; items: NavItem[] }
 
-// Top-side navigation with dropdown module menus (no side navigation).
 const modules: NavModule[] = [
   { label: 'User Management', icon: PeopleOutline, items: [
     { label: 'Dashboard', path: '/dashboard', icon: DashboardOutlined },
@@ -75,11 +74,13 @@ export default function Layout() {
   const { user, can, logout } = useAuth()
   const { mode, toggle } = useColorMode()
   const mui = useTheme()
-  const compact = useMediaQuery(mui.breakpoints.down('md'))
+  const desktop = useMediaQuery(mui.breakpoints.up('md'))
   const navigate = useNavigate()
   const location = useLocation()
   const [moduleAnchor, setModuleAnchor] = useState<{ el: HTMLElement; module: NavModule } | null>(null)
-  const [mobileAnchor, setMobileAnchor] = useState<null | HTMLElement>(null)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [navExpanded, setNavExpanded] = useState(() => localStorage.getItem('wcp-nav-expanded') !== 'false')
+  const [openModules, setOpenModules] = useState<string[]>([])
   const [accountAnchor, setAccountAnchor] = useState<null | HTMLElement>(null)
   const [passwordDialog, setPasswordDialog] = useState(false)
   const [currentPassword, setCurrentPassword] = useState('')
@@ -87,108 +88,162 @@ export default function Layout() {
   const [passwordError, setPasswordError] = useState('')
   const [savingPassword, setSavingPassword] = useState(false)
   const [scrolled, setScrolled] = useState(false)
+  const [apiNotice, setApiNotice] = useState('')
 
-  const changePassword = async () => { setSavingPassword(true); setPasswordError(''); try { await api('/auth/change-password', { method: 'POST', body: body({ current_password: currentPassword, new_password: newPassword }) }); setPasswordDialog(false); setCurrentPassword(''); setNewPassword(''); await logout() } catch (e) { setPasswordError((e as Error).message) } finally { setSavingPassword(false) } }
+  const changePassword = async () => {
+    setSavingPassword(true)
+    setPasswordError('')
+    try {
+      await api('/auth/change-password', { method: 'POST', body: body({ current_password: currentPassword, new_password: newPassword }) })
+      setPasswordDialog(false)
+      setCurrentPassword('')
+      setNewPassword('')
+      await logout()
+    } catch (error) {
+      setPasswordError((error as Error).message)
+    } finally {
+      setSavingPassword(false)
+    }
+  }
 
   const visible = (item: NavItem) => (!item.permission || can(item.permission)) && (!item.anyOf || item.anyOf.some(can)) && (!item.requires || item.requires.every(can))
-  // The business dashboard spans three modules, so it sits directly in the bar
-  // rather than inside one module's dropdown.
   const showBusinessDashboard = can('rig-well:read') || can('afe:read') || can('daily-cost:read')
   const businessDashboardActive = location.pathname.startsWith('/business-dashboard')
-  const modulesForUser = modules.map(m => ({ ...m, items: m.items.filter(visible) })).filter(m => m.items.length > 0)
-  const currentModule = modulesForUser.find(m => m.items.some(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`)))
+  const modulesForUser = useMemo(
+    () => modules.map(module => ({ ...module, items: module.items.filter(visible) })).filter(module => module.items.length > 0),
+    [user], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+  const currentModule = modulesForUser.find(module => module.items.some(item => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)))
+  const currentItem = modulesForUser.flatMap(module => module.items)
+    .filter(item => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`))
+    .sort((a, b) => b.path.length - a.path.length)[0]
 
-  // The sticky bar only claims elevation once content is actually under it.
+  useEffect(() => { localStorage.setItem('wcp-nav-expanded', String(navExpanded)) }, [navExpanded])
+  useEffect(() => {
+    if (currentModule) setOpenModules(values => values.includes(currentModule.label) ? values : [...values, currentModule.label])
+    setMobileOpen(false)
+  }, [location.pathname, currentModule?.label]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const show = (event: Event) => {
+      const message = (event as CustomEvent<{ message?: string }>).detail?.message
+      if (message) setApiNotice(message)
+    }
+    window.addEventListener('api-error', show)
+    return () => window.removeEventListener('api-error', show)
+  }, [])
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 6)
     onScroll()
     window.addEventListener('scroll', onScroll, { passive: true })
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
-
-  // Browser tabs and history say which screen you are on.
   useEffect(() => {
-    // The most specific route wins, so /other-management/audit is not labelled with the module overview.
-    // `/` is a landing redirect to User Management; the dashboard lives at /dashboard.
-    const page = location.pathname.startsWith('/business-dashboard')
-      ? 'Dashboard'
-      : location.pathname === '/'
-      ? 'User Management'
-      : modulesForUser.flatMap(m => m.items)
-        .filter(i => location.pathname === i.path || location.pathname.startsWith(`${i.path}/`))
-        .sort((a, b) => b.path.length - a.path.length)[0]?.label
-    document.title = pageTitle(page)
-  }, [location.pathname]) // eslint-disable-line react-hooks/exhaustive-deps
+    document.title = pageTitle(businessDashboardActive ? 'Dashboard' : currentItem?.label ?? (location.pathname === '/' ? 'User Management' : undefined))
+  }, [businessDashboardActive, currentItem?.label, location.pathname])
 
-  return <Box display="flex" flexDirection="column" minHeight="100vh">
-    <a className="skip-link" href="#main-content">Skip to main content</a>
-    <AppBar position="sticky" elevation={0} sx={{
-      bgcolor: 'background.paper',
-      color: 'text.primary',
-      borderBottom: '1px solid',
-      borderColor: 'divider',
-      boxShadow: scrolled ? 2 : 'none',
-      transition: 'box-shadow 160ms cubic-bezier(0.2, 0, 0, 1)',
-    }}>
-      <Toolbar sx={{ gap: { xs: 1, sm: 1.5 }, minHeight: { xs: 58, sm: 62 }, px: { xs: 1.5, sm: 2.5 }, flexWrap: 'wrap' }}>
-        <IconButton sx={{ display: { md: 'none' }, color: 'text.primary' }} onClick={e => setMobileAnchor(e.currentTarget)} aria-label="Open navigation" aria-haspopup="menu" aria-expanded={!!mobileAnchor}><MenuRounded/></IconButton>
-        <Brand/>
-        {!compact && showBusinessDashboard && <Button
-          className={`topnav-item${businessDashboardActive ? ' active' : ''}`}
-          onClick={() => navigate('/business-dashboard')}
-          sx={{ ml: { md: 1.5 } }}
-        >Dashboard</Button>}
-        {!compact && <Box component="nav" aria-label="Modules" display="flex" alignItems="center" flexWrap="wrap" rowGap={.25} columnGap={.25} sx={{ ml: { xs: 0, md: 1 }, minWidth: 0, flex: '1 1 auto' }}>
-          {modulesForUser.map(module => {
-            const active = currentModule?.label === module.label
-            return <Button
-              key={module.label}
-              className={`topnav-item${active ? ' active' : ''}`}
-              onClick={e => setModuleAnchor({ el: e.currentTarget, module })}
-              aria-haspopup="menu"
-              aria-expanded={moduleAnchor?.module.label === module.label}
-              endIcon={<KeyboardArrowDownRounded sx={{ fontSize: 18 }}/>}
-            >{module.label}</Button>
-          })}
-        </Box>}
-        <Box display="flex" alignItems="center" gap={1.2} ml="auto" sx={{ flex: '0 0 auto' }}>
-          <Tooltip title={mode === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}>
-            <IconButton onClick={toggle} size="small" aria-label="Toggle color theme" sx={{ color: 'text.secondary' }}>{mode === 'light' ? <DarkModeOutlined sx={{ fontSize: 20 }}/> : <LightModeOutlined sx={{ fontSize: 20 }}/>}</IconButton>
-          </Tooltip>
-          <Box textAlign="right" sx={{ display: { xs: 'none', sm: 'block' } }}>
-            <Typography fontWeight={700} fontSize={12.5} lineHeight={1.3}>{user?.full_name}</Typography>
-            <Typography color="text.secondary" fontSize={11.5}>{user?.organization_name}</Typography>
-          </Box>
-          <Tooltip title="Account menu"><IconButton onClick={e => setAccountAnchor(e.currentTarget)} sx={{ p: .4, borderRadius: 2 }} aria-label="Account menu" aria-haspopup="menu" aria-expanded={!!accountAnchor}><Avatar sx={{ width: 34, height: 34, bgcolor: 'primary.light', color: 'primary.dark', fontSize: 12, fontWeight: 800 }}>{user?.full_name.split(' ').map(x => x[0]).slice(0, 2).join('').toUpperCase()}</Avatar><KeyboardArrowDownRounded sx={{ color: 'text.secondary', ml: .4, fontSize: 18 }}/></IconButton></Tooltip>
+  const toggleModule = (label: string) => setOpenModules(values => values.includes(label) ? values.filter(value => value !== label) : [...values, label])
+  const go = (path: string) => { navigate(path); setMobileOpen(false); setModuleAnchor(null) }
+  const navWidth = navExpanded ? 272 : 76
+  const navigation = (temporary = false) => {
+    const showText = navExpanded || temporary
+    return <Box component="nav" aria-label="Primary navigation" display="flex" flexDirection="column" height="100%" sx={{ overflow: 'hidden' }}>
+      <Box display="flex" alignItems="center" justifyContent={showText ? 'space-between' : 'center'} gap={1} sx={{ px: showText ? 2 : 1, minHeight: 72, borderBottom: '1px solid', borderColor: 'divider' }}>
+        <Box sx={{ minWidth: 0, overflow: 'hidden', '& > div': { whiteSpace: 'nowrap' } }}>
+          {showText ? <Brand/> : <Box className="brand-mark" aria-label="WellCostIQ"><span className="brand-line"/><span className="brand-dot"/></Box>}
         </Box>
-      </Toolbar>
-    </AppBar>
-
-    <Menu anchorEl={moduleAnchor?.el} open={!!moduleAnchor} onClose={() => setModuleAnchor(null)}>
-      {moduleAnchor?.module.items.map(item => <MenuItem key={item.path} selected={location.pathname === item.path} onClick={() => { setModuleAnchor(null); navigate(item.path) }}><item.icon sx={{ fontSize: 18, mr: 1.2, color: 'text.secondary' }}/>{item.label}</MenuItem>)}
-    </Menu>
-    <Menu anchorEl={mobileAnchor} open={!!mobileAnchor} onClose={() => setMobileAnchor(null)}>
-      {showBusinessDashboard && <MenuItem selected={businessDashboardActive} onClick={() => { setMobileAnchor(null); navigate('/business-dashboard') }}>
-        <DashboardOutlined sx={{ fontSize: 18, mr: 1.2, color: 'text.secondary' }}/>Dashboard
-      </MenuItem>}
-      {modulesForUser.map(module => <Box key={module.label}>
-        <Divider/>
-        <Typography fontSize={10} fontWeight={800} letterSpacing={1.2} color="text.secondary" sx={{ px: 2, pt: 1.2, pb: .5 }}>{module.label.toUpperCase()}</Typography>
-        {module.items.map(item => <MenuItem key={item.path} selected={location.pathname === item.path} onClick={() => { setMobileAnchor(null); navigate(item.path) }}><item.icon sx={{ fontSize: 18, mr: 1.2, color: 'text.secondary' }}/>{item.label}</MenuItem>)}
-      </Box>)}
-    </Menu>
-    <Menu anchorEl={accountAnchor} open={!!accountAnchor} onClose={() => setAccountAnchor(null)}>
-      <MenuItem onClick={() => { setAccountAnchor(null); setPasswordDialog(true); setPasswordError('') }}>Change password</MenuItem>
-      <MenuItem onClick={() => { setAccountAnchor(null); logout() }}><LogoutRounded sx={{ mr: 1, fontSize: 18 }}/> Sign out</MenuItem>
-    </Menu>
-
-    <Box component="main" id="main-content" tabIndex={-1} sx={{ flexGrow: 1, minWidth: 0, width: '100%', overflowX: 'clip', '&:focus': { outline: 'none' } }}>
-      <Box sx={{ px: { xs: 2, sm: 3, xl: 4 }, py: { xs: 2.5, sm: 3 }, maxWidth: 1600, mx: 'auto' }}><Outlet/></Box>
+        {!temporary && <Tooltip title={navExpanded ? 'Collapse navigation' : 'Expand navigation'} placement="right">
+          <IconButton size="small" onClick={() => setNavExpanded(value => !value)} aria-label={navExpanded ? 'Collapse navigation' : 'Expand navigation'}>
+            {navExpanded ? <ChevronLeftRounded/> : <ChevronRightRounded/>}
+          </IconButton>
+        </Tooltip>}
+      </Box>
+      <Box sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', px: 1, py: 1.5 }}>
+        {showBusinessDashboard && <Tooltip title={!showText ? 'Dashboard' : ''} placement="right">
+          <ListItemButton selected={businessDashboardActive} onClick={() => go('/business-dashboard')} sx={{ minHeight: 42, px: 1.25, mb: .5, borderRadius: 1.5, justifyContent: showText ? 'initial' : 'center' }}>
+            <ListItemIcon sx={{ minWidth: showText ? 38 : 0, color: businessDashboardActive ? 'primary.main' : 'text.secondary', justifyContent: 'center' }}><DashboardOutlined fontSize="small"/></ListItemIcon>
+            {showText ? <ListItemText primary="Dashboard" primaryTypographyProps={{ fontSize: 12.5, fontWeight: businessDashboardActive ? 750 : 600 }}/> : null}
+          </ListItemButton>
+        </Tooltip>}
+        <List disablePadding>
+          {modulesForUser.map(module => {
+            const ModuleIcon = module.icon
+            const active = currentModule?.label === module.label
+            const open = openModules.includes(module.label)
+            return <Box key={module.label} sx={{ mb: .5 }}>
+              <Tooltip title={!showText ? module.label : ''} placement="right">
+                <ListItemButton onClick={event => showText ? toggleModule(module.label) : setModuleAnchor({ el: event.currentTarget, module })} aria-expanded={showText ? open : undefined} aria-haspopup={!showText ? 'menu' : undefined} sx={{ minHeight: 42, px: 1.25, borderRadius: 1.5, justifyContent: showText ? 'initial' : 'center', color: active ? 'primary.main' : 'text.primary' }}>
+                  <ListItemIcon sx={{ minWidth: showText ? 38 : 0, color: active ? 'primary.main' : 'text.secondary', justifyContent: 'center' }}><ModuleIcon fontSize="small"/></ListItemIcon>
+                  {showText && <><ListItemText primary={module.label} primaryTypographyProps={{ fontSize: 12.5, fontWeight: active ? 750 : 650, noWrap: true }}/>{open ? <KeyboardArrowUpRounded fontSize="small"/> : <KeyboardArrowDownRounded fontSize="small"/>}</>}
+                </ListItemButton>
+              </Tooltip>
+              {showText && <Collapse in={open} timeout={120} unmountOnExit>
+                <List disablePadding sx={{ mt: .25, ml: 1.25, pl: 1.25, borderLeft: '1px solid', borderColor: 'divider' }}>
+                  {module.items.map(item => {
+                    const ItemIcon = item.icon
+                    const selected = currentItem?.path === item.path
+                    return <ListItemButton key={item.path} selected={selected} onClick={() => go(item.path)} sx={{ minHeight: 38, px: 1.25, borderRadius: 1.5 }}>
+                      <ListItemIcon sx={{ minWidth: 34, color: selected ? 'primary.main' : 'text.secondary' }}><ItemIcon sx={{ fontSize: 17 }}/></ListItemIcon>
+                      <ListItemText primary={item.label} primaryTypographyProps={{ fontSize: 12, fontWeight: selected ? 750 : 550 }}/>
+                    </ListItemButton>
+                  })}
+                </List>
+              </Collapse>}
+            </Box>
+          })}
+        </List>
+      </Box>
+      {showText && <Box sx={{ px: 2, py: 1.5, borderTop: '1px solid', borderColor: 'divider' }}><Typography color="text.secondary" fontSize={10.5} noWrap>{user?.organization_name}</Typography></Box>}
     </Box>
+  }
+
+  return <Box display="flex" minHeight="100vh">
+    <a className="skip-link" href="#main-content">Skip to main content</a>
+    {desktop ? <Box component="aside" sx={{ width: navWidth, flex: '0 0 auto', transition: 'width 160ms cubic-bezier(0.2, 0, 0, 1)' }}>
+      <Box sx={{ position: 'fixed', inset: '0 auto 0 0', width: navWidth, bgcolor: 'background.paper', borderRight: '1px solid', borderColor: 'divider', zIndex: 1100, transition: 'width 160ms cubic-bezier(0.2, 0, 0, 1)' }}>{navigation()}</Box>
+    </Box> : <Drawer open={mobileOpen} onClose={() => setMobileOpen(false)} ModalProps={{ keepMounted: true }} PaperProps={{ sx: { width: 292 } }}>{navigation(true)}</Drawer>}
+
+    <Box display="flex" flexDirection="column" minWidth={0} flex={1}>
+      <AppBar position="sticky" elevation={0} sx={{ bgcolor: 'background.paper', color: 'text.primary', borderBottom: '1px solid', borderColor: 'divider', boxShadow: scrolled ? 2 : 'none', transition: 'box-shadow 160ms cubic-bezier(0.2, 0, 0, 1)' }}>
+        <Toolbar sx={{ gap: 1.5, minHeight: { xs: 56, sm: 60 }, px: { xs: 1.5, sm: 2.5 } }}>
+          {!desktop && <IconButton onClick={() => setMobileOpen(true)} aria-label="Open navigation" aria-expanded={mobileOpen}><MenuRounded/></IconButton>}
+          <Box minWidth={0}>
+            <Typography fontSize={11} color="text.secondary" fontWeight={650} noWrap>{currentModule?.label ?? (businessDashboardActive ? 'Business overview' : 'WellCostIQ')}</Typography>
+            <Typography fontSize={14} fontWeight={750} noWrap>{currentItem?.label ?? (businessDashboardActive ? 'Dashboard' : 'Workspace')}</Typography>
+          </Box>
+          <Box display="flex" alignItems="center" gap={1.2} ml="auto" sx={{ flex: '0 0 auto' }}>
+            <Tooltip title={mode === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}>
+              <IconButton onClick={toggle} size="small" aria-label="Toggle color theme" sx={{ color: 'text.secondary' }}>{mode === 'light' ? <DarkModeOutlined sx={{ fontSize: 20 }}/> : <LightModeOutlined sx={{ fontSize: 20 }}/>}</IconButton>
+            </Tooltip>
+            <Box textAlign="right" sx={{ display: { xs: 'none', sm: 'block' } }}>
+              <Typography fontWeight={700} fontSize={12.5} lineHeight={1.3}>{user?.full_name}</Typography>
+              <Typography color="text.secondary" fontSize={11.5}>{user?.organization_name}</Typography>
+            </Box>
+            <Tooltip title="Account menu"><IconButton onClick={event => setAccountAnchor(event.currentTarget)} sx={{ p: .4, borderRadius: 2 }} aria-label="Account menu" aria-haspopup="menu" aria-expanded={!!accountAnchor}><Avatar sx={{ width: 34, height: 34, bgcolor: 'primary.light', color: 'primary.dark', fontSize: 12, fontWeight: 800 }}>{user?.full_name.split(' ').map(value => value[0]).slice(0, 2).join('').toUpperCase()}</Avatar><KeyboardArrowDownRounded sx={{ color: 'text.secondary', ml: .4, fontSize: 18 }}/></IconButton></Tooltip>
+          </Box>
+        </Toolbar>
+      </AppBar>
+
+      <Menu anchorEl={moduleAnchor?.el} open={!!moduleAnchor} onClose={() => setModuleAnchor(null)}>
+        {moduleAnchor?.module.items.map(item => <MenuItem key={item.path} selected={currentItem?.path === item.path} onClick={() => go(item.path)}><item.icon sx={{ fontSize: 18, mr: 1.2, color: 'text.secondary' }}/>{item.label}</MenuItem>)}
+      </Menu>
+      <Menu anchorEl={accountAnchor} open={!!accountAnchor} onClose={() => setAccountAnchor(null)}>
+        <MenuItem onClick={() => { setAccountAnchor(null); setPasswordDialog(true); setPasswordError('') }}>Change password</MenuItem>
+        <MenuItem onClick={() => { setAccountAnchor(null); logout() }}><LogoutRounded sx={{ mr: 1, fontSize: 18 }}/> Sign out</MenuItem>
+      </Menu>
+
+      <Box component="main" id="main-content" tabIndex={-1} sx={{ flexGrow: 1, minWidth: 0, width: '100%', overflowX: 'clip', '&:focus': { outline: 'none' } }}>
+        <Box sx={{ px: { xs: 1.5, sm: 2.5, xl: 3 }, py: { xs: 2, sm: 2.5 }, width: '100%' }}><Outlet/></Box>
+      </Box>
+    </Box>
+
+    <Snackbar open={!!apiNotice} onClose={() => setApiNotice('')} anchorOrigin={{ vertical: 'top', horizontal: 'right' }} sx={{ mt: 7, maxWidth: 480 }}>
+      <Alert severity="error" variant="filled" onClose={() => setApiNotice('')} sx={{ width: '100%', boxShadow: 8 }}>{apiNotice}</Alert>
+    </Snackbar>
 
     <FormDialog open={passwordDialog} title="Change your password" subtitle="You will be signed out of all sessions after updating." onClose={() => setPasswordDialog(false)} onSubmit={changePassword} busy={savingPassword} submitLabel="Update password">
       <Box display="grid" gap={2} pt={.5}>
-        <TextField label="Current password" type="password" fullWidth value={currentPassword} onChange={e => setCurrentPassword(e.target.value)}/><TextField label="New password" type="password" fullWidth helperText="At least 12 characters" value={newPassword} onChange={e => setNewPassword(e.target.value)}/>
+        <TextField label="Current password" type="password" fullWidth value={currentPassword} onChange={event => setCurrentPassword(event.target.value)}/>
+        <TextField label="New password" type="password" fullWidth helperText="At least 12 characters" value={newPassword} onChange={event => setNewPassword(event.target.value)}/>
         <ErrorMessage message={passwordError}/>
       </Box>
     </FormDialog>

@@ -69,7 +69,7 @@ export default function OtherManagementOverview() {
       {canAudit && <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2, borderColor: 'divider' }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap" mb={1.5}>
           <Box>
-            <Typography fontFamily="Manrope" fontWeight={800} fontSize={15}>Recent activity</Typography>
+            <Typography fontWeight={800} fontSize={15}>Recent activity</Typography>
             <Typography color="text.secondary" fontSize={12} mt={.35}>The latest actions across the workspace, from the audit trail.</Typography>
           </Box>
           <Tag tone="info">Read-only</Tag>

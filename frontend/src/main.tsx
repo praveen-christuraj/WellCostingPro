@@ -1,5 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import '@fontsource-variable/inter'
 // A data router (instead of plain BrowserRouter) powers the app-wide
 // unsaved-changes guard: `useBlocker` in Common.tsx needs it to intercept
 // in-app navigation while a page has data that is not saved.

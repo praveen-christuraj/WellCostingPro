@@ -43,26 +43,25 @@ Rules:
 
 ## 3. Colour
 
-Navy ramp `navy[50…900]`; `navy[700] = #123A63` is the primary action colour in light mode,
-`navy[400] = #8FB8E4` is the accent in dark mode. Backgrounds: canvas `#F4F6F9` / `#0E1B29`,
-paper `#FFFFFF` / `#15273B`, raised `#FFFFFF` / `#1B2F48`. Rules: `#E3E9F0` / `#27405C`
-(hairline), `#D2DCE7` / `#33506F` (control borders). Text: `#16283F` / `#E6EDF5`,
-muted `#5B6B7F` / `#A7B8CB`, disabled `#8293A6` / `#7E93AB`.
+Navy ramp `navy[50…900]`; `navy[800] = #12315F` is the primary action colour in light mode,
+`navy[400] = #6F99D5` is the accent in dark mode. Backgrounds: canvas `#F3F5F9` / `#0B1220`,
+paper `#FFFFFF` / `#121B2E`, raised `#FFFFFF` / `#182339`. Rules: `#D8E0EA` / `#27354D`
+(hairline), `#B9C6D8` / `#3A4A66` (control borders). Text: `#0F1F3D` / `#E7EDF6`,
+muted `#5B6B85` / `#A3B2C8`, disabled `#8A98AD` / `#7B8BA3`.
 
 - Never green branding; green is a status colour only.
 - Never pair one tone's foreground with another tone's background.
-- Charts use the navy ramp (`navy[700]`, `navy[600]`, `navy[400]`, `navy[500]`) plus the
+- Charts use the navy ramp (`navy[800]`, `navy[600]`, `navy[400]`, `navy[500]`) plus the
   semantic colours, in that order of preference; grid lines are the `divider` colour.
 
-**Contrast (verified, WCAG 2.1):** body text 13.8–14.9:1, muted text 5.0–5.5:1 (light) and
-7.5–8.6:1 (dark), primary button label 11.6:1, every status chip 4.8–9.0:1, focus ring 13.5:1
-(light) / 8.4:1 (dark). The only pair under 4.5:1 is **disabled** text (3.15:1), which WCAG
-exempts for inactive controls. Re-check with a contrast calculator before changing any of these.
+The text, muted text, primary action and status pairs are selected to clear WCAG AA in both
+themes; disabled text is exempt for inactive controls. Re-check contrast before changing a pair.
 
 ## 4. Type
 
-Two families: **Manrope** for headings and KPI values (`fonts.display`), **DM Sans** for
-everything else (`fonts.ui`), plus a mono stack for codes, order numbers and CLI snippets.
+One locally bundled variable family, **Inter**, is used for headings, forms, grids and KPI values.
+Weight and size carry hierarchy without a visible typeface switch. A mono stack remains for codes,
+order numbers and CLI snippets. Do not reintroduce a remote font dependency.
 
 | Role | Size / line-height | Weight |
 | --- | --- | --- |
@@ -107,9 +106,11 @@ density is unchanged.
 
 ## 7. Patterns
 
-- **Navigation:** top bar only, module dropdowns, active module gets the accent pill
-  (`.topnav-item.active` with an inset ring). The page's own `PageHeading` eyebrow carries the
-  "MODULE / PAGE" trail, so do not add a second breadcrumb.
+- **Navigation:** the permission-aware left rail is expanded by default and can collapse to icons;
+  that preference persists per browser. Expanded modules disclose their page links in place, while
+  collapsed module icons open the same links in a menu. Below `md`, the rail becomes a temporary
+  drawer. The contextual top bar shows current module/page plus theme and account actions. The
+  page's own `PageHeading` remains the only full title block.
 - **Page heading:** eyebrow → title → subtitle → actions on the right, `align-items: flex-end`.
 - **Lists:** `DataTable` is the only list surface — quick search, advanced filters, a separate
   date/date-range group, 20/50/100 pagination, CSV/XLSX/PDF export, checkbox selection, and the
@@ -128,10 +129,13 @@ density is unchanged.
 - **Dialogs:** `FormDialog` (submit forms) and `PanelDialog` (everything else) from
   `components/Common.tsx`. They close only via **Cancel**, have no close icon, ignore Escape and
   the backdrop, and expose `aria-labelledby` (the title `<h2>`) plus `aria-describedby` (the
-  subtitle paragraph). Destructive, irreversible actions pass `danger` so the primary button is
-  the error colour; soft deletes ("Move to Deleted Entries") stay primary.
-- **Errors:** inline next to the field or the action (`ErrorMessage`, `Alert`), never a global
-  banner; long-running actions show a spinner in the button and a real label
+  subtitle paragraph). They use more of the viewport (default `md`/`lg`, 94vh ceiling) and become
+  full-screen on small phones to reduce nested scrolling. Destructive, irreversible actions pass
+  `danger` so the primary button is the error colour; soft deletes stay primary.
+- **Errors:** inline next to the field or action (`ErrorMessage`, `Alert`) plus a persistent
+  top-right pop-up for failed API actions; never a detached page banner. Structured validation
+  errors name their field path, and permission/not-found/conflict/server/network failures use
+  actionable fallbacks. Long-running actions show a spinner in the button and a real label
   (`busyLabel`).
 - **Status:** `Tag` tones `neutral | info | success | warning | error`. One status per row; do
   not stack chips.
@@ -153,8 +157,8 @@ density is unchanged.
 
 1. `cd frontend && npm run build` — TypeScript + bundle.
 2. `bash -c 'cd frontend && npm install --no-save jsdom && NODE_PATH="$PWD/node_modules" ./node_modules/.bin/esbuild ../.agent/tools/ui-check.jsx --bundle --platform=node --format=esm --jsx=automatic --outfile=node_modules/.cache/ui-check.mjs --loader:.jsx=jsx --log-level=error --external:jsdom && node node_modules/.cache/ui-check.mjs'`
-   — renders the real theme and shared components in a DOM and asserts the rules above (28
-   checks, light and dark). The app's own dependencies are untouched.
+   — renders the real theme and shared components in a DOM and asserts the rules above (33
+   checks across light/dark shared components plus shell/feedback contracts). The app's own dependencies are untouched.
 3. `cd backend && ../.venv/bin/python -m pytest -q` — a UI change must not move the API tests.
 4. Look at it: run the API and `npm run dev`, and check the dashboards, one list page, one
    dialog, one AG Grid filter panel, in **both themes**, at 1440 / 1024 / 768px, and once with
