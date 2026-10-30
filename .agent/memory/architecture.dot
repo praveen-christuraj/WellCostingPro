@@ -99,6 +99,7 @@ digraph WellCostIQ {
   "backend/app/services/lih_cost.py";
   "backend/app/services/mud_cost.py";
   "backend/app/services/ndt_inspection.py";
+  "backend/app/services/operational_time.py";
   "backend/app/services/password_policy.py";
   "backend/app/services/provisioning.py";
   "backend/app/services/report_catalog.py";
@@ -491,6 +492,7 @@ digraph WellCostIQ {
   "backend/app/services/business_dashboard.py" -> "backend/app/schemas/business_dashboard.py";
   "backend/app/services/business_dashboard.py" -> "backend/app/services/__init__.py";
   "backend/app/services/business_dashboard.py" -> "backend/app/services/daily_cost.py";
+  "backend/app/services/business_dashboard.py" -> "backend/app/services/operational_time.py";
   "backend/app/services/catalogue.py" -> "backend/app/core/precision.py";
   "backend/app/services/catalogue.py" -> "backend/app/models/__init__.py";
   "backend/app/services/catalogue.py" -> "backend/app/models/catalogue.py";
@@ -561,6 +563,7 @@ digraph WellCostIQ {
   "backend/app/services/usage_reports.py" -> "backend/app/models/__init__.py";
   "backend/app/services/usage_reports.py" -> "backend/app/schemas/usage_reports.py";
   "backend/app/services/usage_reports.py" -> "backend/app/services/__init__.py";
+  "backend/app/services/usage_reports.py" -> "backend/app/services/operational_time.py";
   "backend/app/services/workflow.py" -> "backend/app/models/__init__.py";
   "frontend/src/App.tsx" -> "frontend/src/components/Layout.tsx";
   "frontend/src/App.tsx" -> "frontend/src/components/PasswordChangeGate.tsx";

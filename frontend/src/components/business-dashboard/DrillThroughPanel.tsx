@@ -158,7 +158,7 @@ export function DrillThroughPanel({ wellId, filters, onClose }: {
           <Stat label="Planned days" value={decimal(detail.well.planned_days, 2)} hint={`Drilling ${decimal(detail.well.drilling_planned_days, 2)}${detail.well.completion_planned_days ? ` · Completion ${decimal(detail.well.completion_planned_days, 2)}` : ''}`}/>
           <Stat label="Actual days" value={decimal(detail.well.actual_days)} hint={`${displayDate(detail.well.first_cost_date)} → ${displayDate(detail.well.last_cost_date)}`}/>
           <Stat label="Cost sheets" value={decimal(detail.well.sheets)} hint={`${decimal(detail.well.recorded_days)} recording days · ${decimal(detail.well.draft_sheets)} draft`}/>
-          <Stat label="NPT / UPA days" value={`${decimal(detail.well.npt_days)} / ${decimal(detail.well.upa_days)}`} hint={`${money(detail.well.npt_amount, currency)} · ${money(detail.well.upa_amount, currency)}`}/>
+          <Stat label="NPT / UPA days" value={`${decimal(detail.well.npt_days, 2)} / ${decimal(detail.well.upa_days, 2)}`} hint={`${money(detail.well.npt_amount, currency)} · ${money(detail.well.upa_amount, currency)}`}/>
           <Stat label="AFE amount" value={money(detail.well.afe_amount, currency)} hint={detail.well.afe_count ? `${detail.well.afe_count} AFE${detail.well.afe_count === 1 ? '' : 's'}` : 'No active AFE'}/>
           <Stat label="SOW adjusted" value={money(detail.well.sow_adjusted_amount, currency)} hint={`Effective ${money(detail.well.effective_afe_amount, currency)}`}/>
           <Stat label="Actual cost" value={money(detail.well.actual_amount, currency)} hint={`${percent(detail.well.utilisation_percent)} of the effective AFE`}/>
@@ -226,7 +226,7 @@ export function DrillThroughPanel({ wellId, filters, onClose }: {
                 <TableCell align="right">{money(row.sow_adjusted_amount, row.currency)}</TableCell>
                 <TableCell align="right">{money(row.actual_amount, row.currency)}</TableCell>
                 <TableCell align="right"><BalanceValue value={row.afe_balance} currency={row.currency}/></TableCell>
-                <TableCell align="right">{decimal(row.actual_days)} <Typography component="span" fontSize={10.5} color="text.secondary">({decimal(row.npt_days)} NPT · {decimal(row.upa_days)} UPA)</Typography></TableCell>
+                <TableCell align="right">{decimal(row.actual_days)} <Typography component="span" fontSize={10.5} color="text.secondary">({decimal(row.npt_days, 2)} NPT · {decimal(row.upa_days, 2)} UPA)</Typography></TableCell>
               </TableRow>)}
             </TableBody>
           </Table>

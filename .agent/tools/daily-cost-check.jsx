@@ -17,6 +17,7 @@ const { createRoot } = await import('react-dom/client')
 const { DailyCostPrintSheet, useCostPrint, validLeadLagDays } = await import('../../frontend/src/components/daily-cost/DailyCostPrintSheet')
 const { costReportTitle } = await import('../../frontend/src/lib/dailyCost')
 const line = {
+  service_id: 'service-1', activity_id: 'activity-1', sub_activity_id: 'sub-1', hole_section_id: 'section-1', phase_id: 'phase-1',
   quantity: '12.126', quantity_unit: 'hours', currency: 'USD', effective_rate: '100', captured_rate: '100',
   amount: '50', standard_amount: '50', exchange_rate: '1', rate_source: 'Locked AFE rate',
   rate_revision_number: 2, rate_effective_date: '2026-10-01', classification: 'Planned',
@@ -40,7 +41,10 @@ const day = {
       { budget_key: 'service:1', item_code: 'SVC', item_name: 'Logging', cost_group: 'Services', planned: '7000', actual_to_date: '6000', balance: '1000', is_planned: true,
         actual_planned: '5500', actual_upa: '300', actual_npt: '200' },
       { budget_key: 'other:LIH', item_code: 'LIH', item_name: 'Lost In Hole (LIH)', cost_group: 'Other Expenses', planned: '0', actual_to_date: '3000', balance: '-3000', is_planned: false }] },
-  services: Array.from({ length: 120 }, (_, index) => ({ ...line, id: `line-${index}`, remarks: `Row ${index} notes` })),
+  services: [
+    ...Array.from({ length: 120 }, (_, index) => ({ ...line, id: `line-${index}`, remarks: `Row ${index} notes` })),
+    { ...line, id: 'npt-service', classification: 'NPT', quantity: '7.5', activity_id: 'activity-npt', sub_activity_id: 'sub-npt', remarks: 'NPT allocation' },
+  ],
   consumables: [], tangibles: [], warnings: [{ code: 'draft', message: 'Includes draft actuals' }],
   progress: { scope: 'drilling', scope_label: 'Drilling', progress_label: 'Drilling complete', spud_at: '2026-10-02T12:00',
     progress_completed_at: null, is_completed: false, planned_days: '10.126', actual_days: '8.126', days_variance: '-2', as_of_date: '2026-10-10' },
@@ -270,8 +274,8 @@ window.print = () => {
   assert.ok(printed.textContent.includes('Well one'), 'portal is mounted before window.print with the well name')
   assert.ok(printed.querySelector('.dcr-titlebar h1').textContent.endsWith('(LEAD/LAG: 0 days)'), 'no selection prints the zero lead/lag fallback')
   const timePosition = printed.querySelector('.dcr-time').textContent
-  for (const text of ['Planned', '10.13 days', 'Actual', '8.13 days', 'Actual against planned activities', '6.13 days', 'NPT', '2.00 days', 'UPA', '0.00 days']) {
-    assert.ok(timePosition.includes(text), `time position prints ${text}`)
+  for (const text of ['Planned', '10.13 days', 'Actual', '8.13 days', 'Actual against planned activities', '7.81 days', 'NPT', '0.31 days', 'UPA', '0.00 days']) {
+    assert.ok(timePosition.includes(text), `time position prints ${text}; received ${timePosition}`)
   }
   assert.ok(!timePosition.includes('from spud') && !timePosition.includes('Variance') && !timePosition.includes('Sheets / status'), 'time position omits the spud suffix, variance and sheet status')
 }

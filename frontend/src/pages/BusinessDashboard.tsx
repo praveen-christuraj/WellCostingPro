@@ -387,8 +387,8 @@ export default function BusinessDashboard() {
       columns.push({
         headerName: 'NPT / UPA', field: 'npt_days', minWidth: 120, flex: 0.65,
         cellRenderer: (params: ICellRendererParams<DashboardWellRow>) => params.data && <Box display="flex" gap={.5} alignItems="center">
-          <Tag tone="error">{decimal(params.data.npt_days, 4)} NPT</Tag>
-          <Tag tone="warning">{decimal(params.data.upa_days, 4)} UPA</Tag>
+          <Tag tone="error">{decimal(params.data.npt_days, 2)} NPT</Tag>
+          <Tag tone="warning">{decimal(params.data.upa_days, 2)} UPA</Tag>
         </Box>,
       })
     }
@@ -481,7 +481,7 @@ export default function BusinessDashboard() {
         headerName: 'DAYS', field: 'actual_days', minWidth: 130, flex: 0.65,
         cellRenderer: (params: ICellRendererParams<DashboardAfeRow>) => params.data && <Box>
           <Typography fontSize={12}>{count(params.data.actual_days)} <Typography component="span" fontSize={10} color="text.secondary">days</Typography></Typography>
-          <Typography fontSize={10} color="text.secondary">{decimal(params.data.npt_days, 4)} NPT · {decimal(params.data.upa_days, 4)} UPA</Typography>
+          <Typography fontSize={10} color="text.secondary">{decimal(params.data.npt_days, 2)} NPT · {decimal(params.data.upa_days, 2)} UPA</Typography>
         </Box>,
       },
       {
@@ -522,7 +522,7 @@ export default function BusinessDashboard() {
     })
     if (caps.actuals) columns.push({
       headerName: 'NPT / UPA', field: 'npt_days', minWidth: 120, flex: 0.6,
-      cellRenderer: (params: ICellRendererParams<DashboardRigRow>) => params.data && <Typography fontSize={12}>{decimal(params.data.npt_days, 4)} / {decimal(params.data.upa_days, 4)}</Typography>,
+      cellRenderer: (params: ICellRendererParams<DashboardRigRow>) => params.data && <Typography fontSize={12}>{decimal(params.data.npt_days, 2)} / {decimal(params.data.upa_days, 2)}</Typography>,
     })
     if (caps.budget) columns.push({ headerName: 'AFE AMOUNT', field: 'afe_amount', minWidth: 145, flex: 0.8, valueFormatter: params => money(String(params.value ?? ''), currency) })
     if (caps.actuals) columns.push({ headerName: 'ACTUAL AMOUNT', field: 'actual_amount', minWidth: 145, flex: 0.8, valueFormatter: params => money(String(params.value ?? ''), currency) })
@@ -690,7 +690,7 @@ export default function BusinessDashboard() {
         />
         <KpiCard
           label="NPT / UPA days"
-          value={`${decimal(data.kpis.npt_days, 4)} / ${decimal(data.kpis.upa_days, 4)}`}
+          value={`${decimal(data.kpis.npt_days, 2)} / ${decimal(data.kpis.upa_days, 2)}`}
           hint={caps.actuals ? `${compactMoney(data.kpis.npt_amount, currency)} NPT · ${compactMoney(data.kpis.upa_amount, currency)} UPA` : 'Needs daily cost read access'}
           icon={<EventBusyOutlined fontSize="small"/>}
           tone={Number(data.kpis.npt_days ?? 0) > 0 ? 'error' : 'default'}
@@ -847,7 +847,7 @@ export default function BusinessDashboard() {
           {data.classification.map(row => <Box key={row.key} sx={{ borderTop: '1px solid', borderColor: 'divider', py: 1 }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" gap={1}>
               <Tag tone={row.key === 'NPT' ? 'error' : row.key === 'UPA' ? 'warning' : 'success'}>{row.key}</Tag>
-              <Typography fontSize={11.5} color="text.secondary">{decimal(row.days, row.key === 'Planned' ? 0 : 4)} days</Typography>
+              <Typography fontSize={11.5} color="text.secondary">{decimal(row.days, row.key === 'Planned' ? 0 : 2)} days</Typography>
             </Box>
             <Box display="flex" justifyContent="space-between" mt={.6}>
               <Typography fontSize={12.5} fontWeight={700}>{money(row.actual, currency)}</Typography>

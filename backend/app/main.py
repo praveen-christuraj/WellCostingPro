@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
 
 # Bumped when the API surface changes in a way a browser tab could notice; the
 # health probe and the error messages quote it so a stale deployment is obvious.
-API_VERSION = "0.2.0"
+API_VERSION = "0.3.0"
 app = FastAPI(title=settings.app_name, description=settings.app_tagline, version=API_VERSION, lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[s.strip() for s in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 app.include_router(auth.router, prefix="/api/v1")

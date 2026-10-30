@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import {
   displayDate, leadLagText, validLeadLagDays as isValidLeadLagDays,
-  type DailyCostComparisonLine, type DailyCostDay, type DailyCostLineOutput, type DailyCostSectionOption,
+  type AnyDailyCostLine, type DailyCostComparisonLine, type DailyCostDay, type DailyCostSectionOption,
   type DailyCostWellSummary, type DailyLeadLagKind,
 } from '../../lib/dailyCost'
 import { MUD_COST_LOSS_METRICS, type MudCostMaterialBalance, type MudCostReconciliation } from '../../lib/mudCost'
@@ -267,13 +267,17 @@ function classificationSplit(line: {
   return { planned: line.actual_planned ?? '0', upa: line.actual_upa ?? '0', npt: line.actual_npt ?? '0' }
 }
 
-function durationInDays(line: DailyCostLineOutput) {
-  const quantity = asNumber(line.quantity)
-  return line.quantity_unit === 'hours' ? quantity / 24 : line.quantity_unit === 'days' ? quantity : 0
+const ONE_TIME_SERVICE_CATEGORIES = new Set(['Mobilization', 'Demobilization', 'Fixed Charge'])
+
+function operationalHours(line: AnyDailyCostLine): number | null {
+  if (!('service_id' in line) || 'expense_type' in line || 'item_id' in line || 'tangible_id' in line) return null
+  if (line.charging_basis !== 'Day Rate' || line.quantity_unit !== 'hours' || ONE_TIME_SERVICE_CATEGORIES.has(line.charge_category)) return null
+  return asNumber(line.quantity)
 }
 
 function incidentRows(days: DailyCostDay[], classification: 'NPT' | 'UPA'): CoverIncident[] {
   const grouped = new Map<string, CoverIncident>()
+  const allocations = new Map<string, { hours: number; incidentKey: string }>()
   for (const day of days) {
     for (const line of [...(day.services ?? []), ...(day.consumables ?? []), ...(day.tangibles ?? []), ...(day.other_expenses ?? [])]) {
       if (line.classification !== classification) continue
@@ -284,10 +288,22 @@ function incidentRows(days: DailyCostDay[], classification: 'NPT' | 'UPA'): Cove
         label: line.activity_name,
         days: 0, amount: 0, party, remarks,
       }
-      current.days += durationInDays(line)
       current.amount += asNumber(line.standard_amount)
       grouped.set(key, current)
+      const hours = operationalHours(line)
+      if (hours !== null) {
+        const allocationKey = [
+          day.entry.id, classification, line.activity_id, line.sub_activity_id ?? '',
+          line.hole_section_id ?? '', line.phase_id ?? '',
+        ].join('|')
+        const existing = allocations.get(allocationKey)
+        if (!existing || hours > existing.hours) allocations.set(allocationKey, { hours, incidentKey: key })
+      }
     }
+  }
+  for (const allocation of allocations.values()) {
+    const incident = grouped.get(allocation.incidentKey)
+    if (incident) incident.days += allocation.hours / 24
   }
   return [...grouped.values()].sort((left, right) => right.amount - left.amount)
 }

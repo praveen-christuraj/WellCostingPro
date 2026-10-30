@@ -70,12 +70,12 @@ from app.schemas.business_dashboard import (
 )
 from app.services import afe as afe_service
 from app.services import audit
+from app.services.operational_time import AllocationKey, hours_to_days, record_service_allocation
 
 log = logging.getLogger(__name__)
 
 MONEY = Decimal("0.01")
 PERCENT = Decimal("0.01")
-DURATION_DAYS = Decimal("0.0001")
 ACCESS_KEYS = ("rig-well:read", "afe:read", "daily-cost:read")
 EXPORT_KEYS = ("rig-well:export", "afe:export", "daily-cost:export")
 AFE_STATUS_LABELS = {
@@ -316,8 +316,6 @@ def _allocated_classification_days(
     divide the rolled-up hours by 24. Billing-day quantities and one-time
     charges are costs, not authoritative elapsed-time records.
     """
-    from app.services.daily_cost import SERVICE_ONE_TIME
-
     conditions = _entry_conditions(
         organization_id,
         well_ids,
@@ -329,9 +327,6 @@ def _allocated_classification_days(
     conditions.extend((
         DailyCostServiceLine.organization_id == organization_id,
         DailyCostServiceLine.classification.in_(("NPT", "UPA")),
-        DailyCostServiceLine.charging_basis == "Day Rate",
-        DailyCostServiceLine.quantity_unit == "hours",
-        DailyCostServiceLine.charge_category.notin_(SERVICE_ONE_TIME),
     ))
     if currency and currency.upper() != "USD":
         conditions.append(DailyCostEntry.standard_currency == currency)
@@ -347,6 +342,9 @@ def _allocated_classification_days(
             DailyCostServiceLine.sub_activity_id,
             DailyCostServiceLine.hole_section_id,
             DailyCostServiceLine.phase_id,
+            DailyCostServiceLine.charging_basis,
+            DailyCostServiceLine.charge_category,
+            DailyCostServiceLine.quantity_unit,
             DailyCostServiceLine.quantity,
         )
         .select_from(DailyCostServiceLine)
@@ -354,15 +352,30 @@ def _allocated_classification_days(
         .where(*conditions)
     ).all()
 
-    allocations: dict[tuple[str, date, str, str, str, str, str, str], Decimal] = {}
-    allocation_afes: dict[tuple[str, date, str, str, str, str, str, str], str] = {}
-    for well_key, afe_key, cost_date, entry_key, classification, activity, sub_activity, section, phase, quantity in rows:
-        key = (
-            well_key, cost_date, str(classification), entry_key,
-            activity or "", sub_activity or "", section or "", phase or "",
+    allocations: dict[AllocationKey, Decimal] = {}
+    allocation_afes: dict[AllocationKey, str] = {}
+    for (
+        well_key, afe_key, cost_date, entry_key, classification, activity,
+        sub_activity, section, phase, charging_basis, charge_category,
+        quantity_unit, quantity,
+    ) in rows:
+        key = record_service_allocation(
+            allocations,
+            well_id=well_key,
+            cost_date=cost_date,
+            classification=str(classification),
+            entry_id=entry_key,
+            activity_id=activity,
+            sub_activity_id=sub_activity,
+            hole_section_id=section,
+            phase_id=phase,
+            charging_basis=charging_basis,
+            charge_category=charge_category,
+            quantity_unit=quantity_unit,
+            quantity=quantity,
         )
-        allocations[key] = max(allocations.get(key, Decimal("0")), Decimal(quantity or 0))
-        allocation_afes[key] = afe_key
+        if key is not None:
+            allocation_afes[key] = afe_key
 
     well_hours: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     afe_hours: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
@@ -371,12 +384,9 @@ def _allocated_classification_days(
         well_hours[(well_key, classification)] += hours
         afe_hours[(allocation_afes[key], classification)] += hours
 
-    def as_days(hours: Decimal) -> Decimal:
-        return (hours / Decimal("24")).quantize(DURATION_DAYS)
-
     return (
-        {key: as_days(hours) for key, hours in well_hours.items()},
-        {key: as_days(hours) for key, hours in afe_hours.items()},
+        {key: hours_to_days(hours) for key, hours in well_hours.items()},
+        {key: hours_to_days(hours) for key, hours in afe_hours.items()},
     )
 
 

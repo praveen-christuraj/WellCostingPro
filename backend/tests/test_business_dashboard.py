@@ -368,17 +368,17 @@ def test_business_dashboard_uses_allocated_hours_for_fractional_npt_upa_days():
             ).all()
             for line in lines:
                 line.quantity_unit = "hours"
-                line.quantity = Decimal("11") if line.classification == "NPT" else Decimal("3")
+                line.quantity = Decimal("7.5") if line.classification == "NPT" else Decimal("3")
             db.commit()
 
         payload = client.get("/api/v1/dashboard/business", headers=headers).json()
-        assert Decimal(payload["kpis"]["npt_days"]) == Decimal("0.4583")  # 11 / 24
+        assert Decimal(payload["kpis"]["npt_days"]) == Decimal("0.3125")  # 7.5 / 24
         assert Decimal(payload["kpis"]["upa_days"]) == Decimal("0.2500")  # (3 + 3) / 24
-        assert Decimal(payload["wells"][0]["npt_days"]) == Decimal("0.4583")
+        assert Decimal(payload["wells"][0]["npt_days"]) == Decimal("0.3125")
         assert Decimal(payload["afes"][0]["upa_days"]) == Decimal("0.2500")
-        assert Decimal(payload["rigs"][0]["npt_days"]) == Decimal("0.4583")
+        assert Decimal(payload["rigs"][0]["npt_days"]) == Decimal("0.3125")
         classification = {row["key"]: row for row in payload["classification"]}
-        assert Decimal(classification["NPT"]["days"]) == Decimal("0.4583")
+        assert Decimal(classification["NPT"]["days"]) == Decimal("0.3125")
 
         second_day = client.get(
             "/api/v1/dashboard/business?from=2026-10-11&to=2026-10-11",

@@ -246,7 +246,7 @@ export const REPORT_DEFINITIONS: ReportDefinition[] = [
     path: '/reports/npt-upa',
     title: 'NPT/UPA report',
     eyebrow: 'REPORTS / NPT / UPA',
-    subtitle: 'Non-productive time and unplanned activity: distinct NPT/UPA days and their costs per well for the selected filters, alongside planned activity.',
+    subtitle: 'Non-productive time and unplanned activity: allocated hours ÷ 24 and their costs per well, with affected cost dates shown separately.',
     mode: 'npt-upa',
     matrix: false,
   },

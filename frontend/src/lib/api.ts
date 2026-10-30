@@ -1,4 +1,9 @@
 const ROOT = '/api/v1'
+// Report Builder, Backup & Recovery, workflow summaries and hour-derived
+// dashboard durations all belong to this API contract. A lower server version
+// means the frontend was deployed before its API and must not disguise missing
+// routes or old KPI semantics as a missing business record.
+export const REQUIRED_API_VERSION = '0.3.0'
 let accessToken: string | null = null
 let refreshing: Promise<boolean> | null = null
 export const setAccessToken = (value: string | null) => { accessToken = value }
@@ -36,7 +41,8 @@ export async function api<T>(path: string, options: ApiOptions = {}, retry = tru
   }
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))
-    const error = apiError(payload.detail, response.status, action)
+    const detail = await deploymentAwareDetail(payload.detail, response.status)
+    const error = apiError(detail, response.status, action)
     if (!silent && response.status !== 401) notifyError(error)
     throw error
   }
@@ -66,6 +72,39 @@ const USELESS_DETAILS = new Set([
   'not found', 'notfound', 'method not allowed', 'internal server error', 'bad request',
   'unauthorized', 'forbidden', 'error', 'http error', 'validation error',
 ])
+
+function isUselessDetail(detail: unknown): boolean {
+  return typeof detail !== 'string' || !detail.trim() || USELESS_DETAILS.has(detail.trim().toLowerCase())
+}
+
+function versionParts(value: string): number[] {
+  return value.split('.').map(part => Number.parseInt(part, 10) || 0)
+}
+
+function versionIsOlder(actual: string, required: string): boolean {
+  const left = versionParts(actual)
+  const right = versionParts(required)
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    if ((left[index] ?? 0) !== (right[index] ?? 0)) return (left[index] ?? 0) < (right[index] ?? 0)
+  }
+  return false
+}
+
+async function deploymentAwareDetail(detail: unknown, status: number): Promise<unknown> {
+  if (status !== 404 || !isUselessDetail(detail)) return detail
+  try {
+    const response = await fetch('/api/health', { credentials: 'include' })
+    if (!response.ok) return detail
+    const health = await response.json() as { api_version?: string }
+    const actual = String(health.api_version ?? '')
+    if (actual && versionIsOlder(actual, REQUIRED_API_VERSION)) {
+      return `The web application needs API ${REQUIRED_API_VERSION}, but the server is API ${actual}. The backend deployment is incomplete. Deploy the current main branch and run its database migration, then reload this page.`
+    }
+  } catch {
+    // The original 404 remains the useful fallback when the health probe is unavailable.
+  }
+  return detail
+}
 
 function fallbackMessage(status: number, action?: string): string {
   const base = status === 401
@@ -232,7 +271,8 @@ async function send(method: string, path: string, payload: BodyInit | null, retr
 
 async function failure(response: Response): Promise<Error> {
   const payload = await response.json().catch(() => ({}))
-  const error = apiError(payload.detail, response.status)
+  const detail = await deploymentAwareDetail(payload.detail, response.status)
+  const error = apiError(detail, response.status)
   notifyError(error)
   return error
 }

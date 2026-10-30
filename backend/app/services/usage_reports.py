@@ -63,11 +63,15 @@ from app.schemas.usage_reports import (
     UsageWellOption,
 )
 from app.services import audit
+from app.services.operational_time import (
+    AllocationKey,
+    DURATION_HOURS_QUANT,
+    hours_to_days,
+    record_service_allocation,
+)
 
 MONEY_QUANT = Decimal("0.01")
 QTY_QUANT = Decimal("0.0001")
-DURATION_HOURS_QUANT = Decimal("0.01")
-DURATION_DAYS_QUANT = Decimal("0.0001")
 ZERO = Decimal("0")
 WELL_LEVEL_KEY = "__well__"
 WELL_LEVEL_LABEL = "Well level (no hole section)"
@@ -82,7 +86,6 @@ REPORT_LABELS = {
 }
 COST_ONLY_REPORTS = {"services", "vendors"}
 CLASSIFICATIONS = ("Planned", "UPA", "NPT")
-ONE_TIME_SERVICE_CATEGORIES = {"Mobilization", "Demobilization", "Fixed Charge"}
 
 _LINE_MODELS: tuple[tuple[type[Any], str], ...] = (
     (DailyCostServiceLine, "Services"),
@@ -1053,7 +1056,7 @@ def npt_upa_report(
     # types are cost attribution only. The same operational allocation can be
     # repeated for several services or charge categories, so retain only its
     # greatest recorded duration before rolling up the well/classification.
-    allocation_hours: dict[tuple[str, date, str, str, str, str, str, str], Decimal] = {}
+    allocation_hours: dict[AllocationKey, Decimal] = {}
     scopes_seen: dict[str, set[str]] = defaultdict(set)
     wells_with_facts: set[str] = set()
     for fact in facts:
@@ -1062,19 +1065,22 @@ def npt_upa_report(
             classification = "Planned"
         affected_dates[fact.well_id][classification].add(fact.cost_date)
         amounts[fact.well_id][classification] += Decimal(str(fact.amount or 0))
-        if (
-            fact.cost_group == "Services"
-            and fact.charging_basis == "Day Rate"
-            and fact.charge_category not in ONE_TIME_SERVICE_CATEGORIES
-            and fact.uom == "hours"
-        ):
-            hours = Decimal(str(fact.quantity or 0))
-            allocation_key = (
-                fact.well_id, fact.cost_date, classification, fact.entry_id,
-                fact.activity_id or "", fact.sub_activity_id or "",
-                fact.hole_section_id or "", fact.phase_id or "",
+        if fact.cost_group == "Services":
+            record_service_allocation(
+                allocation_hours,
+                well_id=fact.well_id,
+                cost_date=fact.cost_date,
+                classification=classification,
+                entry_id=fact.entry_id,
+                activity_id=fact.activity_id,
+                sub_activity_id=fact.sub_activity_id,
+                hole_section_id=fact.hole_section_id,
+                phase_id=fact.phase_id,
+                charging_basis=fact.charging_basis,
+                charge_category=fact.charge_category,
+                quantity_unit=fact.uom,
+                quantity=fact.quantity,
             )
-            allocation_hours[allocation_key] = max(allocation_hours.get(allocation_key, ZERO), hours)
         if fact.scope:
             scopes_seen[fact.well_id].add(fact.scope)
         wells_with_facts.add(fact.well_id)
@@ -1116,7 +1122,7 @@ def npt_upa_report(
             amount_field = "planned_amount" if classification == "Planned" else f"{classification.lower()}_amount"
             affected_date_count = len(affected_dates[well_id].get(classification, set()))
             hours = duration_hours[well_id].get(classification, ZERO).quantize(DURATION_HOURS_QUANT)
-            days = (hours / Decimal("24")).quantize(DURATION_DAYS_QUANT)
+            days = hours_to_days(hours)
             amount = _money(amounts[well_id].get(classification, ZERO))
             affected_field = "planned_affected_dates" if classification == "Planned" else f"{classification.lower()}_affected_dates"
             hours_field = "planned_hours" if classification == "Planned" else f"{classification.lower()}_hours"
@@ -1156,7 +1162,7 @@ def npt_upa_report(
         affected_field = "planned_affected_dates" if classification == "Planned" else f"{classification.lower()}_affected_dates"
         hours_field = "planned_hours" if classification == "Planned" else f"{classification.lower()}_hours"
         total_hours = Decimal(totals[classification]["hours"]).quantize(DURATION_HOURS_QUANT)
-        setattr(result.totals, day_field, (total_hours / Decimal("24")).quantize(DURATION_DAYS_QUANT))
+        setattr(result.totals, day_field, hours_to_days(total_hours))
         setattr(result.totals, affected_field, totals[classification]["affected_dates"])
         setattr(result.totals, hours_field, total_hours)
         setattr(result.totals, amount_field, _money(totals[classification]["amount"]))
