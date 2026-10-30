@@ -76,8 +76,8 @@ class DashboardKpis(BaseModel):
     planned_days: Decimal | None = None
     actual_days: int | None = None
     recorded_days: int | None = None
-    npt_days: int | None = None
-    upa_days: int | None = None
+    npt_days: Decimal | None = None
+    upa_days: Decimal | None = None
     day_variance: Decimal | None = None
     # Money, all in `currency`
     afe_amount: Decimal | None = None
@@ -148,8 +148,8 @@ class DashboardWellRow(BaseModel):
     recorded_days: int | None = None
     sheets: int | None = None
     draft_sheets: int | None = None
-    npt_days: int | None = None
-    upa_days: int | None = None
+    npt_days: Decimal | None = None
+    upa_days: Decimal | None = None
     currency: str = ""
 
 
@@ -182,8 +182,8 @@ class DashboardAfeRow(BaseModel):
     actual_days: int | None = None
     recorded_days: int | None = None
     sheets: int | None = None
-    npt_days: int | None = None
-    upa_days: int | None = None
+    npt_days: Decimal | None = None
+    upa_days: Decimal | None = None
     npt_amount: Decimal | None = None
     upa_amount: Decimal | None = None
 
@@ -198,8 +198,8 @@ class DashboardRigRow(BaseModel):
     planned_days: Decimal | None = None
     actual_days: int | None = None
     recorded_days: int | None = None
-    npt_days: int | None = None
-    upa_days: int | None = None
+    npt_days: Decimal | None = None
+    upa_days: Decimal | None = None
     afe_amount: Decimal | None = None
     effective_afe_amount: Decimal | None = None
     actual_amount: Decimal | None = None
@@ -224,7 +224,7 @@ class DashboardSlice(BaseModel):
     key: str
     label: str
     count: int | None = None
-    days: int | None = None
+    days: Decimal | None = None
     planned: Decimal | None = None
     actual: Decimal | None = None
     balance: Decimal | None = None

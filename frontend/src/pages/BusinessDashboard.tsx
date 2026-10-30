@@ -228,17 +228,17 @@ export default function BusinessDashboard() {
         {
           name: 'Productive days', type: 'bar', stack: 'days', barMaxWidth: 16,
           itemStyle: { color: theme.palette.success.main },
-          data: rows.map(row => Math.max((row.actual_days ?? 0) - (row.npt_days ?? 0) - (row.upa_days ?? 0), 0)),
+          data: rows.map(row => Math.max((row.actual_days ?? 0) - Number(row.npt_days ?? 0) - Number(row.upa_days ?? 0), 0)),
         },
         {
           name: 'UPA days', type: 'bar', stack: 'days', barMaxWidth: 16,
           itemStyle: { color: theme.palette.warning.main },
-          data: rows.map(row => row.upa_days ?? 0),
+          data: rows.map(row => Number(row.upa_days ?? 0)),
         },
         {
           name: 'NPT days', type: 'bar', stack: 'days', barMaxWidth: 16,
           itemStyle: { color: theme.palette.error.main },
-          data: rows.map(row => row.npt_days ?? 0),
+          data: rows.map(row => Number(row.npt_days ?? 0)),
         },
         ...(caps.plan ? [{
           name: 'Planned days', type: 'scatter' as const, symbol: 'diamond', symbolSize: 11,
@@ -387,8 +387,8 @@ export default function BusinessDashboard() {
       columns.push({
         headerName: 'NPT / UPA', field: 'npt_days', minWidth: 120, flex: 0.65,
         cellRenderer: (params: ICellRendererParams<DashboardWellRow>) => params.data && <Box display="flex" gap={.5} alignItems="center">
-          <Tag tone="error">{count(params.data.npt_days)} NPT</Tag>
-          <Tag tone="warning">{count(params.data.upa_days)} UPA</Tag>
+          <Tag tone="error">{decimal(params.data.npt_days, 4)} NPT</Tag>
+          <Tag tone="warning">{decimal(params.data.upa_days, 4)} UPA</Tag>
         </Box>,
       })
     }
@@ -481,7 +481,7 @@ export default function BusinessDashboard() {
         headerName: 'DAYS', field: 'actual_days', minWidth: 130, flex: 0.65,
         cellRenderer: (params: ICellRendererParams<DashboardAfeRow>) => params.data && <Box>
           <Typography fontSize={12}>{count(params.data.actual_days)} <Typography component="span" fontSize={10} color="text.secondary">days</Typography></Typography>
-          <Typography fontSize={10} color="text.secondary">{count(params.data.npt_days)} NPT · {count(params.data.upa_days)} UPA</Typography>
+          <Typography fontSize={10} color="text.secondary">{decimal(params.data.npt_days, 4)} NPT · {decimal(params.data.upa_days, 4)} UPA</Typography>
         </Box>,
       },
       {
@@ -522,7 +522,7 @@ export default function BusinessDashboard() {
     })
     if (caps.actuals) columns.push({
       headerName: 'NPT / UPA', field: 'npt_days', minWidth: 120, flex: 0.6,
-      cellRenderer: (params: ICellRendererParams<DashboardRigRow>) => params.data && <Typography fontSize={12}>{count(params.data.npt_days)} / {count(params.data.upa_days)}</Typography>,
+      cellRenderer: (params: ICellRendererParams<DashboardRigRow>) => params.data && <Typography fontSize={12}>{decimal(params.data.npt_days, 4)} / {decimal(params.data.upa_days, 4)}</Typography>,
     })
     if (caps.budget) columns.push({ headerName: 'AFE AMOUNT', field: 'afe_amount', minWidth: 145, flex: 0.8, valueFormatter: params => money(String(params.value ?? ''), currency) })
     if (caps.actuals) columns.push({ headerName: 'ACTUAL AMOUNT', field: 'actual_amount', minWidth: 145, flex: 0.8, valueFormatter: params => money(String(params.value ?? ''), currency) })
@@ -690,11 +690,11 @@ export default function BusinessDashboard() {
         />
         <KpiCard
           label="NPT / UPA days"
-          value={`${decimal(data.kpis.npt_days)} / ${decimal(data.kpis.upa_days)}`}
+          value={`${decimal(data.kpis.npt_days, 4)} / ${decimal(data.kpis.upa_days, 4)}`}
           hint={caps.actuals ? `${compactMoney(data.kpis.npt_amount, currency)} NPT · ${compactMoney(data.kpis.upa_amount, currency)} UPA` : 'Needs daily cost read access'}
           icon={<EventBusyOutlined fontSize="small"/>}
-          tone={data.kpis.npt_days ? 'error' : 'default'}
-          title="Distinct cost dates on which a line classified NPT (non-productive time) or UPA (unplanned activity) was recorded."
+          tone={Number(data.kpis.npt_days ?? 0) > 0 ? 'error' : 'default'}
+          title="Deduplicated operational service hours classified as NPT or UPA, divided by 24. Affected cost dates are not treated as duration."
         />
         <KpiCard
           label="AFE amount"
@@ -771,7 +771,7 @@ export default function BusinessDashboard() {
           <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={1}>
             <Box>
               <Typography fontWeight={800} fontSize={15}>Planned days against actual time</Typography>
-              <Typography color="text.secondary" fontSize={11.5} mt={.35}>Actual days split into productive, UPA and NPT. The marker is the plan.</Typography>
+              <Typography color="text.secondary" fontSize={11.5} mt={.35}>Actual days split using allocated UPA and NPT hours ÷ 24. The marker is the plan.</Typography>
             </Box>
             <Tag tone="info">Time</Tag>
           </Box>
@@ -847,7 +847,7 @@ export default function BusinessDashboard() {
           {data.classification.map(row => <Box key={row.key} sx={{ borderTop: '1px solid', borderColor: 'divider', py: 1 }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" gap={1}>
               <Tag tone={row.key === 'NPT' ? 'error' : row.key === 'UPA' ? 'warning' : 'success'}>{row.key}</Tag>
-              <Typography fontSize={11.5} color="text.secondary">{count(row.days)} days</Typography>
+              <Typography fontSize={11.5} color="text.secondary">{decimal(row.days, row.key === 'Planned' ? 0 : 4)} days</Typography>
             </Box>
             <Box display="flex" justifyContent="space-between" mt={.6}>
               <Typography fontSize={12.5} fontWeight={700}>{money(row.actual, currency)}</Typography>

@@ -66,7 +66,7 @@ export function DrillThroughPanel({ wellId, filters, onClose }: {
   }, [wellId, filters.from, filters.to, filters.currency, filters.includeDraft]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const currency = detail?.well.currency || filters.currency
-  const classification = useMemo(() => (detail?.classification ?? []).filter(row => (row.days ?? 0) > 0 || Number(row.actual ?? 0) > 0), [detail])
+  const classification = useMemo(() => (detail?.classification ?? []).filter(row => Number(row.days ?? 0) > 0 || Number(row.actual ?? 0) > 0), [detail])
   const sectionRows = detail?.sections ?? []
   const activityRows = detail?.activities ?? []
 
@@ -122,7 +122,7 @@ export function DrillThroughPanel({ wellId, filters, onClose }: {
         label: { color: theme.palette.text.primary, fontSize: 10.5, formatter: '{b}\n{c} d' },
         itemStyle: { borderColor: theme.palette.background.paper, borderWidth: 2 },
         data: classification.map(row => ({
-          name: row.key, value: row.days ?? 0, itemStyle: { color: colors[row.key] ?? theme.palette.primary.main },
+          name: row.key, value: Number(row.days ?? 0), itemStyle: { color: colors[row.key] ?? theme.palette.primary.main },
         })),
       }],
     }

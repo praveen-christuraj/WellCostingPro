@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from app.core.database import Base, SessionLocal, engine
 from app.core.security import hash_password
 from app.main import app
-from app.models import AuditLog, Organization, Permission, Role, User
+from app.models import AuditLog, DailyCostServiceLine, Organization, Permission, Role, User
 
 
 PERMISSIONS = [
@@ -223,8 +223,8 @@ def test_business_dashboard_aggregates_plan_budget_and_actuals():
         assert Decimal(kpis["afe_balance"]) == Decimal("5000.00")
         assert kpis["actual_days"] == 2          # 2026-10-10 .. 2026-10-11
         assert kpis["recorded_days"] == 2
-        assert kpis["npt_days"] == 1
-        assert kpis["upa_days"] == 2
+        assert Decimal(kpis["npt_days"]) == Decimal("0")
+        assert Decimal(kpis["upa_days"]) == Decimal("0")
         assert Decimal(kpis["npt_amount"]) == Decimal("200.00")
         assert Decimal(kpis["upa_amount"]) == Decimal("600.00")
         assert Decimal(kpis["planned_depth"]) == Decimal("1000.00")
@@ -248,8 +248,8 @@ def test_business_dashboard_aggregates_plan_budget_and_actuals():
         assert afe["afe_amount"] == "6000.00"
         assert afe["actual_amount"] == "1000.00"
         assert afe["afe_balance"] == "5000.00"
-        assert afe["npt_days"] == 1
-        assert afe["upa_days"] == 2
+        assert Decimal(afe["npt_days"]) == Decimal("0")
+        assert Decimal(afe["upa_days"]) == Decimal("0")
         assert afe["conversion_pending"] is False
 
         # Charts and tables are real aggregations, not placeholders.
@@ -263,8 +263,8 @@ def test_business_dashboard_aggregates_plan_budget_and_actuals():
         assert Decimal(groups["services"]["balance"]) == Decimal("0.00")
         assert Decimal(groups["other_expenses"]["planned"]) == Decimal("0.00")
         classification = {row["key"]: row for row in data["classification"]}
-        assert classification["NPT"]["days"] == 1
-        assert classification["UPA"]["days"] == 2
+        assert Decimal(classification["NPT"]["days"]) == Decimal("0")
+        assert Decimal(classification["UPA"]["days"]) == Decimal("0")
         assert Decimal(classification["NPT"]["actual"]) == Decimal("200.00")
         assert data["rigs"][0]["wells"] == 1
         assert Decimal(data["rigs"][0]["afe_amount"]) == Decimal("6000.00")
@@ -280,8 +280,8 @@ def test_business_dashboard_aggregates_plan_budget_and_actuals():
         ).json()
         assert Decimal(narrowed["kpis"]["actual_amount"]) == Decimal("400.00")  # 100 planned + 300 UPA
         assert narrowed["kpis"]["actual_days"] == 1
-        assert narrowed["kpis"]["npt_days"] == 0
-        assert narrowed["kpis"]["upa_days"] == 1
+        assert Decimal(narrowed["kpis"]["npt_days"]) == Decimal("0")
+        assert Decimal(narrowed["kpis"]["upa_days"]) == Decimal("0")
         # Planned/AFE figures are plan-level and stay whole.
         assert Decimal(narrowed["kpis"]["planned_days"]) == Decimal("10.00")
         assert Decimal(narrowed["kpis"]["afe_amount"]) == Decimal("6000.00")
@@ -355,6 +355,39 @@ def test_business_dashboard_aggregates_plan_budget_and_actuals():
             ).count() == 1
 
 
+def test_business_dashboard_uses_allocated_hours_for_fractional_npt_upa_days():
+    with TestClient(app) as client:
+        headers = login(client)
+        _setup(client, headers)
+
+        # Convert the classified service allocations into authoritative hourly
+        # records without changing their already-booked cost amounts.
+        with SessionLocal() as db:
+            lines = db.query(DailyCostServiceLine).filter(
+                DailyCostServiceLine.classification.in_(("NPT", "UPA")),
+            ).all()
+            for line in lines:
+                line.quantity_unit = "hours"
+                line.quantity = Decimal("11") if line.classification == "NPT" else Decimal("3")
+            db.commit()
+
+        payload = client.get("/api/v1/dashboard/business", headers=headers).json()
+        assert Decimal(payload["kpis"]["npt_days"]) == Decimal("0.4583")  # 11 / 24
+        assert Decimal(payload["kpis"]["upa_days"]) == Decimal("0.2500")  # (3 + 3) / 24
+        assert Decimal(payload["wells"][0]["npt_days"]) == Decimal("0.4583")
+        assert Decimal(payload["afes"][0]["upa_days"]) == Decimal("0.2500")
+        assert Decimal(payload["rigs"][0]["npt_days"]) == Decimal("0.4583")
+        classification = {row["key"]: row for row in payload["classification"]}
+        assert Decimal(classification["NPT"]["days"]) == Decimal("0.4583")
+
+        second_day = client.get(
+            "/api/v1/dashboard/business?from=2026-10-11&to=2026-10-11",
+            headers=headers,
+        ).json()
+        assert Decimal(second_day["kpis"]["npt_days"]) == Decimal("0")
+        assert Decimal(second_day["kpis"]["upa_days"]) == Decimal("0.1250")
+
+
 def test_business_dashboard_respects_rbac_and_tenant_scope():
     with TestClient(app) as client:
         owner_headers = login(client)
@@ -397,7 +430,7 @@ def test_business_dashboard_respects_rbac_and_tenant_scope():
         assert payload["kpis"]["afe_amount"] is None
         assert payload["kpis"]["planned_days"] is None
         assert payload["kpis"]["actual_amount"] == "1000.00"
-        assert payload["kpis"]["npt_days"] == 1
+        assert Decimal(payload["kpis"]["npt_days"]) == Decimal("0")
         assert payload["afes"] == []
         assert payload["wells"][0]["afe_amount"] is None
         assert payload["wells"][0]["planned_days"] is None

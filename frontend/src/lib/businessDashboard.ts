@@ -40,8 +40,8 @@ export type DashboardKpis = {
   planned_days: Money
   actual_days: number | null
   recorded_days: number | null
-  npt_days: number | null
-  upa_days: number | null
+  npt_days: Money
+  upa_days: Money
   day_variance: Money
   afe_amount: Money
   sow_adjusted_amount: Money
@@ -106,8 +106,8 @@ export type DashboardWellRow = {
   recorded_days: number | null
   sheets: number | null
   draft_sheets: number | null
-  npt_days: number | null
-  upa_days: number | null
+  npt_days: Money
+  upa_days: Money
   currency: string
 }
 
@@ -140,8 +140,8 @@ export type DashboardAfeRow = {
   actual_days: number | null
   recorded_days: number | null
   sheets: number | null
-  npt_days: number | null
-  upa_days: number | null
+  npt_days: Money
+  upa_days: Money
   npt_amount: Money
   upa_amount: Money
 }
@@ -156,8 +156,8 @@ export type DashboardRigRow = {
   planned_days: Money
   actual_days: number | null
   recorded_days: number | null
-  npt_days: number | null
-  upa_days: number | null
+  npt_days: Money
+  upa_days: Money
   afe_amount: Money
   effective_afe_amount: Money
   actual_amount: Money
@@ -180,7 +180,7 @@ export type DashboardSlice = {
   key: string
   label: string
   count: number | null
-  days: number | null
+  days: Money
   planned: Money
   actual: Money
   balance: Money

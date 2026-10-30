@@ -42,6 +42,7 @@ from app.models import (
     Afe,
     Currency,
     DailyCostEntry,
+    DailyCostServiceLine,
     Rig,
     User,
     Well,
@@ -74,6 +75,7 @@ log = logging.getLogger(__name__)
 
 MONEY = Decimal("0.01")
 PERCENT = Decimal("0.01")
+DURATION_DAYS = Decimal("0.0001")
 ACCESS_KEYS = ("rig-well:read", "afe:read", "daily-cost:read")
 EXPORT_KEYS = ("rig-well:export", "afe:export", "daily-cost:export")
 AFE_STATUS_LABELS = {
@@ -293,6 +295,89 @@ def _line_subquery(
             statement = statement.where(DailyCostEntry.standard_currency == currency)
         parts.append(statement)
     return union_all(*parts).subquery("dashboard_daily_lines")
+
+
+def _allocated_classification_days(
+    db: Session,
+    organization_id: str,
+    well_ids: Sequence[str],
+    *,
+    date_from: date | None,
+    date_to: date | None,
+    include_draft: bool,
+    currency: str = "",
+    afe_id: str = "",
+) -> tuple[dict[tuple[str, str], Decimal], dict[tuple[str, str], Decimal]]:
+    """Return deduplicated NPT/UPA service hours as fractional days.
+
+    A service line is a billable cost record, so simultaneous services may
+    repeat one operational allocation. Match the NPT/UPA operational report:
+    retain the greatest hours value for each entry/activity allocation, then
+    divide the rolled-up hours by 24. Billing-day quantities and one-time
+    charges are costs, not authoritative elapsed-time records.
+    """
+    from app.services.daily_cost import SERVICE_ONE_TIME
+
+    conditions = _entry_conditions(
+        organization_id,
+        well_ids,
+        date_from=date_from,
+        date_to=date_to,
+        include_draft=include_draft,
+        afe_id=afe_id,
+    )
+    conditions.extend((
+        DailyCostServiceLine.organization_id == organization_id,
+        DailyCostServiceLine.classification.in_(("NPT", "UPA")),
+        DailyCostServiceLine.charging_basis == "Day Rate",
+        DailyCostServiceLine.quantity_unit == "hours",
+        DailyCostServiceLine.charge_category.notin_(SERVICE_ONE_TIME),
+    ))
+    if currency and currency.upper() != "USD":
+        conditions.append(DailyCostEntry.standard_currency == currency)
+
+    rows = db.execute(
+        select(
+            DailyCostEntry.well_id,
+            DailyCostEntry.afe_id,
+            DailyCostEntry.cost_date,
+            DailyCostEntry.id,
+            DailyCostServiceLine.classification,
+            DailyCostServiceLine.activity_id,
+            DailyCostServiceLine.sub_activity_id,
+            DailyCostServiceLine.hole_section_id,
+            DailyCostServiceLine.phase_id,
+            DailyCostServiceLine.quantity,
+        )
+        .select_from(DailyCostServiceLine)
+        .join(DailyCostEntry, DailyCostServiceLine.entry_id == DailyCostEntry.id)
+        .where(*conditions)
+    ).all()
+
+    allocations: dict[tuple[str, date, str, str, str, str, str, str], Decimal] = {}
+    allocation_afes: dict[tuple[str, date, str, str, str, str, str, str], str] = {}
+    for well_key, afe_key, cost_date, entry_key, classification, activity, sub_activity, section, phase, quantity in rows:
+        key = (
+            well_key, cost_date, str(classification), entry_key,
+            activity or "", sub_activity or "", section or "", phase or "",
+        )
+        allocations[key] = max(allocations.get(key, Decimal("0")), Decimal(quantity or 0))
+        allocation_afes[key] = afe_key
+
+    well_hours: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    afe_hours: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    for key, hours in allocations.items():
+        well_key, classification = key[0], key[2]
+        well_hours[(well_key, classification)] += hours
+        afe_hours[(allocation_afes[key], classification)] += hours
+
+    def as_days(hours: Decimal) -> Decimal:
+        return (hours / Decimal("24")).quantize(DURATION_DAYS)
+
+    return (
+        {key: as_days(hours) for key, hours in well_hours.items()},
+        {key: as_days(hours) for key, hours in afe_hours.items()},
+    )
 
 
 def _entry_conditions(
@@ -588,9 +673,9 @@ def dashboard(
             date_from=date_from, date_to=date_to, include_draft=include_draft, afe_id=afe_id,
         )
 
-    # ---- line facts: classification days, sections, depth, daily trend --------
-    well_classification: dict[tuple[str, str], int] = defaultdict(int)
-    afe_classification: dict[tuple[str, str], int] = defaultdict(int)
+    # ---- line facts: classification duration, sections, depth, daily trend ----
+    well_classification: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
+    afe_classification: dict[tuple[str, str], Decimal] = defaultdict(lambda: Decimal("0"))
     section_facts: dict[tuple[str, str | None], dict[str, Any]] = {}
     daily_facts: dict[date, dict[str, Decimal]] = {}
     group_actual: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
@@ -600,7 +685,7 @@ def dashboard(
             db, organization_id, well_ids,
             date_from=date_from, date_to=date_to, include_draft=include_draft, currency=selected,
         )
-        for well_key, classification, days_count, amount in db.execute(
+        for well_key, classification, affected_dates, amount in db.execute(
             select(
                 lines.c.well_id,
                 lines.c.classification,
@@ -610,18 +695,23 @@ def dashboard(
             .select_from(lines)
             .group_by(lines.c.well_id, lines.c.classification)
         ).all():
-            well_classification[(well_key, str(classification or "Planned"))] = int(days_count or 0)
+            # Planned remains an affected-date context figure. NPT/UPA are
+            # replaced below by authoritative allocated hours / 24.
+            if str(classification or "Planned") == "Planned":
+                well_classification[(well_key, "Planned")] = Decimal(affected_dates or 0)
             classification_amounts[str(classification or "Planned")] += Decimal(amount or 0)
-        for afe_key, classification, days_count in db.execute(
-            select(
-                lines.c.afe_id,
-                lines.c.classification,
-                func.count(func.distinct(lines.c.cost_date)),
-            )
-            .select_from(lines)
-            .group_by(lines.c.afe_id, lines.c.classification)
-        ).all():
-            afe_classification[(afe_key, str(classification or "Planned"))] = int(days_count or 0)
+        allocated_well_days, allocated_afe_days = _allocated_classification_days(
+            db,
+            organization_id,
+            well_ids,
+            date_from=date_from,
+            date_to=date_to,
+            include_draft=include_draft,
+            currency=selected,
+            afe_id=afe_id,
+        )
+        well_classification.update(allocated_well_days)
+        afe_classification.update(allocated_afe_days)
         for well_key, section_id, code, name, active_days, amount in db.execute(
             select(
                 lines.c.well_id,
@@ -1187,7 +1277,7 @@ def well_detail(
 
     notes: list[str] = [
         "Actual days run from the first to the last day of this well's cost register (calendar days), so any missing sheet inside that span is included.",
-        "NPT and UPA days count the distinct cost dates on which a line classified Non-Productive Time or Unplanned Activity was recorded.",
+        "NPT and UPA days are deduplicated operational service hours divided by 24; affected cost dates are not used as duration.",
     ]
 
     activities: list[DashboardActivityRow] = []
