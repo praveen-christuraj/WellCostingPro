@@ -237,9 +237,10 @@ async function failure(response: Response): Promise<Error> {
   return error
 }
 
-export async function uploadFiles<T>(path: string, files: File[], form: Record<string, string> = {}): Promise<T> {
+export async function uploadFiles<T>(path: string, files: File[], form: Record<string, string> = {}, field = 'files'): Promise<T> {
+  // `field` lets a single-file endpoint (backup import) use the name it declares.
   const data = new FormData()
-  files.forEach(file => data.append('files', file))
+  files.forEach(file => data.append(field, file))
   Object.entries(form).forEach(([key, value]) => data.append(key, value))
   const response = await send('POST', path, data)
   if (!response.ok) throw await failure(response)

@@ -112,6 +112,10 @@ export default function Reports() {
       eyebrow="REPORTS / OVERVIEW"
       title="Reports"
       subtitle="Consolidated views of well plans, AFE budgets and actual costs across your workspace."
+      action={<>
+        {can('report-builder:read') || can('report-builder:create') ? <Button component={RouterLink} to="/reports/builder" variant="outlined" endIcon={<ArrowForwardRounded/>}>Report Builder</Button> : null}
+        {can('custom-reports:read') ? <Button component={RouterLink} to="/reports/custom" variant="contained" endIcon={<ArrowForwardRounded/>}>Custom Reports</Button> : null}
+      </>}
     />
     <ErrorMessage message={error}/>
     {busy ? <Box py={6} display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={28}/></Box> : <>

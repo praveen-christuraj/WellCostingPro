@@ -47,6 +47,11 @@ const MudCostAnalysis = lazy(() => import('./pages/MudCostAnalysis'))
 const NdtInspectionRegister = lazy(() => import('./pages/NdtInspectionRegister'))
 const CostingSets = lazy(() => import('./pages/CostingSets'))
 const Reports = lazy(() => import('./pages/Reports'))
+const ReportBuilder = lazy(() => import('./pages/ReportBuilder'))
+const ReportDesigner = lazy(() => import('./pages/ReportDesigner'))
+const CustomReports = lazy(() => import('./pages/CustomReports'))
+const CustomReportViewer = lazy(() => import('./pages/CustomReportViewer'))
+const BackupRecovery = lazy(() => import('./pages/BackupRecovery'))
 const WellCostComparisonReport = lazy(() => import('./pages/WellCostComparisonReport'))
 const ConsumptionLossesReport = lazy(() => import('./pages/ConsumptionLossesReport'))
 const MudChemicalsUsageReport = lazy(() => import('./pages/reports/MudChemicalsUsageReport'))
@@ -102,9 +107,10 @@ export default function App() {
           <Route path="assignments" element={<Guard permission={["assignments:write", "users:read", "roles:read", "permissions:read"]}><Assignments/></Guard>}/>
           <Route path="security" element={<GuardAny permissions={['security:read', 'security:password-reset', 'security:unlock']}><SecurityCenter/></GuardAny>}/>
           <Route path="audit" element={<Navigate to="/other-management/audit" replace/>}/>
-          <Route path="other-management" element={<GuardAny permissions={['audit:read', 'database-browser:read', 'tasks:read']}><OtherManagementOverview/></GuardAny>}/>
+          <Route path="other-management" element={<GuardAny permissions={['audit:read', 'database-browser:read', 'tasks:read', 'backup:read']}><OtherManagementOverview/></GuardAny>}/>
           <Route path="other-management/audit" element={<Guard permission="audit:read"><AuditLog/></Guard>}/>
           <Route path="other-management/database" element={<Guard permission="database-browser:read"><DatabaseBrowser/></Guard>}/>
+          <Route path="other-management/backup" element={<GuardAny permissions={['backup:read', 'backup:create', 'backup:delete', 'backup:settings', 'backup:restore-request', 'backup:restore-approve', 'backup:restore-execute']}><BackupRecovery/></GuardAny>}/>
           <Route path="other-management/database/:tableName" element={<Guard permission="database-browser:read"><DatabaseTableView/></Guard>}/>
           <Route path="other-management/tasks" element={<Guard permission="tasks:read"><TaskManager/></Guard>}/>
           <Route path="other-management/notifications" element={<Notifications/>}/>
@@ -135,7 +141,12 @@ export default function App() {
           <Route path="daily-cost/ndt-inspections" element={<Guard permission="daily-cost:read"><NdtInspectionRegister/></Guard>}/>
           <Route path="daily-cost/analysis" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
           <Route path="daily-cost/analysis/:wellId" element={<Guard permission="daily-cost:read"><DailyCostAnalysis/></Guard>}/>
-          <Route path="reports" element={<GuardAny permissions={['rig-well:read', 'afe:read', 'daily-cost:read']}><Reports/></GuardAny>}/>
+          <Route path="reports" element={<GuardAny permissions={['rig-well:read', 'afe:read', 'daily-cost:read', 'report-builder:read', 'custom-reports:read']}><Reports/></GuardAny>}/>
+          <Route path="reports/builder" element={<GuardAny permissions={['report-builder:read', 'report-builder:create', 'report-builder:update']}><ReportBuilder/></GuardAny>}/>
+          <Route path="reports/builder/:reportId" element={<GuardAny permissions={['report-builder:read', 'report-builder:create', 'report-builder:update']}><ReportDesigner/></GuardAny>}/>
+          <Route path="reports/custom" element={<Guard permission="custom-reports:read"><CustomReports/></Guard>}/>
+          <Route path="reports/custom/:reportId" element={<Guard permission="custom-reports:read"><CustomReportViewer/></Guard>}/>
+          <Route path="reports/custom-report/:reportId" element={<Guard permission="custom-reports:read"><CustomReportViewer/></Guard>}/>
           <Route path="reports/well-cost-comparison" element={<Guard permission="rig-well:read"><GuardAny permissions={['afe:read', 'daily-cost:read']}><WellCostComparisonReport/></GuardAny></Guard>}/>
           <Route path="reports/consumption-losses" element={<Guard permission="daily-cost:read"><ConsumptionLossesReport/></Guard>}/>
           <Route path="reports/mud-chemicals-usage" element={<Guard permission="daily-cost:read"><MudChemicalsUsageReport/></Guard>}/>

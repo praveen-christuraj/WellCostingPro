@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     # First-run administrator bootstrap. Ask at startup when the database has no owner.
     bootstrap_admin_on_startup: bool = True
+    # Backup & Recovery. Archives live under this root; only folders beneath it are writable.
+    backup_directory: str = ""
+    # The in-process scheduler is safe to leave on; it only acts when a workspace enables a schedule.
+    backup_scheduler_enabled: bool = True
+    backup_max_upload_mb: int = 2048
     # Optional unattended seeding for a first boot with no terminal. Leave blank to be asked.
     seed_org_slug: str = ""
     seed_org_name: str = ""
