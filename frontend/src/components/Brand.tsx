@@ -11,12 +11,14 @@ import { APP_NAME, APP_TAGLINE } from '../lib/appInfo'
  * the product descriptor and is hidden nowhere it fits: it is the line that tells a
  * new user what the tool does.
  */
-export default function Brand({ light = false }: { light?: boolean }) {
+export default function Brand({ light = false, rigMark = false }: { light?: boolean; rigMark?: boolean }) {
   const { mode } = useColorMode()
   const dark = light || mode === 'dark'
   const tone = surface(dark ? 'dark' : 'light')
   return <Box display="flex" alignItems="center" gap={1.4}>
-    <Box className="brand-mark"><span className="brand-line"/><span className="brand-dot"/></Box>
+    {rigMark
+      ? <Box component="img" src="/favicon.svg" alt="" aria-hidden="true" sx={{ width: 46, height: 46, objectFit: 'contain', flex: 'none' }}/>
+      : <Box className="brand-mark"><span className="brand-line"/><span className="brand-dot"/></Box>}
     <Box>
       <Typography sx={{ display: 'block', fontFamily: '"Inter Variable", Inter, sans-serif', fontWeight: 750, letterSpacing: '-.55px', color: tone.text, lineHeight: 1.1, fontSize: { xs: 22, sm: 26, md: 28 } }}>
         WellCost<span style={{ color: dark ? navy[400] : navy[600] }}>IQ</span>

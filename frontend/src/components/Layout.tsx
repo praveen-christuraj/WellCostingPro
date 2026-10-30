@@ -159,7 +159,14 @@ export default function Layout() {
     return <Box component="nav" aria-label="Primary navigation" display="flex" flexDirection="column" height="100%" sx={{ overflow: 'hidden' }}>
       <Box display="flex" alignItems="center" justifyContent={showText ? 'space-between' : 'center'} gap={1} sx={{ px: showText ? 2 : 1, minHeight: 72, borderBottom: '1px solid', borderColor: 'divider' }}>
         <Box sx={{ minWidth: 0, overflow: 'hidden', '& > div': { whiteSpace: 'nowrap' } }}>
-          {showText ? <Brand/> : <Box className="brand-mark" aria-label="WellCostIQ"><span className="brand-line"/><span className="brand-dot"/></Box>}
+          {showText
+            ? <Brand rigMark/>
+            : <Box
+                component="img"
+                src="/favicon.svg"
+                alt="WellCostIQ"
+                sx={{ width: 46, height: 46, objectFit: 'contain' }}
+              />}
         </Box>
         {!temporary && <Tooltip title={navExpanded ? 'Collapse navigation' : 'Expand navigation'} placement="right">
           <IconButton size="small" onClick={() => setNavExpanded(value => !value)} aria-label={navExpanded ? 'Collapse navigation' : 'Expand navigation'}>
