@@ -2,6 +2,7 @@ import { lazy, Suspense, type ReactNode } from 'react'
 import { Box, CircularProgress } from '@mui/material'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
+import PasswordChangeGate from './components/PasswordChangeGate'
 
 const Layout = lazy(() => import('./components/Layout'))
 const Login = lazy(() => import('./pages/Login'))
@@ -18,6 +19,7 @@ const DatabaseBrowser = lazy(() => import('./pages/DatabaseBrowser'))
 const DatabaseTableView = lazy(() => import('./pages/DatabaseTableView'))
 const TaskManager = lazy(() => import('./pages/TaskManager'))
 const Notifications = lazy(() => import('./pages/Notifications'))
+const NotFound = lazy(() => import('./pages/NotFound'))
 const MasterDataOverview = lazy(() => import('./pages/MasterDataOverview'))
 const MasterDataRecords = lazy(() => import('./pages/MasterDataRecords'))
 const DeletedMasterData = lazy(() => import('./pages/DeletedMasterData'))
@@ -77,8 +79,11 @@ function GuardAny({ permissions, children }: { permissions: string[]; children: 
 }
 
 export default function App() {
-  const { user, loading } = useAuth()
+  const { user, loading, mustChangePassword } = useAuth()
   if (loading) return <Box display="grid" sx={{ placeItems: 'center', minHeight: '100vh' }}><CircularProgress/></Box>
+  // A security-centre action can demand a new password; until it is set the API
+  // refuses every other route, so the gate replaces the whole workspace.
+  if (user && mustChangePassword) return <PasswordChangeGate/>
 
   return <Suspense fallback={<Box display="grid" sx={{ placeItems: 'center', minHeight: '60vh' }}><CircularProgress/></Box>}>
     <Routes>
@@ -139,7 +144,9 @@ export default function App() {
           <Route path="reports/service-wise-cost" element={<Guard permission="daily-cost:read"><ServiceWiseCostReport/></Guard>}/>
           <Route path="reports/vendor-wise-cost" element={<Guard permission="daily-cost:read"><VendorWiseCostReport/></Guard>}/>
           <Route path="reports/npt-upa" element={<Guard permission="daily-cost:read"><NptUpaReport/></Guard>}/>
-          <Route path="*" element={<Navigate to="/" replace/>}/>
+          {/* An unknown address says so, and offers the way back, instead of
+              silently pretending the user asked for the landing page. */}
+          <Route path="*" element={<NotFound/>}/>
         </Route>
       </>}
     </Routes>

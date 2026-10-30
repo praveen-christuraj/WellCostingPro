@@ -4,6 +4,7 @@ from sqlalchemy import select
 from app.api.deps import Current, Db, granted, owner
 from app.core.config import get_settings
 from app.core.security import access_token, hash_password, new_refresh_session, refresh_hash, validate_password, verify_password
+from app.services import password_policy
 from app.models import Organization, User, RefreshSession
 from app.schemas.rbac import LoginInput, MeOut, UserOut
 from app.services import audit
@@ -47,13 +48,19 @@ def login(data: LoginInput, request: Request, response: Response, db: Db):
         raise HTTPException(401, "Invalid credentials")
     user.failed_logins = 0
     user.locked_until = None
+    user.last_login_at = datetime.now(timezone.utc)
     token, session = new_refresh_session(user.id)
     db.add(session)
     audit.record(db, organization_id=org.id, actor=user, action="login", entity_type="auth",
                  entity_label=user.email, summary="Signed in", request=request)
     db.commit()
     set_cookie(response, token)
-    return {"access_token": access_token(user.id, user.organization_id, user.token_version), "token_type": "bearer"}
+    return {
+        "access_token": access_token(user.id, user.organization_id, user.token_version),
+        "token_type": "bearer",
+        # The UI must collect a new password before it can use the workspace.
+        "must_change_password": bool(user.must_change_password),
+    }
 
 
 @router.post("/refresh")
@@ -92,7 +99,9 @@ def logout(request: Request, response: Response, db: Db):
 @router.get("/me", response_model=MeOut)
 def me(user: Current, db: Db):
     org = db.get(Organization, user.organization_id)
-    return {**UserOut.model_validate(user).model_dump(), "organization_name": org.name, "organization_slug": org.slug, "permission_keys": sorted(granted(user)), "is_owner": owner(user)}
+    return {**UserOut.model_validate(user).model_dump(), "organization_name": org.name, "organization_slug": org.slug,
+            "permission_keys": sorted(granted(user)), "is_owner": owner(user),
+            "must_change_password": bool(user.must_change_password), "password_changed_at": user.password_changed_at}
 
 
 from pydantic import BaseModel, Field
@@ -108,10 +117,9 @@ def change_password(data: PasswordChange, request: Request, user: Current, db: D
     if data.current_password == data.new_password:
         raise HTTPException(400, "New password must be different")
     try:
-        validate_password(data.new_password, identity=user.email)
+        password_policy.set_password(db, user, data.new_password)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
-    user.password_hash = hash_password(data.new_password)
     user.token_version += 1
     # End all sessions, including the current one. Client signs in again.
     for session in list(user.sessions):

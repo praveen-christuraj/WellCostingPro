@@ -40,6 +40,7 @@ def notify(
     actor: User | None = None,
     entity_type: str = "",
     entity_id: str = "",
+    announcement_id: str | None = None,
 ) -> list[UserNotification]:
     rows: list[UserNotification] = []
     seen: set[str] = set()
@@ -58,14 +59,15 @@ def notify(
             action_path=action_path,
             related_entity_type=entity_type,
             related_entity_id=entity_id,
+            announcement_id=announcement_id,
         )
         db.add(row)
         rows.append(row)
     return rows
 
 
-def add_event(db: Session, task: WorkflowTask, event_type: str, actor: User | None, old: str = "", new: str = "", notes: str = "") -> None:
-    db.add(WorkflowTaskEvent(
+def add_event(db: Session, task: WorkflowTask, event_type: str, actor: User | None, old: str = "", new: str = "", notes: str = "") -> WorkflowTaskEvent:
+    event = WorkflowTaskEvent(
         organization_id=task.organization_id,
         task_id=task.id,
         event_type=event_type,
@@ -74,7 +76,9 @@ def add_event(db: Session, task: WorkflowTask, event_type: str, actor: User | No
         actor_user_id=actor.id if actor else None,
         actor_name=actor.full_name if actor else "System",
         notes=notes,
-    ))
+    )
+    db.add(event)
+    return event
 
 
 def create_task(

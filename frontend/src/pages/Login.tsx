@@ -1,10 +1,11 @@
 import { useEffect, useId, useState, type FormEvent } from 'react'
-import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment, TextField, Typography } from '@mui/material'
+import { Alert, Box, Button, CircularProgress, IconButton, InputAdornment, TextField, Typography } from '@mui/material'
 import { ArrowForwardRounded, VisibilityOffOutlined, VisibilityOutlined, LockOutlined, HubOutlined } from '@mui/icons-material'
 import { useAuth } from '../context/AuthContext'
 import Brand from '../components/Brand'
 import { APP_NAME, pageTitle } from '../lib/appInfo'
 import { api, body } from '../lib/api'
+import { FormDialog } from '../components/Common'
 
 export default function Login() {
   const { login } = useAuth()
@@ -96,30 +97,35 @@ export default function Login() {
       </Box>
       <Typography className="login-help">Need help? Reach out to your workspace administrator.</Typography>
     </Box>
-    <Dialog open={recovery === 'request'} onClose={() => !recoveryBusy && setRecovery(null)} fullWidth maxWidth="sm">
-      <DialogTitle>Request a password reset</DialogTitle>
-      <DialogContent><Box display="grid" gap={2} pt={1}>
-        <Typography color="text.secondary" fontSize={13}>Your administrator will review this request. For privacy, the response is the same whether or not the account exists.</Typography>
+    {/* Both recovery pop-ups use the shared FormDialog, so they close only via Cancel
+        and never discard a typed reason or password by a stray backdrop click. */}
+    <FormDialog open={recovery === 'request'} title="Request a password reset" maxWidth="sm"
+      subtitle="Your workspace administrator reviews every request. For privacy, the answer is the same whether or not the account exists."
+      onClose={() => setRecovery(null)} onSubmit={() => void requestReset()} busy={recoveryBusy} submitLabel="Send request"
+      submitDisabled={!organization.trim() || !email.trim()}>
+      <Box display="grid" gap={2} pt={.5}>
         <TextField label="Workspace ID" required value={organization} onChange={e => setOrganization(e.target.value)}/>
         <TextField label="Work email" required type="email" value={email} onChange={e => setEmail(e.target.value)}/>
-        <TextField label="Reason (optional)" multiline minRows={2} value={reason} onChange={e => setReason(e.target.value)}/>
+        <TextField label="Reason (optional)" multiline minRows={2} value={reason} onChange={e => setReason(e.target.value)}
+          helperText="Tell the administrator how you lost access. This is recorded with the request."/>
         {recoveryError && <Alert severity="error">{recoveryError}</Alert>}
-        <Button variant="text" onClick={() => { setRecovery('reset'); setRecoveryError('') }}>I already have an approved reset code</Button>
-      </Box></DialogContent>
-      <DialogActions><Button onClick={() => setRecovery(null)}>Cancel</Button><Button variant="contained" disabled={recoveryBusy || !organization.trim() || !email.trim()} onClick={requestReset}>{recoveryBusy ? 'Sending…' : 'Send request'}</Button></DialogActions>
-    </Dialog>
-    <Dialog open={recovery === 'reset'} onClose={() => !recoveryBusy && setRecovery(null)} fullWidth maxWidth="sm">
-      <DialogTitle>Use an approved reset code</DialogTitle>
-      <DialogContent><Box display="grid" gap={2} pt={1}>
-        <Typography color="text.secondary" fontSize={13}>Enter the single-use code supplied by your workspace administrator.</Typography>
+        <Button variant="text" sx={{ justifySelf: 'start' }} onClick={() => { setRecovery('reset'); setRecoveryError('') }}>I already have an approved reset code</Button>
+      </Box>
+    </FormDialog>
+    <FormDialog open={recovery === 'reset'} title="Use an approved reset code" maxWidth="sm"
+      subtitle="Enter the single-use code supplied by your workspace administrator, then choose a new password."
+      onClose={() => setRecovery(null)} onSubmit={() => void completeReset()} busy={recoveryBusy} submitLabel="Reset password"
+      submitDisabled={!resetCode || !newPassword || !confirmPassword}>
+      <Box display="grid" gap={2} pt={.5}>
         <TextField label="Workspace ID" required value={organization} onChange={e => setOrganization(e.target.value)}/>
         <TextField label="Work email" required type="email" value={email} onChange={e => setEmail(e.target.value)}/>
         <TextField label="Reset code" required value={resetCode} onChange={e => setResetCode(e.target.value)}/>
-        <TextField label="New password" required type="password" helperText="12–128 characters; use at least three of uppercase, lowercase, number and symbol." value={newPassword} onChange={e => setNewPassword(e.target.value)}/>
-        <TextField label="Confirm new password" required type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}/>
+        <TextField label="New password" required type="password" autoComplete="new-password"
+          helperText="12–128 characters; use at least three of uppercase, lowercase, number and symbol. The last five passwords cannot be reused."
+          value={newPassword} onChange={e => setNewPassword(e.target.value)}/>
+        <TextField label="Confirm new password" required type="password" autoComplete="new-password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}/>
         {recoveryError && <Alert severity="error">{recoveryError}</Alert>}
-      </Box></DialogContent>
-      <DialogActions><Button onClick={() => setRecovery(null)}>Cancel</Button><Button variant="contained" disabled={recoveryBusy || !resetCode || !newPassword || !confirmPassword} onClick={completeReset}>{recoveryBusy ? 'Updating…' : 'Reset password'}</Button></DialogActions>
-    </Dialog>
+      </Box>
+    </FormDialog>
   </Box>
 }

@@ -50,17 +50,17 @@ export function WellCostPrintDialog({ open, onClose, wells, initialWellId = '' }
         api<DailyCostDay[]>(`/daily-cost/wells/${wellId}/cost-report?${params}`),
         // A mixed-standard-currency well cannot expose one combined summary;
         // retain the existing per-AFE/currency print path in that case.
-        api<DailyCostWellSummary>(`/daily-cost/wells/${wellId}/cost-summary?${params}`).catch(() => null),
+        api<DailyCostWellSummary>(`/daily-cost/wells/${wellId}/cost-summary?${params}`, { silent: true }).catch(() => null),
         well?.rig_id
-          ? api<MudCostReconciliation>(`/mud-cost/reconciliation?${mudParams}`).catch(() => null)
+          ? api<MudCostReconciliation>(`/mud-cost/reconciliation?${mudParams}`, { silent: true }).catch(() => null)
           : Promise.resolve(null),
         well?.rig_id
-          ? api<MudCostMaterialBalance>(`/mud-cost/material-balance?${mudBalanceParams}`).catch(() => null)
+          ? api<MudCostMaterialBalance>(`/mud-cost/material-balance?${mudBalanceParams}`, { silent: true }).catch(() => null)
           : Promise.resolve(null),
         // The LIH Cost Register is separate from daily sheets, so it is fetched
         // by well and period rather than derived from the printed days.
-        api<LihCostReport>(`/lih-cost/wells/${wellId}/report?${lihParams}`).catch(() => null),
-        api<NdtEntry[]>(`/ndt-inspections/entries?${new URLSearchParams({ well_id: wellId })}`).catch(() => []),
+        api<LihCostReport>(`/lih-cost/wells/${wellId}/report?${lihParams}`, { silent: true }).catch(() => null),
+        api<NdtEntry[]>(`/ndt-inspections/entries?${new URLSearchParams({ well_id: wellId })}`, { silent: true }).catch(() => []),
       ])
       if (!days.length) { setError('No saved daily sheets match this well and period.'); return }
       await api('/daily-cost/export-audit', { method: 'POST', body: body({

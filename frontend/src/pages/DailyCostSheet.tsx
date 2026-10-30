@@ -912,14 +912,14 @@ export default function DailyCostSheet() {
       const reportScope = saved.progress?.scope ?? progress?.scope
       if (reportScope) ndtParams.set('scope', reportScope)
       const [overviewDays, summary, mudReconciliation, mudBalance, lihReport, ndtInspections] = await Promise.all([
-        api<DailyCostDay[]>(`/daily-cost/wells/${entry.well_id}/cost-report?${params}`).catch(() => [saved]),
-        api<DailyCostWellSummary>(`/daily-cost/wells/${entry.well_id}/cost-summary?${params}`).catch(() => null),
-        api<MudCostReconciliation>(`/mud-cost/reconciliation?${mudParams}`).catch(() => null),
-        api<MudCostMaterialBalance>(`/mud-cost/material-balance?${mudBalanceParams}`).catch(() => null),
+        api<DailyCostDay[]>(`/daily-cost/wells/${entry.well_id}/cost-report?${params}`, { silent: true }).catch(() => [saved]),
+        api<DailyCostWellSummary>(`/daily-cost/wells/${entry.well_id}/cost-summary?${params}`, { silent: true }).catch(() => null),
+        api<MudCostReconciliation>(`/mud-cost/reconciliation?${mudParams}`, { silent: true }).catch(() => null),
+        api<MudCostMaterialBalance>(`/mud-cost/material-balance?${mudBalanceParams}`, { silent: true }).catch(() => null),
         // LIH cost lives in its own register, so the printed day panel reads it
         // directly instead of deriving it from the daily sheet lines.
-        api<LihCostReport>(`/lih-cost/wells/${entry.well_id}/report?${lihParams}`).catch(() => null),
-        api<NdtEntry[]>(`/ndt-inspections/entries?${ndtParams}`).catch(() => []),
+        api<LihCostReport>(`/lih-cost/wells/${entry.well_id}/report?${lihParams}`, { silent: true }).catch(() => null),
+        api<NdtEntry[]>(`/ndt-inspections/entries?${ndtParams}`, { silent: true }).catch(() => []),
       ])
       await api('/daily-cost/export-audit', { method: 'POST', body: body({
         module: 'day-sheet', format: 'pdf', record_count: 1, entry_id: entry.id,
