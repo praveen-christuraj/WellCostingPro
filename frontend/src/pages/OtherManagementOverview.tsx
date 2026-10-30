@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import { Box, Button, CircularProgress, Paper, Typography } from '@mui/material'
-import { ArrowForwardRounded, HistoryOutlined, StorageOutlined, TableRowsOutlined } from '@mui/icons-material'
+import { ArrowForwardRounded, HistoryOutlined, StorageOutlined, TableRowsOutlined, TaskAltOutlined } from '@mui/icons-material'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { ErrorMessage, PageHeading, Tag } from '../components/Common'
@@ -25,6 +25,7 @@ export default function OtherManagementOverview() {
   const { can } = useAuth()
   const canAudit = can('audit:read')
   const canBrowse = can('database-browser:read')
+  const canTasks = can('tasks:read')
   const [audit, setAudit] = useState<AuditPage | null>(null)
   const [weekTotal, setWeekTotal] = useState<number | undefined>(undefined)
   const [catalogue, setCatalogue] = useState<TableCatalogue | null>(null)
@@ -55,6 +56,7 @@ export default function OtherManagementOverview() {
       action={<Box display="flex" gap={1} flexWrap="wrap">
         {canAudit && <Button component={RouterLink} to="/other-management/audit" variant="outlined" endIcon={<ArrowForwardRounded/>}>Audit Log</Button>}
         {canBrowse && <Button component={RouterLink} to="/other-management/database" variant="contained" endIcon={<ArrowForwardRounded/>}>Database Browser</Button>}
+        {canTasks && <Button component={RouterLink} to="/other-management/tasks" variant="contained" endIcon={<ArrowForwardRounded/>}>Task Manager</Button>}
       </Box>}
     />
     <ErrorMessage message={error}/>
@@ -64,6 +66,11 @@ export default function OtherManagementOverview() {
         {canAudit && <StatCard label="Last 7 days" value={weekTotal} hint="Actions recorded this week" icon={<HistoryOutlined sx={{ fontSize: 18 }}/>}/>}
         {canBrowse && <StatCard label="Database tables" value={catalogue?.total_tables} hint="Tables available to browse" icon={<StorageOutlined sx={{ fontSize: 18 }}/>}/>}
         {canBrowse && <StatCard label="Database records" value={catalogue?.total_rows} hint="Rows across the workspace tables" icon={<TableRowsOutlined sx={{ fontSize: 18 }}/>}/>}
+        {canTasks && <StatCard
+          label="Task manager"
+          value="Open queue"
+          hint="Approval and manual work items"
+          icon={<TaskAltOutlined sx={{ fontSize: 18 }}/>} />}
       </Box>
 
       {canAudit && <Paper variant="outlined" sx={{ p: { xs: 2, sm: 2.5 }, borderRadius: 2, borderColor: 'divider' }}>
@@ -81,7 +88,7 @@ export default function OtherManagementOverview() {
           <Typography fontSize={12} color="text.secondary" noWrap>{entry.actor_name || 'System'} · {entry.entity_type.replace(/_/g, ' ')}</Typography>
         </Box>)}
       </Paper>}
-      {!canAudit && !canBrowse && <Typography color="text.secondary" fontSize={13}>No Other Managements tools are assigned to your role.</Typography>}
+      {!canAudit && !canBrowse && !canTasks && <Typography color="text.secondary" fontSize={13}>No Other Managements tools are assigned to your role.</Typography>}
     </>}
   </>
 }

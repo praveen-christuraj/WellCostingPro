@@ -3,12 +3,15 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy import select
 from app.api.deps import Current, Db, granted, owner
 from app.core.config import get_settings
-from app.core.security import access_token, new_refresh_session, refresh_hash, verify_password
+from app.core.security import access_token, hash_password, new_refresh_session, refresh_hash, validate_password, verify_password
 from app.models import Organization, User, RefreshSession
 from app.schemas.rbac import LoginInput, MeOut, UserOut
 from app.services import audit
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+# Unknown accounts still perform a password verification, reducing account
+# enumeration through response-time differences.
+_DUMMY_PASSWORD_HASH = hash_password("Timing-only-password-42!")
 
 
 def set_cookie(response: Response, token: str):
@@ -22,6 +25,7 @@ def login(data: LoginInput, request: Request, response: Response, db: Db):
     user = db.scalar(select(User).where(User.organization_id == org.id, User.email == data.email.lower())) if org else None
     # Use the same public error for unknown tenants, users, and passwords.
     if not user or not user.is_active:
+        verify_password(data.password, _DUMMY_PASSWORD_HASH)
         if org:
             audit.record(db, organization_id=org.id, actor_email=data.email.lower(), actor_name="",
                          action="login_failed", entity_type="auth", entity_label=data.email.lower(),
@@ -92,9 +96,6 @@ def me(user: Current, db: Db):
 
 
 from pydantic import BaseModel, Field
-from app.core.security import hash_password
-
-
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(min_length=12, max_length=128)
@@ -106,6 +107,10 @@ def change_password(data: PasswordChange, request: Request, user: Current, db: D
         raise HTTPException(400, "Current password is incorrect")
     if data.current_password == data.new_password:
         raise HTTPException(400, "New password must be different")
+    try:
+        validate_password(data.new_password, identity=user.email)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     user.password_hash = hash_password(data.new_password)
     user.token_version += 1
     # End all sessions, including the current one. Client signs in again.

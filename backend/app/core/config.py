@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     secret_key: str = "development-only-change-this-secret-before-deploying"
     access_token_minutes: int = 15
     refresh_token_days: int = 7
+    password_reset_minutes: int = 30
     secure_cookies: bool = False
     # Vendors/PO-SO attachments are stored in the workspace database; this caps one file.
     document_max_size_mb: int = 15

@@ -2,6 +2,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 import jwt
+import re
 from pwdlib import PasswordHash
 from app.core.config import get_settings
 from app.models.entities import RefreshSession
@@ -15,6 +16,21 @@ def hash_password(value: str) -> str:
 
 def verify_password(value: str, hashed: str) -> bool:
     return passwords.verify(value, hashed)
+
+
+def validate_password(value: str, *, identity: str = "") -> str:
+    """One policy for account creation, password changes and recovery."""
+    if not 12 <= len(value) <= 128:
+        raise ValueError("Password must be 12–128 characters")
+    classes = sum(bool(re.search(pattern, value)) for pattern in (r"[a-z]", r"[A-Z]", r"[0-9]", r"[^A-Za-z0-9]"))
+    if classes < 3:
+        raise ValueError("Password must use at least three of: lowercase, uppercase, number, symbol")
+    normalized_identity = identity.strip().lower()
+    if normalized_identity and normalized_identity in value.lower():
+        raise ValueError("Password must not contain the email address")
+    if value.lower() in {"password123!", "changeme123!", "administrator123!"}:
+        raise ValueError("Choose a less predictable password")
+    return value
 
 
 def access_token(user_id: str, organization_id: str, token_version: int) -> str:

@@ -1568,6 +1568,10 @@ def change_status(
         summary=f"AFE {afe.afe_code} {ACTION_LABELS[action]} ({previous} → {next_status})" + (f": {remarks}" if remarks else ""),
         request=request,
     )
+    # Keep the task inbox aligned with the existing AFE state machine. This is
+    # additive: AFE transition rules and permissions remain authoritative.
+    from app.services import workflow
+    workflow.sync_afe_status(db, afe, action, user)
     _commit(db)
     db.refresh(afe)
     return afe_out_for(db, organization_id, afe)

@@ -10,7 +10,7 @@ from pydantic import EmailStr, TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
-from app.core.security import hash_password
+from app.core.security import hash_password, validate_password
 from app.models import Currency, Organization, Permission, Role, User
 
 OWNER_ROLE = "Owner"
@@ -23,6 +23,9 @@ CAPABILITIES = {resource: actions for resource, actions in {
     "permissions": ("read", "create", "update", "delete"),
     "assignments": ("write",),
     "audit": ("read",),
+    "security": ("read", "password-reset", "unlock"),
+    "notifications": ("manage",),
+    "tasks": ("read", "create", "manage"),
     # Other Management → Database Browser. Read shows tables and rows of this workspace;
     # export covers CSV downloads and grid/structure exports. Owners receive both by default.
     "database-browser": ("read", "export"),
@@ -85,9 +88,7 @@ def check_email(value: str) -> str:
 
 
 def check_password(value: str) -> str:
-    if not 12 <= len(value) <= 128:
-        raise ValueError("Password must be 12–128 characters")
-    return value
+    return validate_password(value)
 
 
 def administrators(db: Session) -> list[User]:

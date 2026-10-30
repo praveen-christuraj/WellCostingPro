@@ -52,6 +52,7 @@ from app.models.fuel_cost import (
     FuelCostEntry,
 )
 from app.models.ndt_inspection import NdtInspection
+from app.models.security import PasswordResetAttempt, PasswordResetRequest, UserNotification, WorkflowTask, WorkflowTaskEvent
 from app.models.sow_adjustment import (
     AfeSowAdjustment,
     AfeSowConsumableLine,

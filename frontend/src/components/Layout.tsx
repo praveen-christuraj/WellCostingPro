@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Alert, AppBar, Avatar, Box, Collapse, Drawer, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Menu, MenuItem, Snackbar, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
-import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, KeyboardArrowUpRounded, ChevronLeftRounded, ChevronRightRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, GridViewOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined, SettingsOutlined, StorageOutlined, PlaylistAddCheckRounded, WaterDropOutlined, AssessmentOutlined, LocalGasStationOutlined, ScienceOutlined, Inventory2Outlined, ScheduleRounded, FactCheckOutlined } from '@mui/icons-material'
+import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, KeyboardArrowUpRounded, ChevronLeftRounded, ChevronRightRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, GridViewOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined, SettingsOutlined, StorageOutlined, PlaylistAddCheckRounded, WaterDropOutlined, AssessmentOutlined, LocalGasStationOutlined, ScienceOutlined, Inventory2Outlined, ScheduleRounded, FactCheckOutlined, SecurityRounded, NotificationsOutlined } from '@mui/icons-material'
 import Brand from './Brand'
 import { FormDialog, ErrorMessage } from './Common'
 import { api, body } from '../lib/api'
 import { pageTitle } from '../lib/appInfo'
 import { useAuth } from '../context/AuthContext'
 import { useColorMode } from '../context/ThemeContext'
+import NotificationBell from './NotificationBell'
 
 type NavItem = { label: string; path: string; icon: typeof DashboardOutlined; permission?: string; anyOf?: string[]; requires?: string[] }
 type NavModule = { label: string; icon: typeof DashboardOutlined; items: NavItem[] }
@@ -19,6 +20,7 @@ const modules: NavModule[] = [
     { label: 'Roles', path: '/roles', icon: AdminPanelSettingsOutlined, permission: 'roles:read' },
     { label: 'Permissions', path: '/permissions', icon: VpnKeyOutlined, permission: 'permissions:read' },
     { label: 'Assignments', path: '/assignments', icon: AccountTreeOutlined, permission: 'assignments:write', requires: ['users:read', 'roles:read', 'permissions:read'] },
+    { label: 'Security centre', path: '/security', icon: SecurityRounded, anyOf: ['security:read', 'security:password-reset', 'security:unlock'] },
   ] },
   { label: 'Master Data Management', icon: DataObjectOutlined, items: [
     { label: 'Overview', path: '/master-data', icon: DataObjectOutlined, permission: 'master-data:read' },
@@ -64,7 +66,9 @@ const modules: NavModule[] = [
     { label: 'NPT/UPA report', path: '/reports/npt-upa', icon: ScheduleRounded, permission: 'daily-cost:read' },
   ] },
   { label: 'Other Managements', icon: SettingsOutlined, items: [
-    { label: 'Overview', path: '/other-management', icon: DashboardOutlined, anyOf: ['audit:read', 'database-browser:read'] },
+    { label: 'Overview', path: '/other-management', icon: DashboardOutlined, anyOf: ['audit:read', 'database-browser:read', 'tasks:read'] },
+    { label: 'Task Manager', path: '/other-management/tasks', icon: TaskAltOutlined, permission: 'tasks:read' },
+    { label: 'Notifications', path: '/other-management/notifications', icon: NotificationsOutlined },
     { label: 'Audit Log', path: '/other-management/audit', icon: HistoryOutlined, permission: 'audit:read' },
     { label: 'Database Browser', path: '/other-management/database', icon: StorageOutlined, permission: 'database-browser:read' },
   ] },
@@ -211,6 +215,7 @@ export default function Layout() {
             <Typography fontSize={14} fontWeight={750} noWrap>{currentItem?.label ?? (businessDashboardActive ? 'Dashboard' : 'Workspace')}</Typography>
           </Box>
           <Box display="flex" alignItems="center" gap={1.2} ml="auto" sx={{ flex: '0 0 auto' }}>
+            <NotificationBell/>
             <Tooltip title={mode === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}>
               <IconButton onClick={toggle} size="small" aria-label="Toggle color theme" sx={{ color: 'text.secondary' }}>{mode === 'light' ? <DarkModeOutlined sx={{ fontSize: 20 }}/> : <LightModeOutlined sx={{ fontSize: 20 }}/>}</IconButton>
             </Tooltip>

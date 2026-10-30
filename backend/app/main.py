@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from app.api import afe, auth, audit, business_dashboard, costing_sets, daily_cost, database_browser, fuel_cost, lih_cost, master_data, mud_cost, ndt_inspection, rbac, rig_well, service_master, sow_adjustment, usage_reports, vendor_master
+from app.api import afe, auth, audit, business_dashboard, costing_sets, daily_cost, database_browser, fuel_cost, lih_cost, master_data, mud_cost, ndt_inspection, rbac, rig_well, security, service_master, sow_adjustment, usage_reports, vendor_master
 from app.api.catalogue_items import ITEM_ROUTERS, catalogue_error_handler
 from app.api.catalogue_options import router as catalogue_options_router
 from app.services.catalogue import CatalogueError
@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=settings.app_name, description=settings.app_tagline, version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[s.strip() for s in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(security.router, prefix="/api/v1")
 app.include_router(business_dashboard.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(database_browser.router, prefix="/api/v1")
@@ -54,6 +55,20 @@ for catalogue_router in ITEM_ROUTERS.values():
     app.include_router(catalogue_router, prefix="/api/v1")
 app.add_exception_handler(CatalogueError, catalogue_error_handler)
 app.include_router(master_data.router, prefix="/api/v1")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Apply browser hardening headers to API responses without changing payloads."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    if settings.secure_cookies:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 @app.get("/api/health")

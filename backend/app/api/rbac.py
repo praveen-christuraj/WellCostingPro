@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from app.api.deps import Current, Db, require, owner, granted
-from app.core.security import hash_password
+from app.core.security import hash_password, validate_password
 from app.models import User, Role, Permission
 from app.schemas.rbac import (UserCreate, UserUpdate, UserOut, RoleCreate, RoleUpdate, RoleOut,
                               PermissionCreate, PermissionUpdate, PermissionOut, IDList, Overview)
@@ -75,6 +75,10 @@ def create_user(data: UserCreate, request: Request, db: Db, user: Current):
     assert_assignable(user, roles)
     if any(r.is_owner for r in roles):
         raise HTTPException(403, "Owner role cannot be assigned through this endpoint")
+    try:
+        validate_password(data.password, identity=str(data.email))
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     item = User(organization_id=user.organization_id, email=data.email.lower(), full_name=data.full_name.strip(), password_hash=hash_password(data.password), roles=roles)
     db.add(item)
     flush(db)

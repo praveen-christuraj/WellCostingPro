@@ -1,9 +1,10 @@
 import { useEffect, useId, useState, type FormEvent } from 'react'
-import { Alert, Box, Button, CircularProgress, IconButton, InputAdornment, TextField, Typography } from '@mui/material'
+import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment, TextField, Typography } from '@mui/material'
 import { ArrowForwardRounded, VisibilityOffOutlined, VisibilityOutlined, LockOutlined, HubOutlined } from '@mui/icons-material'
 import { useAuth } from '../context/AuthContext'
 import Brand from '../components/Brand'
 import { APP_NAME, pageTitle } from '../lib/appInfo'
+import { api, body } from '../lib/api'
 
 export default function Login() {
   const { login } = useAuth()
@@ -16,12 +17,34 @@ export default function Login() {
   const [show, setShow] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [recovery, setRecovery] = useState<'request' | 'reset' | null>(null)
+  const [reason, setReason] = useState('')
+  const [resetCode, setResetCode] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [recoveryError, setRecoveryError] = useState('')
+  const [recoveryMessage, setRecoveryMessage] = useState('')
+  const [recoveryBusy, setRecoveryBusy] = useState(false)
   // A brand-new deployment has no owner yet, so say what to run instead of showing a dead sign-in form.
   const [unseeded, setUnseeded] = useState(false)
   // The tab carries the product name and its subtitle, not whatever page was open before sign-out.
   useEffect(() => { document.title = pageTitle() }, [])
   useEffect(() => { fetch('/api/health').then(r => r.json()).then(d => setUnseeded(d.admin_seeded === false)).catch(() => undefined) }, [])
   const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); setError(''); try { await login(organization.trim().toLowerCase(), email.trim(), password) } catch (err) { setError(err instanceof Error ? err.message : 'Unable to sign in') } finally { setBusy(false) } }
+  const requestReset = async () => {
+    setRecoveryBusy(true); setRecoveryError('')
+    try {
+      const result = await api<{ message: string }>('/auth/forgot-password', { method: 'POST', body: body({ organization, email, reason }) })
+      setRecoveryMessage(result.message); setRecovery(null); setReason('')
+    } catch (err) { setRecoveryError((err as Error).message) } finally { setRecoveryBusy(false) }
+  }
+  const completeReset = async () => {
+    setRecoveryBusy(true); setRecoveryError('')
+    try {
+      await api('/auth/reset-password', { method: 'POST', body: body({ organization, email, reset_code: resetCode, new_password: newPassword, confirm_password: confirmPassword }) })
+      setRecoveryMessage('Password updated. Sign in with your new password.'); setRecovery(null); setResetCode(''); setNewPassword(''); setConfirmPassword('')
+    } catch (err) { setRecoveryError((err as Error).message) } finally { setRecoveryBusy(false) }
+  }
   return <Box className="login-shell">
     <Box className="login-story">
       <Box className="story-top">
@@ -60,9 +83,10 @@ export default function Login() {
           <TextField id={passwordField} name="password" fullWidth required type={show ? 'text' : 'password'} placeholder="Enter your password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" InputProps={{ endAdornment: <InputAdornment position="end"><IconButton onClick={() => setShow(!show)} size="small" aria-label={show ? 'Hide password' : 'Show password'}>{show ? <VisibilityOffOutlined fontSize="small"/> : <VisibilityOutlined fontSize="small"/>}</IconButton></InputAdornment> }}/>
           <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mt: 1, mb: 3 }}>
             <Typography fontSize={12} color="text.secondary">Secure workspace sign-in</Typography>
-            <Typography fontSize={12} color="text.secondary">Contact your admin for access</Typography>
+            <Button size="small" variant="text" onClick={() => { setRecovery('request'); setRecoveryError('') }} sx={{ minWidth: 0, p: 0, fontSize: 12 }}>Forgot password?</Button>
           </Box>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+          {recoveryMessage && <Alert severity="success" onClose={() => setRecoveryMessage('')} sx={{ mb: 2 }}>{recoveryMessage}</Alert>}
           <Button type="submit" fullWidth variant="contained" disabled={busy} sx={{ py: 1.55, fontSize: 14 }}>{busy ? <CircularProgress size={22} color="inherit"/> : <>Sign In <ArrowForwardRounded sx={{ ml: 1, fontSize: 18 }}/></>}</Button>
         </Box>
         <Box className="login-trust">
@@ -72,5 +96,30 @@ export default function Login() {
       </Box>
       <Typography className="login-help">Need help? Reach out to your workspace administrator.</Typography>
     </Box>
+    <Dialog open={recovery === 'request'} onClose={() => !recoveryBusy && setRecovery(null)} fullWidth maxWidth="sm">
+      <DialogTitle>Request a password reset</DialogTitle>
+      <DialogContent><Box display="grid" gap={2} pt={1}>
+        <Typography color="text.secondary" fontSize={13}>Your administrator will review this request. For privacy, the response is the same whether or not the account exists.</Typography>
+        <TextField label="Workspace ID" required value={organization} onChange={e => setOrganization(e.target.value)}/>
+        <TextField label="Work email" required type="email" value={email} onChange={e => setEmail(e.target.value)}/>
+        <TextField label="Reason (optional)" multiline minRows={2} value={reason} onChange={e => setReason(e.target.value)}/>
+        {recoveryError && <Alert severity="error">{recoveryError}</Alert>}
+        <Button variant="text" onClick={() => { setRecovery('reset'); setRecoveryError('') }}>I already have an approved reset code</Button>
+      </Box></DialogContent>
+      <DialogActions><Button onClick={() => setRecovery(null)}>Cancel</Button><Button variant="contained" disabled={recoveryBusy || !organization.trim() || !email.trim()} onClick={requestReset}>{recoveryBusy ? 'Sending…' : 'Send request'}</Button></DialogActions>
+    </Dialog>
+    <Dialog open={recovery === 'reset'} onClose={() => !recoveryBusy && setRecovery(null)} fullWidth maxWidth="sm">
+      <DialogTitle>Use an approved reset code</DialogTitle>
+      <DialogContent><Box display="grid" gap={2} pt={1}>
+        <Typography color="text.secondary" fontSize={13}>Enter the single-use code supplied by your workspace administrator.</Typography>
+        <TextField label="Workspace ID" required value={organization} onChange={e => setOrganization(e.target.value)}/>
+        <TextField label="Work email" required type="email" value={email} onChange={e => setEmail(e.target.value)}/>
+        <TextField label="Reset code" required value={resetCode} onChange={e => setResetCode(e.target.value)}/>
+        <TextField label="New password" required type="password" helperText="12–128 characters; use at least three of uppercase, lowercase, number and symbol." value={newPassword} onChange={e => setNewPassword(e.target.value)}/>
+        <TextField label="Confirm new password" required type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}/>
+        {recoveryError && <Alert severity="error">{recoveryError}</Alert>}
+      </Box></DialogContent>
+      <DialogActions><Button onClick={() => setRecovery(null)}>Cancel</Button><Button variant="contained" disabled={recoveryBusy || !resetCode || !newPassword || !confirmPassword} onClick={completeReset}>{recoveryBusy ? 'Updating…' : 'Reset password'}</Button></DialogActions>
+    </Dialog>
   </Box>
 }
