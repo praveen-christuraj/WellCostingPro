@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Alert, AppBar, Avatar, Box, Collapse, Drawer, IconButton, List, ListItemButton, ListItemIcon, ListItemText, Menu, MenuItem, Snackbar, TextField, Toolbar, Tooltip, Typography, useMediaQuery, useTheme } from '@mui/material'
-import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, KeyboardArrowUpRounded, ChevronLeftRounded, ChevronRightRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, GridViewOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined, SettingsOutlined, StorageOutlined, PlaylistAddCheckRounded, WaterDropOutlined, AssessmentOutlined, LocalGasStationOutlined, ScienceOutlined, Inventory2Outlined, ScheduleRounded, FactCheckOutlined, SecurityRounded, NotificationsOutlined } from '@mui/icons-material'
+import { DashboardOutlined, PeopleOutline, AdminPanelSettingsOutlined, VpnKeyOutlined, KeyboardArrowDownRounded, KeyboardArrowUpRounded, ChevronLeftRounded, ChevronRightRounded, LogoutRounded, AccountTreeOutlined, LightModeOutlined, DarkModeOutlined, MenuRounded, HistoryOutlined, DataObjectOutlined, DeleteOutlineRounded, TableChartOutlined, StorefrontOutlined, DescriptionOutlined, BuildOutlined, GridViewOutlined, PrecisionManufacturingOutlined, OpacityOutlined, ListAltOutlined, BusinessOutlined, PublicOutlined, TaskAltOutlined, RequestQuoteOutlined, InsightsOutlined, SettingsOutlined, StorageOutlined, PlaylistAddCheckRounded, WaterDropOutlined, AssessmentOutlined, LocalGasStationOutlined, ScienceOutlined, Inventory2Outlined, ScheduleRounded, FactCheckOutlined, SecurityRounded, NotificationsOutlined, TuneRounded, BackupOutlined } from '@mui/icons-material'
 import Brand from './Brand'
 import { FormDialog, ErrorMessage } from './Common'
 import { api, body } from '../lib/api'
@@ -57,7 +57,9 @@ const modules: NavModule[] = [
     { label: 'Well Cost Analysis', path: '/daily-cost/analysis', icon: InsightsOutlined, permission: 'daily-cost:read' },
   ] },
   { label: 'Reports', icon: AssessmentOutlined, items: [
-    { label: 'Overview', path: '/reports', icon: AssessmentOutlined, anyOf: ['rig-well:read', 'afe:read', 'daily-cost:read'] },
+    { label: 'Overview', path: '/reports', icon: AssessmentOutlined, anyOf: ['rig-well:read', 'afe:read', 'daily-cost:read', 'report-builder:read', 'custom-reports:read'] },
+    { label: 'Report Builder', path: '/reports/builder', icon: TuneRounded, anyOf: ['report-builder:read', 'report-builder:create', 'report-builder:update'] },
+    { label: 'Custom Reports', path: '/reports/custom', icon: AssessmentOutlined, permission: 'custom-reports:read' },
     { label: 'Well-wise cost comparisons', path: '/reports/well-cost-comparison', icon: InsightsOutlined, requires: ['rig-well:read'], anyOf: ['afe:read', 'daily-cost:read'] },
     { label: 'Consumption and losses', path: '/reports/consumption-losses', icon: WaterDropOutlined, permission: 'daily-cost:read' },
     { label: 'Mud chemicals usage', path: '/reports/mud-chemicals-usage', icon: ScienceOutlined, permission: 'daily-cost:read' },
@@ -68,11 +70,14 @@ const modules: NavModule[] = [
     { label: 'NPT/UPA report', path: '/reports/npt-upa', icon: ScheduleRounded, permission: 'daily-cost:read' },
   ] },
   { label: 'Other Managements', icon: SettingsOutlined, items: [
-    { label: 'Overview', path: '/other-management', icon: DashboardOutlined, anyOf: ['audit:read', 'database-browser:read', 'tasks:read'] },
+    { label: 'Overview', path: '/other-management', icon: DashboardOutlined, anyOf: ['audit:read', 'database-browser:read', 'tasks:read', 'backup:read'] },
     { label: 'Task Manager', path: '/other-management/tasks', icon: TaskAltOutlined, permission: 'tasks:read' },
     { label: 'Notifications', path: '/other-management/notifications', icon: NotificationsOutlined },
     { label: 'Audit Log', path: '/other-management/audit', icon: HistoryOutlined, permission: 'audit:read' },
     { label: 'Database Browser', path: '/other-management/database', icon: StorageOutlined, permission: 'database-browser:read' },
+    // Backup & Recovery opens for anybody who can do any of its actions; each
+    // button inside is separately gated by its own capability.
+    { label: 'Backup & Recovery', path: '/other-management/backup', icon: BackupOutlined, anyOf: ['backup:read', 'backup:create', 'backup:delete', 'backup:settings', 'backup:restore-request', 'backup:restore-approve', 'backup:restore-execute'] },
   ] },
 ]
 

@@ -29,6 +29,15 @@ CAPABILITIES = {resource: actions for resource, actions in {
     # Other Management → Database Browser. Read shows tables and rows of this workspace;
     # export covers CSV downloads and grid/structure exports. Owners receive both by default.
     "database-browser": ("read", "export"),
+    # Backup & Recovery keeps taking backups, downloading them, deleting them and
+    # applying a restore in separate hands. The restore is a two-person workflow.
+    "backup": (
+        "read", "create", "download", "delete", "settings",
+        "restore-request", "restore-approve", "restore-execute",
+    ),
+    # Report Builder (designing) and Custom Reports (running what was published).
+    "report-builder": ("read", "create", "update", "delete", "publish"),
+    "custom-reports": ("read", "export"),
     "master-data": (
         "read", "create", "update", "delete", "restore", "permanent-delete", "import", "export",
         # Vendors and PO/SO Orders keep scanned copies; document custody is separately grantable.

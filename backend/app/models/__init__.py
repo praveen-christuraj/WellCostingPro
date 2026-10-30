@@ -75,3 +75,22 @@ from app.models.sow_adjustment import (
     WellPlanAdjustmentPhase,
     WellPlanAdjustmentSection,
 )
+from app.models.backup import (
+    BackupJob,
+    BackupJobTable,
+    BackupRestoreRequest,
+    BackupSettings,
+    BackupValidation,
+    BackupValidationTable,
+)
+from app.models.report_builder import (
+    ReportDefinition,
+    ReportDefinitionColumn,
+    ReportDefinitionCondition,
+    ReportDefinitionFilter,
+    ReportDefinitionGrant,
+    ReportDefinitionGrouping,
+    ReportDefinitionRuntimeFilter,
+    ReportDefinitionSort,
+    ReportDefinitionVersion,
+)
