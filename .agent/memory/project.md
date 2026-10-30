@@ -433,3 +433,8 @@ Ported from the `hydrocarbon-accounting-otms` reference (its `REPORT_BUILDER.md`
 - `npx tsc --noEmit` clean, `npm run build` clean, `make ui-check` **33 checks**, `make graph` regenerated.
 - Live preview check: a jsdom harness mounted `BackupRecovery`, `ReportBuilder`, `CustomReports`, `ReportDesigner` and `CustomReportViewer` against the running API and each rendered real data (archive `BKP-20261030-0001`, report card `AFE register`, viewer rows `AFE-0001`) with no console errors. `CustomReportViewer` now shows a sentence instead of an endless spinner if its address lacks a report id.
 - Demo environment used for the check: SQLite `/tmp/demo/db.sqlite3`, workspace `demo` ("Demo Energy"), owner `owner@demo.example.com` / `demo-password-123`, seeded wells/AFEs/vendors plus two published reports.
+
+## Daily Cost amendment-history schema repair (2026-10-30)
+
+- Root cause of reference `c693232d3315`: `DailyCostAmendment.created_at` existed in the ORM model and response query, but migration `e7f2a1c9b305` omitted the physical column. Opening a Daily Cost Sheet loaded the sheet, baseline and reference data successfully, then the non-blocking amendment-history request failed on PostgreSQL with `UndefinedColumn` and raised the global error pop-up.
+- Migration `f9a2c7d4e611` adds the missing timestamp, backfills existing amendments from their authoritative `reopened_at` event time, and only then enforces `NOT NULL`. The downgrade removes only that column. A migration regression starts at the prior head, preserves/backfills a legacy amendment, verifies the constraint, and exercises downgrade.
