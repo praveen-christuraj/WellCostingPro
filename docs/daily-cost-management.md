@@ -8,6 +8,7 @@
    - Remove workspace KPI cards, charts, cost-group budgets and recent activity.
    - Remove the misleading actual-to-date column calculated from the filtered register. Cumulative reconciliation remains on individual sheets and well analysis.
    - Stop requesting the workspace overview on this page; retain the existing API for compatibility.
+   - Starting a sheet validates the independent well plan selected by the AFE's `configuration_scope`. A Completion AFE requires the active, configured Completion sections/phases and Completion sub-activities; it does not require an active/configured Drilling plan. Drilling AFEs retain the equivalent Drilling checks.
 
 2. **Scoped summaries**
    - Retain the existing sheet-specific daily totals and locked AFE comparison.

@@ -337,12 +337,20 @@ def _active_master(db: Session, model: Any, record_id: str, organization_id: str
     return row
 
 
-def _well_or_422(db: Session, organization_id: str, well_id: str) -> Well:
+def _well_or_422(
+    db: Session,
+    organization_id: str,
+    well_id: str,
+    configuration_scope: str = "drilling",
+) -> Well:
+    scope = configuration_scope if configuration_scope in ("drilling", "completion") else "drilling"
     well = db.scalars(
         select(Well)
         .options(
             joinedload(Well.rig), selectinload(Well.sections).selectinload(WellSection.hole_section),
             selectinload(Well.sections).selectinload(WellSection.phases).joinedload(WellPhase.phase),
+            selectinload(Well.completion_sections).selectinload(WellSection.hole_section),
+            selectinload(Well.completion_sections).selectinload(WellSection.phases).joinedload(WellPhase.phase),
         )
         .where(Well.id == well_id, Well.organization_id == organization_id, Well.is_deleted.is_(False))
     ).unique().first()
@@ -350,10 +358,18 @@ def _well_or_422(db: Session, organization_id: str, well_id: str) -> Well:
         raise HTTPException(status_code=422, detail="Select an active well from this workspace")
     if well.rig is None or well.rig.organization_id != organization_id or well.rig.is_deleted:
         raise HTTPException(status_code=409, detail="Restore the well's rig before tracking daily costs")
-    if well.status != "active":
-        raise HTTPException(status_code=409, detail="Daily costs cannot be started for a completed well")
-    if well.config_status != "configured" or not well.sections:
-        raise HTTPException(status_code=422, detail="Configure and sign off the well's section and phase plan before tracking costs")
+    if well.scope_is_deleted(scope):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Restore the {scope} scope on {well.well_code} in Rig & Well Management before entering daily costs.",
+        )
+    if well.scope_value(scope, "status") != "active":
+        raise HTTPException(status_code=409, detail=f"Daily costs cannot be started for a completed {scope} scope")
+    if well.scope_value(scope, "config_status") != "configured" or not well.sections_for_scope(scope):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Configure and sign off the well's {scope} section and phase plan before tracking costs",
+        )
     return well
 
 
@@ -928,14 +944,11 @@ def _created_day_or_503(db: Session, organization_id: str, entry_id: str) -> Dai
 def create_entry(db: Session, organization_id: str, data: DailyCostEntryCreate, user: User, request: Request | None) -> DailyCostDayOut:
     try:
         with _WRITE_LOCK:
-            well = _well_or_422(db, organization_id, data.well_id)
-            afe = _afe_or_422(db, organization_id, data.afe_id, well.id)
+            # The AFE selects the independent Drilling or Completion well plan.
+            # Validate that scope, never the legacy Drilling columns by default.
+            afe = _afe_or_422(db, organization_id, data.afe_id, data.well_id)
             entry_scope = afe.configuration_scope if afe.configuration_scope in ("drilling", "completion") else "drilling"
-            if well.scope_is_deleted(entry_scope):
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Restore the {entry_scope} scope on {well.well_code} in Rig & Well Management before entering daily costs.",
-                )
+            well = _well_or_422(db, organization_id, data.well_id, entry_scope)
             has_sub_activity = db.scalar(
                 select(WellSubActivity.id).where(
                     WellSubActivity.organization_id == organization_id,

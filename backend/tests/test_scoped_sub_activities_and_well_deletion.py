@@ -208,6 +208,57 @@ def _create_afe_with_estimate(client: TestClient, headers: dict[str, str], rig_i
     return afe.json()
 
 
+def test_daily_cost_creation_uses_the_completion_plan_selected_by_the_afe():
+    with TestClient(app) as client:
+        headers = login(client)
+        seed = _bootstrap_master_data(client, headers)
+        well = client.post(
+            "/api/v1/rig-well/wells",
+            headers=headers,
+            json={
+                "rig_id": seed["rig"]["id"], "block_id": seed["block"]["id"],
+                "well_code": "WELL-COMP-ONLY", "well_name": "Completion Only Well",
+                "well_location": "OML North", "objective": "Completion operations",
+                "scopes": ["completion"],
+            },
+        )
+        assert well.status_code == 201, well.text
+        well_id = well.json()["id"]
+
+        _configure_well_scope(
+            client, headers, well_id, seed["hole"]["id"], seed["phase"]["id"], "completion",
+        )
+        sub_activity = client.post(
+            "/api/v1/rig-well/sub-activities",
+            headers=headers,
+            json={
+                "well_id": well_id, "scope": "completion", "sub_activity_code": "COMP-OPS",
+                "sub_activity_name": "Run completion string", "activity_id": seed["activity"]["id"],
+                "responsible_party": "Not Applicable", "description": "Completion activity",
+            },
+        )
+        assert sub_activity.status_code == 201, sub_activity.text
+        afe = _create_afe_with_estimate(
+            client, headers, seed["rig"]["id"], well_id, seed["service"]["id"],
+            "AFE-COMP-001", "completion",
+        )
+
+        created = client.post(
+            "/api/v1/daily-cost/entries",
+            headers=headers,
+            json={
+                "well_id": well_id, "afe_id": afe["id"],
+                "cost_date": "2026-10-30", "remarks": "Completion day 1",
+            },
+        )
+        assert created.status_code in (200, 201), created.text
+        baseline = client.get(
+            f"/api/v1/daily-cost/entries/{created.json()['entry']['id']}/baseline", headers=headers,
+        )
+        assert baseline.status_code == 200, baseline.text
+        assert [row["hole_section_id"] for row in baseline.json()["sections"]] == [seed["hole"]["id"]]
+
+
 def test_sub_activities_and_well_deletion_are_strictly_scope_specific():
     with TestClient(app) as client:
         headers = login(client)
