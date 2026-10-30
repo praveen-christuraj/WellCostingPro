@@ -4,6 +4,9 @@ Revision ID: c3d7e9f1a204
 Revises: a8d4f2c9e731
 """
 
+from datetime import datetime, timezone
+from uuid import uuid4
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -115,6 +118,26 @@ def upgrade():
     op.create_index("ix_workflow_task_events_task_id", "workflow_task_events", ["task_id"])
 
     connection = op.get_bind()
+    organizations = sa.table("organizations", sa.column("id", sa.String(36)))
+    permissions = sa.table(
+        "permissions",
+        sa.column("id", sa.String(36)),
+        sa.column("organization_id", sa.String(36)),
+        sa.column("key", sa.String(100)),
+        sa.column("description", sa.String(500)),
+        sa.column("created_at", sa.DateTime(timezone=True)),
+    )
+    roles = sa.table(
+        "roles",
+        sa.column("id", sa.String(36)),
+        sa.column("organization_id", sa.String(36)),
+        sa.column("is_owner", sa.Boolean()),
+    )
+    role_permissions = sa.table(
+        "role_permissions",
+        sa.column("role_id", sa.String(36)),
+        sa.column("permission_id", sa.String(36)),
+    )
     capabilities = {
         "security:read": "Read security centre",
         "security:password-reset": "Review password reset requests",
@@ -124,15 +147,41 @@ def upgrade():
         "tasks:create": "Create workflow tasks",
         "tasks:manage": "Manage workflow tasks",
     }
-    for key, description in capabilities.items():
-        rows = connection.execute(sa.text("SELECT id FROM organizations")).fetchall()
-        for (organization_id,) in rows:
-            permission_id = connection.execute(sa.text("SELECT id FROM permissions WHERE organization_id=:org AND key=:key"), {"org": organization_id, "key": key}).scalar()
+    for (organization_id,) in connection.execute(sa.select(organizations.c.id)):
+        owner_role_ids = connection.execute(
+            sa.select(roles.c.id).where(
+                roles.c.organization_id == organization_id,
+                roles.c.is_owner.is_(True),
+            )
+        ).scalars().all()
+        for key, description in capabilities.items():
+            permission_id = connection.execute(
+                sa.select(permissions.c.id).where(
+                    permissions.c.organization_id == organization_id,
+                    permissions.c.key == key,
+                )
+            ).scalar_one_or_none()
             if permission_id is None:
-                import uuid
-                permission_id = str(uuid.uuid4())
-                connection.execute(sa.text("INSERT INTO permissions (id, organization_id, key, description, created_at) VALUES (:id,:org,:key,:description,CURRENT_TIMESTAMP)"), {"id": permission_id, "org": organization_id, "key": key, "description": description})
-            connection.execute(sa.text("INSERT INTO role_permissions (role_id, permission_id) SELECT id, :permission FROM roles WHERE organization_id=:org AND is_owner=true AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id=roles.id AND rp.permission_id=:permission)"), {"permission": permission_id, "org": organization_id})
+                permission_id = str(uuid4())
+                connection.execute(permissions.insert().values(
+                    id=permission_id,
+                    organization_id=organization_id,
+                    key=key,
+                    description=description,
+                    created_at=datetime.now(timezone.utc),
+                ))
+            for owner_role_id in owner_role_ids:
+                assigned = connection.execute(
+                    sa.select(role_permissions.c.role_id).where(
+                        role_permissions.c.role_id == owner_role_id,
+                        role_permissions.c.permission_id == permission_id,
+                    )
+                ).first()
+                if assigned is None:
+                    connection.execute(role_permissions.insert().values(
+                        role_id=owner_role_id,
+                        permission_id=permission_id,
+                    ))
 
 
 def downgrade():
