@@ -1,5 +1,8 @@
 # Durable project memory
 
+## Docker PostgreSQL version (2026-10-31)
+- Docker Compose uses `postgres:17-alpine`. Existing PostgreSQL 16 data volumes require a PostgreSQL major-version upgrade (for example, dump and restore into a fresh PostgreSQL 17 volume); changing the image does not migrate existing database files.
+
 ## Product scope
 WellCostIQ (subtitle: Well Cost Estimation & Tracking) is a tenant-aware SaaS foundation. The current increment covers authentication, user/role/permission CRUD, assignments, workspace and module dashboards, an audit trail, Master Data Management for UOM, Currency, Phases, Hole Sections, Activities, Services, Vendors, and PO/SO Orders (with attachments and amendment revisions), plus Rig & Well Management, AFE Management (AFE register, cost estimation, approvals), Daily Cost Management (daily cost sheets, whole-well cost analysis), the Reports module (well-wise cost comparisons and Consumption/Losses reporting from existing permission-scoped APIs), **Backup & Recovery** (workspace archives, checksums, retention, import/download, two-person restore) and the **Report Builder / Custom Reports** pair (a six-step report designer and the published reports readers run, print and export). Report amounts remain grouped by currency, and exports are audited through the source modules. Project domain entities and workflows beyond these modules are **not implemented yet**.
 

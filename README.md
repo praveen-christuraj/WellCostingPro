@@ -4,7 +4,7 @@
 
 ## Stack
 
-React 19 · TypeScript · Material UI 7 · AG Grid Community · ECharts · FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL 16. SQLite is available for local smoke tests when PostgreSQL is not installed.
+React 19 · TypeScript · Material UI 7 · AG Grid Community · ECharts · FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL 17 (Alpine). SQLite is available for local smoke tests when PostgreSQL is not installed.
 
 ## Run with PostgreSQL (recommended)
 
@@ -18,6 +18,8 @@ React 19 · TypeScript · Material UI 7 · AG Grid Community · ECharts · FastA
 4. Sign in with workspace ID `my-company`, owner email and the password you entered. Create users, roles, permissions, and assignments from the UI. No demo users or passwords are shipped.
 
 Production deployments should terminate HTTPS at a trusted proxy and set `SECURE_COOKIES=true`.
+
+Compose uses `postgres:17-alpine`. If your `postgres_data` volume was initialized with PostgreSQL 16, back it up and migrate it using `pg_upgrade` or dump/restore into a fresh PostgreSQL 17 volume before starting this version. Changing the image alone does not upgrade existing database files; do not delete a volume containing data you need.
 
 ## Run locally without Docker
 
