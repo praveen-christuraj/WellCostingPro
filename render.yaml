@@ -8,7 +8,7 @@ services:
     runtime: python
     plan: free # choose a paid instance for an always-on service
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.lock
     # Keep migrations in the start command for this Free Blueprint. Paid services
     # can use preDeployCommand and run only Uvicorn in startCommand.
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
@@ -22,6 +22,8 @@ services:
       - key: DATABASE_URL
         sync: false
       # Generate with: openssl rand -hex 32  (unique per environment, at least 32 characters)
+      - key: ENVIRONMENT
+        value: "production"
       - key: SECRET_KEY
         sync: false
       # Vercel is HTTPS, so the refresh cookie must be Secure.
