@@ -43,6 +43,12 @@ export async function api<T>(path: string, options: ApiOptions = {}, retry = tru
     const payload = await response.json().catch(() => ({}))
     const detail = await deploymentAwareDetail(payload.detail, response.status)
     const error = apiError(detail, response.status, action)
+    // A security action (or an aged-out password) can close the workspace mid-session.
+    // Re-read the account so the password gate appears instead of a wall of 403s.
+    if (response.status === 403 && /requires a new password/i.test(error.message)) {
+      window.dispatchEvent(new Event('account-updated'))
+      throw error
+    }
     if (!silent && response.status !== 401) notifyError(error)
     throw error
   }

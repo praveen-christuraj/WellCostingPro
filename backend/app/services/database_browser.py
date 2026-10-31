@@ -31,6 +31,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm import Session
 
+from app.core.spreadsheets import safe_csv_cell
+
 # Tables that are internal plumbing or hold session secrets: never listed.
 HIDDEN_TABLES = frozenset({"alembic_version", "refresh_sessions"})
 # Columns that hold credentials, token material or lockout state: never shown.
@@ -243,6 +245,11 @@ def _csv_cell(value) -> str:
         return ""
     if isinstance(value, bool):
         text = "true" if value else "false"
+    elif isinstance(value, (int, float, Decimal)):
+        # A typed number keeps its exact text: prefixing "-12" with an apostrophe
+        # would turn arithmetic data into text and break reconciliation. A numeric
+        # cell is never a formula, so no neutralisation is needed here.
+        return str(value)
     elif isinstance(value, (datetime, date, time)):
         text = value.isoformat()
     elif isinstance(value, (bytes, bytearray, memoryview)):
@@ -250,9 +257,9 @@ def _csv_cell(value) -> str:
     else:
         text = str(value)
     # Keep spreadsheet applications from evaluating database text as a formula.
-    if text[:1] in ("=", "+", "@", "\t", "\r"):
-        text = "'" + text
-    return text
+    # One shared helper, so a new leading character cannot be forgotten here and
+    # remembered somewhere else (the previous local list missed "-" and spaces).
+    return safe_csv_cell(text)
 
 
 def export_csv(db: Session, bt: BrowsableTable, organization_id: str) -> tuple[tempfile.SpooledTemporaryFile, int]:

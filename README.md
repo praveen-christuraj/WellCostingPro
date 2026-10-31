@@ -77,7 +77,9 @@ Set `TEST_DATABASE_URL` (for example a PostgreSQL URL) to run the backend suite 
 - `.agent/` and `AGENTS.md` — committed Graphify tool, architecture graph, durable AI memory and agent workflows; not in `.gitignore`.
 - `frontend/src/designSystem.ts` — the design tokens (navy ramp, surfaces, semantics, type scale, spacing, radii, shadows, motion, AG Grid skin) composed into `theme.ts` and mirrored as `--wcp-*` variables in `styles.css`. Rules and the accessibility checklist are in `.agent/memory/design-system.md`; `make ui-check` asserts them in light and dark. The whole layer is reversible: **`make ui-rollback`** restores the pre-design-layer interface.
 - `docs/ci-template.yml` — backend test/migration and frontend build CI template; copy to `.github/workflows/ci.yml` when a GitHub connection with workflow permissions is available.
-- `docs/SECURITY_MANUAL.md` — plain-language user guidance plus the IT deployment, incident-response and security-control checklist.
+- `docs/SECURITY_MANUAL.md` — plain-language user guidance (including password expiry and mandatory-change rules) plus the IT deployment, incident-response and security-control checklist.
+- `docs/SECURITY_AUDIT_FINAL.md` — the IT handover: findings, the disposition of the previous 24-item checklist, the implemented password lifecycle, executed evidence, residual risks and the go-live checklist. Start here.
+- `docs/SECURITY_VALIDATION.md` — what was actually executed (backend suite, migration round trip, frontend build/tests, dependency and static analysis) and what remains untested.
 
 ### Reference projects
 

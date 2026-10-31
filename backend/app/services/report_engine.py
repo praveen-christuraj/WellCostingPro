@@ -33,6 +33,7 @@ from sqlalchemy import Date as SADate, DateTime as SADateTime, and_, select
 from sqlalchemy.orm import Session
 
 from app.models import ReportDefinition
+from app.core.spreadsheets import safe_csv_cell
 from app.services import report_formula as formula
 from app.services.report_catalog import (
     CatalogError,
@@ -1383,12 +1384,16 @@ def describe_definition(design: dict) -> list[str]:
 def export_csv(design: dict, result: dict, title: str) -> bytes:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow([column["label"] for column in result["columns"]])
+    # Every cell — headers included, because a column label is user-defined text —
+    # is passed through the shared neutraliser. A spreadsheet must treat a stored
+    # value beginning with =, +, -, @ or a control/space prefix as data, not as a
+    # formula it should execute on open.
+    writer.writerow([safe_csv_cell(column["label"]) for column in result["columns"]])
     for row in result["rows"]:
-        writer.writerow([row.get(column["key"], "") for column in result["columns"]])
+        writer.writerow([safe_csv_cell(row.get(column["key"], "")) for column in result["columns"]])
     totals = result.get("totals")
     if totals:
-        writer.writerow([totals.get(column["key"], "") for column in result["columns"]])
+        writer.writerow([safe_csv_cell(totals.get(column["key"], "")) for column in result["columns"]])
     text = buffer.getvalue()
     # Excel reads a UTF-8 BOM as UTF-8 and keeps non-ASCII labels intact.
     return ("\ufeff" + text).encode("utf-8")

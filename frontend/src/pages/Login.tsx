@@ -26,11 +26,8 @@ export default function Login() {
   const [recoveryError, setRecoveryError] = useState('')
   const [recoveryMessage, setRecoveryMessage] = useState('')
   const [recoveryBusy, setRecoveryBusy] = useState(false)
-  // A brand-new deployment has no owner yet, so say what to run instead of showing a dead sign-in form.
-  const [unseeded, setUnseeded] = useState(false)
   // The tab carries the product name and its subtitle, not whatever page was open before sign-out.
   useEffect(() => { document.title = pageTitle() }, [])
-  useEffect(() => { fetch('/api/health').then(r => r.json()).then(d => setUnseeded(d.admin_seeded === false)).catch(() => undefined) }, [])
   const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); setError(''); try { await login(organization.trim().toLowerCase(), email.trim(), password) } catch (err) { setError(err instanceof Error ? err.message : 'Unable to sign in') } finally { setBusy(false) } }
   const requestReset = async () => {
     setRecoveryBusy(true); setRecoveryError('')
@@ -74,7 +71,6 @@ export default function Login() {
         <Box className="login-icon"><LockOutlined sx={{ fontSize: 24 }}/></Box>
         <Typography variant="h4" sx={{ fontSize: { xs: 28, sm: 32 }, letterSpacing: '-1.4px', mt: 3, mb: 1 }}>Welcome back</Typography>
         <Typography color="text.secondary" fontSize={14}>Sign in to continue.</Typography>
-        {unseeded && <Alert severity="warning" sx={{ mt: 3, fontSize: 13 }}><strong>This deployment has no administrator yet.</strong> On the API host run <Box component="code" sx={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>python -m app.seed</Box> to create the first workspace owner, then reload this page.</Alert>}
         <Box component="form" onSubmit={submit} sx={{ mt: 4.5 }}>
           <Typography component="label" htmlFor={orgField} className="field-label">WORKSPACE ID</Typography>
           <TextField id={orgField} name="organization" fullWidth required placeholder="e.g. acme-energy" value={organization} onChange={e => setOrganization(e.target.value)} autoComplete="organization" sx={{ mb: 2.5 }}/>

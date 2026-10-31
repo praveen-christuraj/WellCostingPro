@@ -49,6 +49,9 @@ class User(Base):
     # While this is set, only the account-recovery endpoints are reachable.
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When the current password stops being accepted. Derived from policy at the
+    # moment of each change; NULL on legacy rows is resolved from ``created_at``.
+    password_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     roles: Mapped[list["Role"]] = relationship(secondary=user_roles, back_populates="users", lazy="selectin")
@@ -86,6 +89,10 @@ class RefreshSession(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    # Rotation keeps the consumed row so a replayed token can be detected: a
+    # revoked token presented again is treated as theft, not as "unknown".
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replaced_by_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user: Mapped[User] = relationship(back_populates="sessions")
 
 

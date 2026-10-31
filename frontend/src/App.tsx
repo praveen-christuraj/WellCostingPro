@@ -99,7 +99,7 @@ export default function App() {
         <Route path="/login" element={<Navigate to="/" replace/>}/>
         <Route element={<Layout/>}>
           <Route index element={<Landing/>}/>
-          <Route path="dashboard" element={<Overview/>}/>
+          <Route path="dashboard" element={<GuardAny permissions={['users:read', 'roles:read', 'permissions:read']}><Overview/></GuardAny>}/>
           <Route path="business-dashboard" element={<GuardAny permissions={['rig-well:read', 'afe:read', 'daily-cost:read']}><BusinessDashboard/></GuardAny>}/>
           <Route path="users" element={<Guard permission="users:read"><Users/></Guard>}/>
           <Route path="roles" element={<Guard permission="roles:read"><Roles/></Guard>}/>

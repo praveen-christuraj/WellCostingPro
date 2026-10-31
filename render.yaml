@@ -29,6 +29,18 @@ services:
       # Vercel is HTTPS, so the refresh cookie must be Secure.
       - key: SECURE_COOKIES
         value: "true"
+      # Render's edge is not a fixed address range, so the API treats the peer
+      # connection as the client. Leave this blank unless Render provides static
+      # proxy addresses for your plan; put distributed rate limits at the edge.
+      - key: TRUSTED_PROXY_IPS
+        sync: false
+      # Password age and sign-in budgets.
+      - key: PASSWORD_MAX_AGE_DAYS
+        value: "90"
+      - key: MAX_FAILED_LOGINS
+        value: "5"
+      - key: LOCKOUT_MINUTES
+        value: "15"
       # Exact Vercel origin(s), comma-separated, e.g. https://wellcostiq.vercel.app
       - key: CORS_ORIGINS
         sync: false

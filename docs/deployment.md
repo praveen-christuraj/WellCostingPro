@@ -4,7 +4,7 @@ This guide deploys the three parts of the application to three managed services:
 
 ```
 Browser ──HTTPS──▶ Vercel   (React SPA, static files)
-                     │  /api/*, /docs, /openapi.json  (rewrites proxy — same-origin)
+                     │  /api/*  (rewrite proxies — same-origin from the browser)
                      ▼
                   Render   (FastAPI + uvicorn, Python web service)
                      │  DATABASE_URL
@@ -28,7 +28,9 @@ Estimated setup time: 30–60 minutes, excluding time spent troubleshooting prov
 - Vercel must build from `frontend/`; its frontend calls relative `/api/v1` URLs and requires no `VITE_API_URL`.
 - `frontend/vercel.json` must contain the actual Render hostname. If the Render
   service is renamed, update every external rewrite and redeploy Vercel.
-- `GET /api/health` **is not a database-readiness check**: the application catches database errors and can still return HTTP 200 with `{"status":"ok","admin_seeded":false}`. Use migration logs and `admin_seeded:true` to verify first-run setup.
+- `GET /api/health` is a **liveness** check that returns only `{"status":"ok","api_version":"..."}`. It deliberately does not disclose whether an administrator exists, and it is not a database-readiness check. Confirm first-run setup from the Render logs (`Seeded administrator ...`) and by signing in.
+- The migration head is **`b7c1d9e4f2a8`** (password expiry and refresh-token replay detection). Render's start command must run `alembic upgrade head` before Uvicorn.
+- The browser sends an `Origin` header through the Vercel rewrite, so `CORS_ORIGINS` must list the exact Vercel origin (or custom domain) even though the browser sees a same-origin URL.
 - Render's current default Python runtime may differ from the one used during development. **Pin Python 3.12** as shown below rather than relying on Render's default.
 
 ---
@@ -181,10 +183,10 @@ Notes:
   minutes without inbound traffic; waking it can take about a minute. The API
   filesystem is ephemeral, so keep the database on Supabase, not local SQLite.
 - Verify the deploy at `https://<actual-service-url>.onrender.com/api/health`.
-  A response to this endpoint is **not** proof of database connectivity: the code catches database errors and can return HTTP 200 with `admin_seeded:false`. A successfully migrated and seeded database should include `"status":"ok"` and
-  `"admin_seeded":false` before provisioning or `true` afterwards. This endpoint
-  is a liveness check: if it reports `false`, inspect Render logs as well,
-  because an unavailable database can also prevent the owner check.
+  It should return `{"status":"ok","api_version":"..."}`. This is a liveness
+  check only: it is **not** proof of database connectivity and it no longer
+  discloses setup state. Confirm the database and the first administrator from
+  the Render logs and by signing in once.
 - Verify migrations in the Render deploy/runtime logs: they should complete
   before Uvicorn starts. If the log says `alembic: command not found`, check
   that `pip install -r requirements.txt` succeeded and that the root directory
@@ -219,19 +221,17 @@ Notes:
    {
      "rewrites": [
        { "source": "/api/:path*", "destination": "https://wellcosting-api.onrender.com/api/:path*" },
-       { "source": "/docs", "destination": "https://wellcosting-api.onrender.com/docs" },
-       { "source": "/openapi.json", "destination": "https://wellcosting-api.onrender.com/openapi.json" },
-       { "source": "/(.*)", "destination": "/index.html" }
+       { "source": "/((?!api/).*)", "destination": "/index.html" }
      ]
    }
    ```
 
-   Keep the three backend rewrites—`/api/...` for the application, `/docs` for
-   API documentation, and `/openapi.json` for the schema—before the final
-   `/(.*)` → `/index.html` SPA fallback. The fallback lets React Router serve
-   direct visits and browser refreshes such as `/login`; without it Vercel
-   returns 404 for client-side routes. Vercel reads this file
-   from the project root directory (`frontend/`). See
+   Keep the single `/api/...` backend rewrite before the SPA fallback. Do **not**
+   add `/docs`, `/redoc` or `/openapi.json` rewrites: production disables the
+   API documentation, and the repository's `vercel.json` refuses those paths.
+   The fallback lets React Router serve direct visits and browser refreshes such
+   as `/login`; without it Vercel returns 404 for client-side routes. Vercel reads
+   this file from the project root directory (`frontend/`). See
    [Vercel project configuration](https://vercel.com/docs/project-configuration)
    for details about `vercel.json`.
 5. Commit and push this `vercel.json` change to the production branch. Vercel
@@ -245,9 +245,10 @@ Notes:
    exact origin (scheme + hostname, with no path/trailing slash); include any
    custom domain as another comma-separated origin. Save and redeploy. No
    `VITE_*` variables are needed in Vercel.
-8. Open `https://<your-vercel-domain>/api/health`. It should return the Render
-   health response through Vercel's rewrite. Also check
-   `https://<your-vercel-domain>/docs` to confirm the API docs rewrite works.
+8. Open `https://<your-vercel-domain>/api/health`. It should return
+   `{"status":"ok","api_version":"..."}` through Vercel's rewrite. Confirm that
+   `https://<your-vercel-domain>/docs` returns **404** — that is the intended
+   production behaviour, not a fault.
 
 **Custom domain (optional):** *Project → Settings → Domains*, add and verify
 your domain. Add its exact HTTPS origin to Render's `CORS_ORIGINS` (comma
@@ -266,9 +267,11 @@ deploy, including Free):** before the first API start, set all five variables:
 `SEED_ADMIN_PASSWORD` (§2). Use a workspace slug such as `my-company`, a valid
 owner email, and a unique password of at least 12 characters. The API applies
 Alembic migrations first, then creates the initial workspace and owner from
-these values. Wait for Render logs to report `Seeded administrator ...`, verify `admin_seeded:true`, and **successfully sign in once**. Only then **remove `SEED_ADMIN_PASSWORD`** from Render's Environment page and redeploy.
-Removing the other four seed values is also recommended. Verify the health
-response shows `"admin_seeded":true`.
+these values. Wait for Render logs to report `Seeded administrator ...`, then
+**sign in once successfully**. Only then **remove `SEED_ADMIN_PASSWORD`** from
+Render's Environment page and redeploy. Removing the other four seed values is
+also recommended. The health endpoint intentionally does not report setup state,
+so the log line and a successful sign-in are the evidence.
 
 **Option B — from your computer against Supabase:** use the same Session pooler
 `DATABASE_URL` as Render and run the seeding CLI from `backend/`. This requires
@@ -294,7 +297,11 @@ e-mail and the password you chose.
 - [ ] `SEED_ADMIN_PASSWORD` deleted from Render after the first boot.
 - [ ] Sign-in works and the Overview page loads data through the proxy.
 - [ ] `GET /api/health` through both Render and Vercel returns
-      `{"status":"ok","admin_seeded":true}`.
+      `{"status":"ok","api_version":"..."}` and nothing else.
+- [ ] `GET /docs`, `/redoc` and `/openapi.json` return 404 in production.
+- [ ] `PASSWORD_MAX_AGE_DAYS=90`, `PASSWORD_HISTORY_LIMIT=5`, `MAX_FAILED_LOGINS=5`,
+      `LOCKOUT_MINUTES=15` are set (or the documented defaults are accepted), and
+      `TRUSTED_PROXY_IPS` is empty on Render because the API is directly reachable.
 - [ ] Auto-deploy is enabled on both Render and Vercel for the selected production branch.
 - [ ] Consider a paid Render instance to avoid idle spin-down and review
       Supabase plan limits, network restrictions, and custom-domain needs.
@@ -305,9 +312,9 @@ e-mail and the password you chose.
 
 1. **Build failed:** open Render → service → **Events → failed deploy → Logs**. Check Python version, `backend` root directory, and dependency installation. Set `PYTHON_VERSION=3.12.11` and use **Save, rebuild, and deploy** if changing the runtime.
 2. **Build succeeded but startup failed:** locate the first error after `alembic upgrade head`. If it says `password authentication failed`, `could not translate host name`, or `connection refused`, fix the Supabase Session pooler URI. If it says `SECRET_KEY`, fix that variable. If it says `alembic` or `ModuleNotFoundError`, verify the root directory and installed requirements.
-3. **Service live but `admin_seeded:false`:** inspect logs for `Administrator setup failed`, `No administrator account exists`, or database exceptions. Verify that all five `SEED_*` variables are set, and that migrations finished. Do not treat HTTP 200 from `/api/health` as proof of a working database.
+3. **Service live but sign-in is impossible:** inspect the Render logs for `Administrator setup failed`, `No administrator account exists`, migration errors or database exceptions. Verify that all five `SEED_*` variables are set and that migrations finished. `/api/health` no longer reports setup state, and HTTP 200 from it is not proof of a working database.
 4. **Render API works, Vercel API fails:** check `frontend/vercel.json` for the actual Render hostname, commit the change, and verify a new production Vercel deployment. Test `https://YOUR-VERCEL-DOMAIN/api/health` before testing login.
-5. **Login fails:** first verify `admin_seeded:true`; then use the exact workspace slug, email and password configured in Render. Check Render logs for validation errors. Never reset the database simply to fix login.
+5. **Login fails:** confirm from the Render logs that the administrator was seeded, then use the exact workspace slug, email and password configured in Render. Remember that a password older than `PASSWORD_MAX_AGE_DAYS` must be changed at sign-in, and a wrong password five times locks the account for `LOCKOUT_MINUTES`. Check Render logs for validation errors. Never reset the database simply to fix login.
 
 `ERR_HTTP2_PROTOCOL_ERROR` on both `/api/health` and `/api/v1/auth/login` is
 normally an upstream availability failure, not invalid login credentials. Test
@@ -323,7 +330,7 @@ In Supabase → **Connect → Session pooler**, copy the URI **as a whole**. Pre
 
 - **Gate A:** Render build installs Python dependencies without errors.
 - **Gate B:** Alembic migrations finish, followed by Uvicorn listening on Render's `PORT`.
-- **Gate C:** Render logs confirm administrator provisioning; `/api/health` reports `admin_seeded:true`.
+- **Gate C:** Render logs confirm administrator provisioning (`Seeded administrator ...`).
 - **Gate D:** Vercel `/api/health` reaches Render via the rewrite.
 - **Gate E:** Login works at the Vercel production domain; only now remove the bootstrap password.
 
@@ -333,7 +340,7 @@ In Supabase → **Connect → Session pooler**, copy the URI **as a whole**. Pre
 | Render build says `requirements.txt` is missing | Set Render Root Directory to `backend` (commands are relative to it) |
 | API routes return Vercel 404/405 or do not reach Render | Replace the `YOUR-RENDER-SERVICE` placeholder in `frontend/vercel.json`, commit, push, and wait for a fresh Vercel deploy |
 | Login page shows a seeding hint | No admin has been provisioned yet; check the Render logs and complete §4 |
-| Health response says `admin_seeded:false` | This may mean no owner exists or the database check failed; inspect Render logs and confirm migrations/database connectivity |
+| Sign-in is refused and no owner exists | Inspect Render logs for the seeding step and confirm migrations/database connectivity; `/api/health` intentionally does not report setup state |
 | Render logs show `could not translate host name`, timeout, or IPv6/network errors | Use the Supabase Session pooler URI (host/user/port copied from **Connect → Session pooler**) rather than the Direct endpoint; do not use Transaction pooler |
 | Render logs show `password authentication failed for user "postgres"` on port `6543` | Render is using the Transaction pooler endpoint and/or a username that does not match the copied pooler URI. In Supabase **Connect → Session pooler**, copy the full connection URI; preserve its generated username (usually `postgres.<PROJECT_REF>`), host, and port `5432`. In Render → service → **Environment**, replace `DATABASE_URL` with that URI using the `postgresql+psycopg://` scheme and `sslmode=require`. URL-encode reserved password characters, save with **Save, rebuild, and deploy**, then inspect the new logs. Do not merely change `6543` to `5432` while keeping the old username or guessed host. |
 | Render logs show password authentication failed with another user/port | Re-copy the full connection URI from Supabase **Connect** and use its matching host, port, and username. Confirm the database password is current and reserved characters are URL-encoded. Update `DATABASE_URL` in Render's Environment page and redeploy. |

@@ -3,43 +3,60 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from sqlalchemy.orm import Session
-from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.security import decode_access_token, password_is_expired
 from app.models import User
 
 Db = Annotated[Session, Depends(get_db)]
 bearer = HTTPBearer(auto_error=False)
 
-# While an administrator has demanded a new password, the account may only reach
-# the endpoints needed to comply. Everything else answers 403 with a message the
-# UI turns into the "set a new password" screen.
+# While an administrator has demanded a new password — or the password has simply
+# aged past PASSWORD_MAX_AGE_DAYS — the account may only reach the endpoints needed
+# to comply. Everything else answers 403 with a message the UI turns into the
+# "set a new password" screen.
 PASSWORD_CHANGE_ALLOWED = {
     "/api/v1/auth/me",
     "/api/v1/auth/change-password",
     "/api/v1/auth/logout",
+    "/api/v1/auth/logout-all",
     "/api/v1/auth/refresh",
 }
+WRONG_TOKEN = "Invalid or expired access token"
+
+
+def _unauthorized(detail: str = WRONG_TOKEN) -> HTTPException:
+    return HTTPException(
+        status.HTTP_401_UNAUTHORIZED,
+        detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def current_user(db: Db, request: Request, credential: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> User:
     if not credential:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required")
+        raise _unauthorized("Authentication required")
     try:
-        payload = jwt.decode(credential.credentials, get_settings().secret_key, algorithms=["HS256"])
-        if payload.get("type") != "access":
-            raise ValueError()
+        payload = decode_access_token(credential.credentials)
         user = db.get(User, payload["sub"])
-        if not user or not user.is_active or user.organization_id != payload.get("org") or user.token_version != payload.get("ver"):
+        if (
+            not user
+            or not user.is_active
+            or user.organization_id != payload.get("org")
+            or user.token_version != payload.get("ver")
+        ):
             raise ValueError()
-        if user.must_change_password and request.url.path not in PASSWORD_CHANGE_ALLOWED:
+        needs_new_password = bool(user.must_change_password) or password_is_expired(user)
+        if needs_new_password and request.url.path not in PASSWORD_CHANGE_ALLOWED:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
-                "Your administrator requires a new password before you can continue. "
+                "Your account requires a new password before you can continue. "
                 "Open the password screen and set one.",
             )
         return user
-    except (jwt.PyJWTError, KeyError, ValueError):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired access token")
+    except HTTPException:
+        raise
+    except (jwt.PyJWTError, KeyError, TypeError, ValueError):
+        raise _unauthorized()
 
 
 Current = Annotated[User, Depends(current_user)]

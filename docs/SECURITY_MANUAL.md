@@ -13,7 +13,15 @@ This guide explains the controls built into WellCostIQ and the deployment work t
 
 ### Password rules
 
-Passwords must be 12–128 characters and use at least three of these four groups: lowercase letters, uppercase letters, numbers and symbols. The password must not contain the user’s email address and common default passwords are rejected. The last five passwords an account has used cannot be chosen again. Use a company-approved password manager and a unique password.
+Passwords must be 12–128 characters and use at least three of these four groups: lowercase letters, uppercase letters, numbers and symbols. The password must not contain the user’s email address and common default passwords — including keyboard and number sequences — are rejected. The last five passwords an account has used cannot be chosen again. Use a company-approved password manager and a unique password.
+
+### Password expiry and mandatory changes
+
+- A password is valid for **90 days** by default for every account, including Owner. The Security Centre shows the expiry date, marks accounts whose password has expired, and lists those expiring within 14 days.
+- When the period ends you can still sign in once, but the workspace is replaced by the password screen until a compliant replacement is saved. Nothing else is reachable meanwhile, and you receive a notification.
+- New accounts created by an administrator must choose their own password at first sign-in; the administrator’s initial value is never a long-term credential.
+- An administrator can force a change at any time. A forced change ends every session immediately and keeps the password screen in place until the new password is saved.
+- Saving a new password signs out every other device. If you did not make the change, contact IT immediately.
 
 ### When an administrator controls your password
 
@@ -70,9 +78,17 @@ Three rules keep the messages usable:
 - **Authentication:** Argon2 password hashing through `pwdlib`; signed HS256 access JWTs default to 15 minutes; refresh tokens are opaque random values stored only as SHA-256 hashes and rotated on use.
 - **Revocation:** user `token_version` invalidates outstanding access tokens after a credential reset; all stored refresh sessions are deleted.
 - **Recovery:** enumeration-safe request response, per-IP request throttling, administrator permission gate, short-lived one-time code, hash-only persistence and complete audit history.
+- **Owner protection:** every account action (reset code, forced change, session revocation, lock, unlock, and the bulk forms) refuses an Owner target unless the actor is an Owner. Separation of duties therefore survives delegation: a security administrator cannot take over the workspace's highest-privileged account.
 - **Administrator password control:** one-time codes without a user request, forced password change (`users.must_change_password`), session revocation (`token_version` plus refresh-session deletion), and account lock. Each action writes a typed request/notification row and an audit entry with the administrator’s reason.
 - **Password history:** `password_history` stores one-way hashes of the previous five passwords per account, so reuse is refused on every path (sign-in change, reset code, administrator action). No plaintext password is ever stored or logged.
-- **Containment:** while `must_change_password` is set, only `GET /auth/me`, `POST /auth/change-password`, `POST /auth/logout` and `POST /auth/refresh` are reachable; every other endpoint answers 403 with an instruction to set a new password.
+- **Password lifetime:** `PASSWORD_MAX_AGE_DAYS` (default 90) applies to every account with no Owner exemption. `users.password_expires_at` is written on each change and derived from `password_changed_at`/`created_at` for accounts that predate the control, so a dormant account cannot keep an old password indefinitely. An expired password authenticates once and is then contained exactly like a forced change; the account holder is notified once and the Security Centre lists expiry state.
+- **Containment:** while `must_change_password` is set or the password has expired, only `GET /auth/me`, `POST /auth/change-password`, `POST /auth/logout`, `POST /auth/logout-all` and `POST /auth/refresh` are reachable; every other endpoint answers 403 with an instruction to set a new password.
+- **Replay detection:** a rotated refresh token is tombstoned. Presenting one again revokes every session for that account, bumps `token_version` and writes a `refresh_reuse` audit entry.
+- **Client identity and throttling:** audit addresses and per-client budgets come from `core/request_security.py`, which believes `X-Forwarded-For` only when the connecting peer is listed in `TRUSTED_PROXY_IPS`. Login (30/15 min), forgot-password (5/15 min), reset-code verification (10/15 min) and password change (10/15 min) are budgeted per client; account lockout remains 5 failures / 15 minutes.
+- **Log hygiene:** a redaction filter masks passwords, tokens, cookies and secret keys; SQLAlchemy engine logging is pinned to WARNING; free-text audit fields are stripped of control characters and length-capped.
+- **Uploaded documents:** the stored and served MIME type is derived from file signatures, never from the client; only verified PDF/JPEG/PNG/GIF render inline; downloads carry `Content-Security-Policy: default-src 'none'; sandbox` and `nosniff`.
+- **Exports and imports:** server-generated report CSVs, the database browser and the browser’s own CSV/XLSX exports neutralise spreadsheet formulas while keeping numbers numeric. Imports accept `.xlsx`/`.csv` only, within 10 MiB / 10,000 rows / 200 columns, after a ZIP preflight (2,000 entries, 50 MiB expansion, no ZIP64/encryption).
+- **Archives:** credential and access-control tables (`users`, `password_history`, `password_reset_*`, `refresh_sessions`, `roles`, `permissions` and their links) are excluded from archives and preserved across a restore. Archives are business-data recovery, never a credential copy.
 - **Browser controls:** HttpOnly/SameSite refresh cookie, optional Secure flag, strict CORS allow-list, clickjacking/content-sniffing/referrer/permissions/CSP response headers, and HSTS when secure cookies are enabled.
 - **Persistence:** security workflow, notifications and task history use ordinary typed relational columns. Reset secrets and raw refresh tokens are never stored. There are no JSON/JSONB business payload columns.
 - **Data browser:** authentication secrets and other protected fields remain excluded from the application database browser.
@@ -95,8 +111,8 @@ The migration grants these permissions to existing Owner roles. For separation o
 
 1. Set a unique, randomly generated `SECRET_KEY` of at least 32 bytes. Never reuse development or test values. Store it in the platform secret manager, not source control.
 2. Use PostgreSQL with a dedicated least-privilege database role. Restrict database network access to the API service and authorised backup/operations systems.
-3. Run `cd backend && alembic upgrade head` before starting the updated application. Back up the database first and confirm the migration reaches revision `d1f4b8c27e93` (password controls, password history, announcement headers).
-4. Terminate TLS at the approved reverse proxy/load balancer, redirect HTTP to HTTPS, set `SECURE_COOKIES=true`, and ensure proxy forwarding headers are overwritten—not appended from untrusted clients.
+3. Run `cd backend && alembic upgrade head` before starting the updated application. Back up the database first and confirm the migration reaches revision **`b7c1d9e4f2a8`** (password expiry and refresh-token replay detection; its parent is `f9a2c7d4e611`).
+4. Terminate TLS at the approved reverse proxy/load balancer, redirect HTTP to HTTPS, set `SECURE_COOKIES=true`, and ensure proxy forwarding headers are overwritten—not appended from untrusted clients. Set `TRUSTED_PROXY_IPS` to that proxy’s private address/CIDR only (the bundled compose file uses `172.28.0.0/16`); leave it empty when the API is directly reachable and never use `*`.
 5. Set `CORS_ORIGINS` to exact approved HTTPS frontend origins. Do not use `*` with credentialed requests.
 6. Keep the API and database on private networks where possible. Allow public ingress only to the reverse proxy; restrict administrative consoles by VPN or identity-aware access.
 7. Configure central log collection and alert on repeated `login_failed`, password reset requests, account unlocks, role/permission changes, owner changes and unusual export volume. Application logs must not collect passwords, reset codes, JWTs or cookies.
@@ -120,7 +136,7 @@ Preserve the original client address only from trusted proxies. Strip inbound `X
 
 ### Validation after deployment
 
-Use a non-production workspace to confirm that an unknown account and a known account receive the same forgot-password response; the sixth request within 15 minutes is throttled; an unapproved, expired or reused code fails; a valid reset signs out every session; an administrator-issued code works without a prior request; a forced change closes the workspace until the new password is saved; a reused password is refused; locking blocks sign-in and unlocking restores it; recalling an announcement removes unread copies only; users cannot see cross-tenant records; non-authorised users receive HTTP 403; and AFE review/approval tasks do not bypass existing transitions.
+Use a non-production workspace to confirm that an unknown account and a known account receive the same forgot-password response; the sixth request within 15 minutes is throttled; an unapproved, expired or reused code fails; a valid reset signs out every session; an administrator-issued code works without a prior request; a forced change closes the workspace until the new password is saved; a reused password is refused; an account whose `password_expires_at` has passed is confined to the password screen until it is changed; replaying a rotated refresh token ends every session and writes `refresh_reuse`; locking blocks sign-in and unlocking restores it; recalling an announcement removes unread copies only; users cannot see cross-tenant records; non-authorised users receive HTTP 403; and AFE review/approval tasks do not bypass existing transitions.
 
 ### Current boundaries and recommended next phase
 

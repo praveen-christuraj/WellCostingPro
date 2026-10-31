@@ -1,4 +1,22 @@
-# Security review and deployment handover — 31 October 2026
+# Security review register (WCP-01 … WCP-16) — 31 October 2026
+
+> **Status: verified register, superseded as the handover document.**
+> Use [`SECURITY_AUDIT_FINAL.md`](SECURITY_AUDIT_FINAL.md) for the IT handover,
+> the 24-item disposition and the password lifecycle. This page keeps the WCP
+> identifiers and is retained as the audit trail.
+>
+> **Important correction.** Several items below were written as if the mitigation
+> were already in the code. When the repository's own hardening suite was run on
+> the untouched branch, **12 of its 22 cases failed** — required JWT claims, the
+> Origin guard, `Cache-Control: no-store`, forwarded-header-proof throttling, the
+> reset-verification budget, 422 input stripping, exact-origin CORS, production
+> fail-closed validation and the `IntegrityError` handler were absent. So were:
+> removal of `xlsx@0.18.5`, formula neutralisation in `frontend/src/lib/export.ts`,
+> exclusion of credential tables from archives, the non-root API image, the nginx
+> and Vercel header sets, the `/overview` capability guard, and any password-age
+> expiry. Those gaps are now implemented and covered by tests; see
+> `SECURITY_VALIDATION.md` for the executed evidence. Treat this register as
+> "what was intended and is now true", not as the earlier state of the code.
 
 ## Scope and assurance
 
@@ -38,6 +56,7 @@ severity does not establish that every vulnerable library feature was reachable 
 | WCP-14 | Low | Concurrent database conflicts could become unhandled 500s. Map otherwise unhandled IntegrityError to a generic HTTP 409 without SQL details. Existing scoped conflict handlers remain. |
 | WCP-15 | Low | API headers did not protect the separately served SPA, and sensitive responses could be cached. Add SPA headers/CSP in Nginx and Vercel, add API no-store, run API container as a non-root user, create new backup directories/files with restrictive permissions. |
 
+| WCP-17 | High | The Security Centre guarded Owner accounts only for `lock`. A delegated `security:password-reset` holder could issue a reset code for, force a change on, or revoke the sessions of an Owner — then sign in as that Owner. The bulk endpoint repeated the hole for every action but `lock`. Mitigated with a single `ensure_can_act_on()` guard across all six single-account actions and per target in bulk. |
 | WCP-16 | Medium | Administrators could configure the same archive folder across workspaces; workspace-local backup numbers and second-resolution filenames could collide and overwrite another archive. Include the globally unique job ID in generated/imported filenames; preserve existing registered paths. |
 
 ### Dependency advisory references
@@ -81,8 +100,8 @@ reflected, allow-listed identifiers; this does not establish exhaustive query sa
 | 17 API insecure fallback | Browser already uses relative `/api/v1`; no browser localhost fallback. Vercel still uses a deployment-specific HTTPS backend rewrite: IT must replace it for its environment. |
 | 18 Unsanitized errors | WCP-12; errors render as text, rejected secret input is not echoed. |
 | 19 Integrity race | WCP-14. Database uniqueness remains the final guard. PostgreSQL load/concurrency test is a release gate. |
-| 20 RBAC diagnostics | Reviewed RBAC surfaces are permission-gated; no public RBAC diagnostics endpoint found. |
-| 21 Never-expiring admin password | No special admin exemption, but there is no automatic password-age expiry for any user. Use policy-driven reset, MFA/SSO and compromised-password response; routine expiry is not universally recommended. |
+| 20 RBAC diagnostics | **Fixed.** `GET /api/v1/overview` previously returned account, role and permission counts to any signed-in user, and the SPA dashboard route was unguarded. The endpoint now requires one of `users:read`, `roles:read`, `permissions:read`, the UI route uses the same guard, and `/security/overview` stays capability-gated. |
+| 21 Never-expiring admin password | **Fixed.** There was no password age at all. `PASSWORD_MAX_AGE_DAYS` (default 90, `0` disables deliberately) now applies to every account, including Owner; `users.password_expires_at` is written on change and derived for legacy rows. An expired password authenticates once, then confines the session to `/auth/me`, `/auth/change-password`, `/auth/logout`, `/auth/logout-all` and `/auth/refresh` until a compliant replacement is saved, and notifies the account holder once. Security Centre shows expiry state and filters. |
 | 22 Fast hash KDF | Passwords use Argon2. SHA-256 is used for high-entropy random refresh/reset-token lookup, not human-password derivation; it is appropriate for those tokens. No custom encryption KDF found. |
 | 23 Headers | WCP-15; TLS/HSTS also needs verification at the public edge. |
 | 24 Public diagnostics | WCP-13. Minimal health remains intentionally public. |
@@ -98,13 +117,17 @@ reflected, allow-listed identifiers; this does not establish exhaustive query sa
    preferably `openssl rand -hex 32`), `SECURE_COOKIES=true`, and exact HTTPS `CORS_ORIGINS`.
    The default Compose configuration remains for local HTTP development, not production.
    Changing SECRET_KEY invalidates JWTs and changes rate-limit hashes; coordinate rotation.
-3. Run database migrations to the current head (`alembic upgrade head`), not the older
-   revision named in the original manual. This patch adds no database migration. Remove
+3. Run database migrations to the current head (`alembic upgrade head`). The head is now
+   **`b7c1d9e4f2a8`** (password expiry and refresh-token replay detection); the previously
+   documented `f9a2c7d4e611` is the parent revision. Back up first. Remove
    `SEED_ADMIN_PASSWORD` after first boot; restrict initial Owner access.
 4. Terminate TLS and redirect HTTP at your approved edge. Enforce HSTS there. Overwrite
-   forwarded headers, restrict direct API access, set Uvicorn `--forwarded-allow-ips` to
-   **only the actual proxy IPs**, never `*` on a publicly reachable service. ASGI identity
-   now drives audit and throttling; if the proxy is not trusted, all users share its budget.
+   forwarded headers there as well (`frontend/proxy_params_wcp.conf` does this for the
+   bundled nginx), keep direct API access closed, and set `TRUSTED_PROXY_IPS` to the
+   private proxy CIDR only — never `*`. Audit addresses and throttle keys come from
+   `core/request_security.py`, which believes a forwarded header only when the connecting
+   peer is in that list. If the proxy is not listed, every user shares one budget; if the
+   list is too wide, spoofing returns.
 5. Apply atomic distributed edge rate limits to login, refresh, forgot/reset-password and
    password change. The DB-backed app budgets are shared across workers but count+insert
    is not strictly atomic, and IP-only limits do not stop distributed credential stuffing.

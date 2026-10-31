@@ -1,40 +1,95 @@
+# Local / on-premise development stack.
+#
+# Production guidance is in docs/SECURITY_MANUAL.md: terminate TLS in front of the
+# `web` service, set ENVIRONMENT=production, SECURE_COOKIES=true and exact HTTPS
+# CORS_ORIGINS, and keep the database on a private network.
 services:
   db:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: wellcosting
       POSTGRES_USER: wellcosting
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks: [backend_net]
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wellcosting -d wellcosting"]
       interval: 5s
       timeout: 5s
       retries: 10
+
   api:
     build: ./backend
+    restart: unless-stopped
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       DATABASE_URL: postgresql+psycopg://wellcosting:${POSTGRES_PASSWORD}@db:5432/wellcosting
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
       SECURE_COOKIES: ${SECURE_COOKIES:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
-      # First-run administrator: seeded from these values, otherwise `docker compose exec -it api python -m app.seed`.
+      # nginx is the only client on this private network, so its forwarded address
+      # is believable. Never widen this to a public range.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-172.28.0.0/16}
+      BACKUP_DIRECTORY: /app/backups
+      # Password lifecycle: age in days, reuse depth and sign-in lockout.
+      PASSWORD_MAX_AGE_DAYS: ${PASSWORD_MAX_AGE_DAYS:-90}
+      PASSWORD_EXPIRY_WARNING_DAYS: ${PASSWORD_EXPIRY_WARNING_DAYS:-14}
+      PASSWORD_HISTORY_LIMIT: ${PASSWORD_HISTORY_LIMIT:-5}
+      MAX_FAILED_LOGINS: ${MAX_FAILED_LOGINS:-5}
+      LOCKOUT_MINUTES: ${LOCKOUT_MINUTES:-15}
+      FORCE_PASSWORD_CHANGE_ON_CREATE: ${FORCE_PASSWORD_CHANGE_ON_CREATE:-true}
+      # First-run administrator: seeded from these values, otherwise
+      # `docker compose exec -it api python -m app.seed`.
       BOOTSTRAP_ADMIN_ON_STARTUP: ${BOOTSTRAP_ADMIN_ON_STARTUP:-true}
       SEED_ORG_SLUG: ${SEED_ORG_SLUG:-}
       SEED_ORG_NAME: ${SEED_ORG_NAME:-}
       SEED_OWNER_NAME: ${SEED_OWNER_NAME:-}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+    volumes:
+      - backup_data:/app/backups
     depends_on:
       db:
         condition: service_healthy
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    networks: [backend_net]
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-server-header"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
   web:
     build: ./frontend
+    restart: unless-stopped
     ports:
       - "8080:80"
     depends_on:
-      - api
+      api:
+        condition: service_started
+    networks: [backend_net, edge_net]
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  backend_net:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+  edge_net:
+
 volumes:
   postgres_data:
+  backup_data:
