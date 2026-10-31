@@ -494,14 +494,14 @@ def _read_upload(upload: UploadFile) -> tuple[bytes, str]:
         raise ValueError(
             f"'{extension or filename}' is not an accepted file type. Allowed: {', '.join(ALLOWED_DOCUMENT_EXTENSIONS)}"
         )
-    content = upload.file.read()
+    limit = _max_document_bytes()
+    # Read at most one byte past the limit: an oversized upload is refused without
+    # ever being held in memory, which is what made a "15 MB" cap unbounded before.
+    content = upload.file.read(limit + 1)
     if not content:
         raise ValueError("The file is empty")
-    limit = _max_document_bytes()
     if len(content) > limit:
-        raise ValueError(
-            f"The file is {len(content) / 1024 / 1024:.1f} MB; the limit is {limit / 1024 / 1024:.0f} MB"
-        )
+        raise ValueError(f"The file is larger than the {limit // (1024 * 1024)} MB limit")
     return content, filename
 
 
@@ -510,6 +510,36 @@ def _human_size(size: int) -> str:
         return f"{size / 1024 / 1024:.1f} MB"
     return f"{max(1, size // 1024)} KB"
 
+
+# The uploader decides the Content-Type header, so it cannot be trusted: a file
+# named `.pdf` can be HTML with `Content-Type: text/html`, which would run script on
+# the API origin when previewed. The served type is derived from the signature
+# instead, and only verified document/image types may be displayed inline.
+INLINE_SAFE_TYPES = frozenset({"application/pdf", "image/png", "image/jpeg", "image/gif"})
+SIGNATURES = (
+    (b"%PDF-", "application/pdf"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def _sniff_document_type(content: bytes, filename: str) -> str:
+    for signature, mime in SIGNATURES:
+        if content.startswith(signature):
+            return mime
+    lowered = filename.lower()
+    if content.startswith(b"PK\x03\x04"):
+        if lowered.endswith(".docx"):
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if lowered.endswith(".xlsx"):
+            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if lowered.endswith(".csv"):
+        return "text/csv"
+    if lowered.endswith(".txt"):
+        return "text/plain"
+    return "application/octet-stream"
 
 def _content_disposition(disposition: str, filename: str) -> str:
     ascii_name = re.sub(r"[\"\\\r\n]", "_", filename.encode("ascii", "ignore").decode()) or "attachment"
@@ -544,7 +574,7 @@ def _store_document(
         organization_id=order.organization_id,
         order_id=order.id,
         file_name=filename[:300],
-        content_type=(content_type or "application/octet-stream")[:120],
+        content_type=_sniff_document_type(content, filename),
         size_bytes=len(content),
         checksum_sha256=checksum,
         document_kind=document_kind,
@@ -2309,15 +2339,19 @@ def download_document(document_id: str, db: Db, user: Current, request: Request,
         request=request,
     )
     _commit(db)
+    stored = bytes(document.content)
+    served = _sniff_document_type(stored, document.file_name or "")
+    # Never trust the stored header either: legacy rows may hold a client-supplied
+    # type. Only a signature-verified PDF/image may be shown inline.
+    preview = bool(inline) and served in INLINE_SAFE_TYPES
     return Response(
-        content=bytes(document.content),
-        media_type=document.content_type or "application/octet-stream",
+        content=stored,
+        media_type=served,
         headers={
-            "Content-Disposition": _content_disposition(
-                "inline" if inline else "attachment", document.file_name
-            ),
+            "Content-Disposition": _content_disposition("inline" if preview else "attachment", document.file_name),
             "Content-Length": str(document.size_bytes),
             "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
         },
     )
 

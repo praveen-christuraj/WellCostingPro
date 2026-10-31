@@ -61,6 +61,9 @@ class SecurityUserOut(BaseModel):
     locked_until: datetime | None
     must_change_password: bool
     password_changed_at: datetime | None
+    password_expires_at: datetime | None = None
+    password_expired: bool = False
+    password_days_remaining: int | None = None
     last_login_at: datetime | None
     active_sessions: int
     role_names: list[str]

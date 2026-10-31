@@ -1,28 +1,45 @@
 import logging
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from app.api import afe, auth, audit, backup, business_dashboard, costing_sets, daily_cost, database_browser, fuel_cost, lih_cost, master_data, mud_cost, ndt_inspection, rbac, report_builder, rig_well, security, service_master, sow_adjustment, usage_reports, vendor_master
 from app.api.catalogue_items import ITEM_ROUTERS, catalogue_error_handler
 from app.api.catalogue_options import router as catalogue_options_router
-from app.services.catalogue import CatalogueError
-from app.api.deps import Db
 from app.bootstrap import bootstrap_admin
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 from app.services import backup as backup_service
-from app.services import provisioning
+from app.services.catalogue import CatalogueError
 
 log = logging.getLogger("app")
 settings = get_settings()
+configure_logging()
+
+# Bumped when the API surface changes in a way a browser tab could notice; the
+# health probe and the error messages quote it so a stale deployment is obvious.
+API_VERSION = "0.3.0"
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# Writes that authenticate with the refresh cookie are the only ones a cross-site
+# request could ride on; every other write needs a bearer token the browser does
+# not attach automatically.
+COOKIE_WRITE_PREFIX = "/api/v1/auth/"
+MAX_JSON_BODY = settings.max_json_body_mb * 1024 * 1024
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """On a new device the database is empty, so offer to create the first administrator."""
+    log.info("Starting %s in %s mode; settings %s", settings.app_name, settings.environment, settings.safe_summary())
+    if settings.is_production and settings.bootstrap_admin_on_startup and not settings.seed_admin_email:
+        log.warning("Bootstrap is enabled in production; remove SEED_ADMIN_PASSWORD after the first start")
     result = bootstrap_admin()
     (log.warning if result.needs_attention else log.info)(result.message)
     # The backup scheduler is process-local and only acts when a workspace has
@@ -32,11 +49,92 @@ async def lifespan(app: FastAPI):
     yield
 
 
-# Bumped when the API surface changes in a way a browser tab could notice; the
-# health probe and the error messages quote it so a stale deployment is obvious.
-API_VERSION = "0.3.0"
-app = FastAPI(title=settings.app_name, description=settings.app_tagline, version=API_VERSION, lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=[s.strip() for s in settings.cors_origins.split(",")], allow_credentials=True, allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
+app = FastAPI(
+    title=settings.app_name,
+    description=settings.app_tagline,
+    version=API_VERSION,
+    lifespan=lifespan,
+    docs_url="/docs" if settings.docs_enabled else None,
+    redoc_url="/redoc" if settings.docs_enabled else None,
+    openapi_url="/openapi.json" if settings.docs_enabled else None,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+    expose_headers=["Retry-After"],
+    max_age=600,
+)
+
+
+@app.middleware("http")
+async def origin_guard(request: Request, call_next):
+    """Reject cross-site writes that rely on the browser's refresh cookie.
+
+    SameSite=Lax already blocks most cross-site form posts, but it is a browser
+    default rather than an authorisation decision. Any request that carries an
+    ``Origin`` (or, failing that, a ``Referer``) must match the configured
+    front-end origin exactly. Non-browser clients that send neither header — CLI
+    and integration callers — keep working.
+    """
+    if request.method not in SAFE_METHODS and request.url.path.startswith(COOKIE_WRITE_PREFIX):
+        allowed = set(settings.cors_origin_list)
+        site = (request.headers.get("sec-fetch-site") or "").lower()
+        if site == "cross-site":
+            return JSONResponse(status_code=403, content={"detail": "Cross-site requests are not accepted."})
+        origin = request.headers.get("origin")
+        if origin and origin not in allowed:
+            return JSONResponse(status_code=403, content={"detail": "This origin is not allowed to call the API."})
+        if not origin:
+            referer = request.headers.get("referer")
+            if referer:
+                parts = urlsplit(referer)
+                candidate = f"{parts.scheme}://{parts.netloc}"
+                if candidate not in allowed:
+                    return JSONResponse(status_code=403, content={"detail": "This origin is not allowed to call the API."})
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def body_size_guard(request: Request, call_next):
+    """Refuse oversized JSON bodies before a parser allocates them.
+
+    Multipart uploads have their own bounded readers (documents, backup archives)
+    because their size limit depends on the feature.
+    """
+    if request.method not in SAFE_METHODS:
+        content_type = request.headers.get("content-type", "").lower()
+        if not content_type.startswith("multipart/"):
+            try:
+                length = int(request.headers.get("content-length") or 0)
+            except ValueError:
+                length = 0
+            if length > MAX_JSON_BODY:
+                return JSONResponse(status_code=413, content={"detail": "The request body is too large."})
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Apply browser hardening headers and forbid caching of API payloads."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+    if settings.secure_cookies:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(security.router, prefix="/api/v1")
 app.include_router(business_dashboard.router, prefix="/api/v1")
@@ -67,20 +165,6 @@ app.add_exception_handler(CatalogueError, catalogue_error_handler)
 app.include_router(master_data.router, prefix="/api/v1")
 
 
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    """Apply browser hardening headers to API responses without changing payloads."""
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
-    if settings.secure_cookies:
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    return response
-
-
 @app.get("/", include_in_schema=False)
 def api_root():
     """A browser that lands on the API host gets directions, not a bare "Not Found"."""
@@ -89,20 +173,19 @@ def api_root():
         "message": f"{settings.app_name} serves the API on this host. Open the web application to sign in.",
         "api": "/api/v1",
         "health": "/api/health",
-        "documentation": "/docs",
         "version": API_VERSION,
     }
 
 
 @app.get("/api/health")
-def health(db: Db):
-    # admin_seeded lets a fresh install tell the operator that seeding is still pending.
-    try:
-        seeded = not provisioning.admin_missing(db)
-    except Exception:  # a database problem must not turn liveness into a 500
-        log.exception("Administrator check failed during health probe")
-        seeded = False
-    return {"status": "ok", "admin_seeded": seeded, "api_version": API_VERSION}
+def health():
+    """Liveness and version only.
+
+    Deliberately says nothing about whether an administrator exists: that fact
+    tells an unauthenticated caller whether a deployment is still unclaimed. The
+    first-run guidance lives in the deployment documentation.
+    """
+    return {"status": "ok", "api_version": API_VERSION}
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -133,6 +216,39 @@ async def http_error(request: Request, error: StarletteHTTPException) -> JSONRes
     elif error.status_code == 401 and str(detail).strip().lower() == "unauthorized":
         detail = "Authentication is required for this action. Sign in again to continue."
     return JSONResponse(status_code=error.status_code, content={"detail": detail})
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
+    """Describe a rejected field without echoing the value that was sent.
+
+    FastAPI's default body includes the rejected ``input`` — which, for a login or
+    password form, is the password itself. The browser only needs the location,
+    rule and message, so the raw value is removed here.
+    """
+    details = []
+    for item in error.errors():
+        clean = {key: value for key, value in item.items() if key not in {"input", "url"}}
+        context = clean.get("ctx")
+        if isinstance(context, dict):
+            clean["ctx"] = {key: value if isinstance(value, (str, int, float, bool)) else str(value) for key, value in context.items()}
+        details.append(clean)
+    return JSONResponse(status_code=422, content={"detail": details})
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error(request: Request, error: IntegrityError) -> JSONResponse:
+    """Map a database uniqueness/foreign-key conflict to a generic 409.
+
+    The driver message names columns, values and sometimes the statement, so it is
+    never returned to the caller. The database remains the final guard against
+    concurrent inserts that both passed an in-application existence check.
+    """
+    log.warning("Database conflict on %s", getattr(getattr(request, "url", None), "path", "unknown"))
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "This change conflicts with a record that already exists. Refresh the page and try again."},
+    )
 
 
 @app.exception_handler(Exception)

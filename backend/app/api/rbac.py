@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from app.api.deps import Current, Db, require, owner, granted
-from app.core.security import hash_password, validate_password
+from app.api.deps import Current, Db, granted, owner, require, require_any
+from app.core.config import get_settings
+from app.core.security import hash_password, password_expires_at, validate_password
+from app.core.time import utcnow
 from app.models import User, Role, Permission
 from app.schemas.rbac import (UserCreate, UserUpdate, UserOut, RoleCreate, RoleUpdate, RoleOut,
                               PermissionCreate, PermissionUpdate, PermissionOut, IDList, Overview)
@@ -59,8 +61,15 @@ def resolve_ids(db, model, ids, org_id):
     return items
 
 
-@router.get("/overview", response_model=Overview)
+@router.get("/overview", response_model=Overview,
+            dependencies=[Depends(require_any("users:read", "roles:read", "permissions:read"))])
 def overview(db: Db, user: Current):
+    """Workspace access summary.
+
+    Guarded by the capability it summarises: counts of accounts, roles and
+    permissions are an access-control register, not a general dashboard, and a
+    signed-in user without any of those capabilities has no reason to read them.
+    """
     org = user.organization_id
     can_read_users = owner(user) or "users:read" in granted(user)
     can_read_roles = owner(user) or "roles:read" in granted(user)
@@ -89,12 +98,19 @@ def create_user(data: UserCreate, request: Request, db: Db, user: Current):
         validate_password(data.password, identity=str(data.email))
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
-    item = User(organization_id=user.organization_id, email=data.email.lower(), full_name=data.full_name.strip(), password_hash=hash_password(data.password), roles=roles)
+    changed_at = utcnow()
+    item = User(
+        organization_id=user.organization_id, email=data.email.lower(), full_name=data.full_name.strip(),
+        password_hash=hash_password(data.password), roles=roles,
+        password_changed_at=changed_at, password_expires_at=password_expires_at(changed_at),
+        must_change_password=bool(data.require_password_change or get_settings().force_change_on_create),
+    )
     db.add(item)
     flush(db)
     audit.record(db, organization_id=user.organization_id, actor=user, action="create", entity_type="user",
                  entity_id=item.id, entity_label=item.email,
-                 summary=f"Created user {item.full_name} <{item.email}>" + (f" with roles: {', '.join(r.name for r in roles)}" if roles else ""),
+                 summary=f"Created user {item.full_name} <{item.email}>" + (f" with roles: {', '.join(r.name for r in roles)}" if roles else "")
+                         + (" (must change password at first sign-in)" if item.must_change_password else ""),
                  request=request)
     commit(db)
     db.refresh(item)

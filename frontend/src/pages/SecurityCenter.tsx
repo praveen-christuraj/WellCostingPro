@@ -222,6 +222,8 @@ export default function SecurityCenter() {
       if (accountState === 'active') return account.is_active && !locked(account)
       if (accountState === 'inactive') return !account.is_active
       if (accountState === 'must-change') return account.must_change_password
+      if (accountState === 'expired') return account.password_expired
+      if (accountState === 'expiring') return !account.password_expired && account.password_days_remaining !== null && account.password_days_remaining <= 14
       if (accountState === 'signed-in') return account.active_sessions > 0
       return true
     })
@@ -245,6 +247,12 @@ export default function SecurityCenter() {
     { header: 'Locked until', value: row => row.locked_until ? new Date(row.locked_until).toLocaleString() : '' },
     { header: 'Must change password', value: row => row.must_change_password ? 'Yes' : 'No' },
     { header: 'Password changed', value: row => row.password_changed_at ? new Date(row.password_changed_at).toLocaleString() : 'Never recorded' },
+    {
+      header: 'Password expires',
+      value: row => row.password_expired ? 'Expired — change required'
+        : row.password_expires_at ? `${new Date(row.password_expires_at).toLocaleDateString()} (${row.password_days_remaining ?? 0} days)`
+          : 'Never (policy disabled)',
+    },
     { header: 'Last sign-in', value: row => row.last_login_at ? new Date(row.last_login_at).toLocaleString() : 'Never recorded' },
     { header: 'Active sessions', value: row => String(row.active_sessions) },
   ], [])
@@ -380,6 +388,8 @@ export default function SecurityCenter() {
                 <MenuItem value="locked">Locked</MenuItem>
                 <MenuItem value="inactive">Deactivated</MenuItem>
                 <MenuItem value="must-change">Must change password</MenuItem>
+                <MenuItem value="expired">Password expired</MenuItem>
+                <MenuItem value="expiring">Password expires in 14 days</MenuItem>
                 <MenuItem value="signed-in">Has active sessions</MenuItem>
               </TextField>
               {(accountSearch || accountState !== 'all') && <Button size="small" color="inherit" onClick={() => { setAccountSearch(''); setAccountState('all'); setAccountPage(0) }}>Clear</Button>}
@@ -435,11 +445,15 @@ export default function SecurityCenter() {
                       <Tag tone={account.is_active ? 'success' : 'neutral'}>{account.is_active ? 'Active' : 'Deactivated'}</Tag>
                       {locked && <Tag tone="error">Locked</Tag>}
                       {account.must_change_password && <Tag tone="warning">Change password</Tag>}
+                      {account.password_expired && <Tag tone="error">Password expired</Tag>}
                       {account.failed_logins > 0 && <Tag tone="warning">{account.failed_logins} failed</Tag>}
                     </Box></TableCell>
                     <TableCell>
                       <Typography fontSize={12}>{days(account.password_changed_at)}</Typography>
                       {account.password_changed_at && <Typography color="text.secondary" fontSize={11}>{new Date(account.password_changed_at).toLocaleDateString()}</Typography>}
+                      {account.password_expires_at && <Typography color={account.password_expired ? 'error.main' : 'text.secondary'} fontSize={11}>
+                        {account.password_expired ? 'Expired' : `Expires in ${account.password_days_remaining ?? 0}d`}
+                      </Typography>}
                     </TableCell>
                     <TableCell>{account.last_login_at ? new Date(account.last_login_at).toLocaleString() : 'Never'}</TableCell>
                     <TableCell>{account.active_sessions}</TableCell>

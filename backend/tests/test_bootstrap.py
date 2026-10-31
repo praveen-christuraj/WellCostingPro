@@ -127,7 +127,10 @@ def test_interactive_setup_seeds_a_working_administrator(migrated_database, scri
     assert any(role.is_owner for role in admin.roles)
     with TestClient(app) as client:
         assert client.post("/api/v1/auth/login", json={"organization": "acme-energy", "email": "jane@example.com", "password": "correct-password-123"}).status_code == 200
-        assert client.get("/api/health").json()["admin_seeded"] is True
+        # The public probe must not disclose whether the deployment is claimed;
+        # an authenticated call already proves the administrator works.
+        assert "admin_seeded" not in client.get("/api/health").json()
+        assert client.get("/api/v1/auth/me").status_code == 401
     # A second run must be a no-op, not a duplicate owner.
     assert bootstrap_admin(interactive=False).outcome is Outcome.ADMIN_PRESENT
     assert len(owners()) == 1
@@ -205,7 +208,8 @@ def test_provisioning_rejects_invalid_input(migrated_database):
 def test_startup_on_an_empty_database_never_blocks_or_prompts(migrated_database):
     with TestClient(app) as client:
         health = client.get("/api/health").json()
-        assert health["status"] == "ok" and health["admin_seeded"] is False
+        assert health["status"] == "ok"
+        assert "admin_seeded" not in health
         assert health["api_version"]
         assert client.post("/api/v1/auth/login", json={"organization": "acme-energy", "email": "jane@example.com", "password": "correct-password-123"}).status_code == 401
     assert owners() == []

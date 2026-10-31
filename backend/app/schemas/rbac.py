@@ -46,6 +46,10 @@ class UserCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=160)
     password: str = Field(min_length=12, max_length=128)
     role_ids: list[str] = Field(default_factory=list)
+    # When true the new account must choose its own password before the workspace
+    # opens, so the administrator who typed the initial value never keeps a
+    # working credential for somebody else's account.
+    require_password_change: bool = False
 
 
 class UserUpdate(BaseModel):
@@ -60,6 +64,9 @@ class UserOut(ORMModel):
     is_active: bool
     created_at: datetime
     roles: list[RoleOut]
+    # Whether the account still has to choose its own password. Surfaced so the
+    # register can show it instead of an administrator guessing from the audit trail.
+    must_change_password: bool = False
 
 
 class IDList(BaseModel):
@@ -67,9 +74,11 @@ class IDList(BaseModel):
 
 
 class LoginInput(BaseModel):
-    organization: str
+    """Sign-in input, bounded so an oversized body cannot reach the hash function."""
+
+    organization: str = Field(min_length=1, max_length=80)
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class MeOut(UserOut):
@@ -77,9 +86,13 @@ class MeOut(UserOut):
     organization_slug: str
     permission_keys: list[str]
     is_owner: bool
-    # A security-centre action can demand a new password before anything else is reachable.
+    # A security-centre action (or password age) can demand a new password before
+    # anything else is reachable. The UI gates the workspace on both flags.
     must_change_password: bool = False
+    password_expired: bool = False
     password_changed_at: datetime | None = None
+    password_expires_at: datetime | None = None
+    password_days_remaining: int | None = None
 
 
 class Overview(BaseModel):

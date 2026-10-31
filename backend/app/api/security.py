@@ -5,17 +5,17 @@ typed row (request, notification, task, event) and an audit entry in the same
 transaction, so the workspace can always answer who did what and when.
 """
 import hashlib
-import hmac
 import secrets
 from datetime import date, datetime, time, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import func, or_, select
 
 from app.api.deps import Current, Db, granted, owner, require, require_any
 from app.core.config import get_settings
+from app.core.request_security import client_ip, throttle
 from app.models import (
-    Announcement, Organization, PasswordResetAttempt, PasswordResetRequest, RefreshSession, Role, User,
+    Announcement, Organization, PasswordResetRequest, RefreshSession, Role, User,
     UserNotification, WorkflowTask, WorkflowTaskEvent,
 )
 from app.schemas.security import (
@@ -25,6 +25,7 @@ from app.schemas.security import (
     SecurityOverview, SecurityUserOut, TaskBulkIn, TaskBulkOut, TaskCommentIn, TaskCreate,
     TaskEventOut, TaskOut, TaskOverview, TaskPage, TaskUpdate,
 )
+from app.core.security import effective_expiry, password_days_remaining, password_is_expired
 from app.services import audit, password_policy, workflow
 
 router = APIRouter(tags=["Security and workflow"])
@@ -43,17 +44,6 @@ def aware(value: datetime | None) -> datetime | None:
     if value is None or value.tzinfo is not None:
         return value
     return value.replace(tzinfo=timezone.utc)
-
-
-def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
-    # The schema holds IPv4/IPv6 text. Truncation also prevents an untrusted
-    # forwarding header from turning a public recovery request into a DB error.
-    return (forwarded or (request.client.host if request.client else "unknown"))[:45]
-
-
-def ip_hash(value: str) -> str:
-    return hmac.new(get_settings().secret_key.encode(), value.encode(), hashlib.sha256).hexdigest()
 
 
 def token_hash(value: str) -> str:
@@ -102,6 +92,18 @@ def scoped_user(db: Db, user_id: str, organization_id: str, lock: bool = False) 
     return target
 
 
+def ensure_can_act_on(target: User, actor: User, action: str) -> None:
+    """Owner accounts are only reachable by owners, whatever capability you hold.
+
+    Without this, a delegated security administrator could reset, force, revoke or
+    unlock the highest-privileged account and then sign in as it — a direct
+    privilege escalation out of their own role. Locking already had the rule; every
+    other account action must share it.
+    """
+    if any(role.is_owner for role in target.roles) and not owner(actor):
+        raise HTTPException(403, f"Only an owner can {action} an owner account.")
+
+
 def issue_code(db: Db, row: PasswordResetRequest, reviewer: User, notes: str) -> tuple[str, datetime]:
     code = secrets.token_urlsafe(32)
     expires = utcnow() + timedelta(minutes=get_settings().password_reset_minutes)
@@ -142,6 +144,8 @@ def security_user_out(db: Db, target: User, sessions: dict[str, int] | None = No
         id=target.id, full_name=target.full_name, email=target.email, is_active=target.is_active,
         failed_logins=target.failed_logins, locked_until=target.locked_until,
         must_change_password=target.must_change_password, password_changed_at=target.password_changed_at,
+        password_expires_at=effective_expiry(target), password_expired=password_is_expired(target),
+        password_days_remaining=password_days_remaining(target),
         last_login_at=target.last_login_at, active_sessions=counts.get(target.id, 0),
         role_names=sorted(role.name for role in target.roles),
         is_owner=any(role.is_owner for role in target.roles),
@@ -159,16 +163,10 @@ def is_locked(user: User) -> bool:
 
 @router.post("/auth/forgot-password", status_code=202)
 def forgot_password(data: ForgotPasswordIn, request: Request, db: Db):
+    # A rotating X-Forwarded-For no longer buys a fresh budget: the address comes
+    # from the transport (or a configured proxy), not from caller-controlled text.
+    throttle(db, request, "forgot-password", get_settings().forgot_password_attempt_limit)
     address = client_ip(request)
-    hashed_ip = ip_hash(address)
-    cutoff = utcnow() - timedelta(minutes=15)
-    recent = db.scalar(select(func.count(PasswordResetAttempt.id)).where(
-        PasswordResetAttempt.ip_hash == hashed_ip, PasswordResetAttempt.attempted_at >= cutoff
-    )) or 0
-    if recent >= 5:
-        raise HTTPException(429, "Too many password reset attempts. Wait 15 minutes and try again.")
-    db.add(PasswordResetAttempt(ip_hash=hashed_ip))
-    db.execute(PasswordResetAttempt.__table__.delete().where(PasswordResetAttempt.attempted_at < utcnow() - timedelta(days=1)))
 
     org = db.scalar(select(Organization).where(Organization.slug == data.organization.strip().lower()))
     user = db.scalar(select(User).where(
@@ -203,6 +201,7 @@ def forgot_password(data: ForgotPasswordIn, request: Request, db: Db):
 
 @router.post("/auth/reset-password", status_code=204)
 def reset_password(data: ResetPasswordIn, request: Request, response: Response, db: Db):
+    throttle(db, request, "reset-password", get_settings().password_reset_attempt_limit)
     org = db.scalar(select(Organization).where(Organization.slug == data.organization.strip().lower()))
     user = db.scalar(select(User).where(User.organization_id == org.id, User.email == str(data.email).lower())) if org else None
     row = db.scalar(select(PasswordResetRequest).where(
@@ -358,7 +357,8 @@ def admin_reset_code(user_id: str, data: ReviewResetIn, request: Request, db: Db
     The security centre opens the request itself, records who decided and why,
     and notifies the account holder so the action is never silent.
     """
-    target = scoped_user(db, user_id, user.organization_id)
+    target = scoped_user(db, user_id, user.organization_id, lock=True)
+    ensure_can_act_on(target, user, "issue a reset code for")
     if not target.is_active:
         raise HTTPException(409, "This account is deactivated. Reactivate it in User Management before issuing a reset code.")
     row = PasswordResetRequest(
@@ -389,7 +389,9 @@ def force_password_change(user_id: str, data: SecurityActionIn, request: Request
     target = scoped_user(db, user_id, user.organization_id, lock=True)
     if target.id == user.id:
         raise HTTPException(409, "Use the account menu to change your own password.")
+    ensure_can_act_on(target, user, "force a password change on")
     password_policy.require_change(target)
+    password_policy.expire_now(db, target)
     revoked = revoke_sessions(db, target)
     workflow.notify(
         db, organization_id=user.organization_id, recipients=[target], title="Your password must be changed",
@@ -410,6 +412,7 @@ def revoke_user_sessions(user_id: str, data: SecurityActionIn, request: Request,
     target = scoped_user(db, user_id, user.organization_id, lock=True)
     if target.id == user.id:
         raise HTTPException(409, "Signing yourself out everywhere is done from the account menu.")
+    ensure_can_act_on(target, user, "revoke the sessions of")
     revoked = revoke_sessions(db, target)
     if revoked:
         workflow.notify(
@@ -430,8 +433,7 @@ def lock_user(user_id: str, data: SecurityActionIn, request: Request, db: Db, us
     target = scoped_user(db, user_id, user.organization_id, lock=True)
     if target.id == user.id:
         raise HTTPException(409, "You cannot lock your own account.")
-    if any(role.is_owner for role in target.roles) and not owner(user):
-        raise HTTPException(403, "Only an owner can lock an owner account.")
+    ensure_can_act_on(target, user, "lock")
     target.locked_until = utcnow() + timedelta(days=365 * LOCK_YEARS)
     target.failed_logins = 0
     revoked = revoke_sessions(db, target)
@@ -445,7 +447,8 @@ def lock_user(user_id: str, data: SecurityActionIn, request: Request, db: Db, us
 
 @router.post("/security/users/{user_id}/unlock", status_code=204, dependencies=[Depends(require("security:unlock"))])
 def unlock_user(user_id: str, request: Request, db: Db, user: Current):
-    target = scoped_user(db, user_id, user.organization_id)
+    target = scoped_user(db, user_id, user.organization_id, lock=True)
+    ensure_can_act_on(target, user, "unlock")
     target.failed_logins = 0
     target.locked_until = None
     audit.record(db, organization_id=user.organization_id, actor=user, action="unlock", entity_type="user",
@@ -481,11 +484,13 @@ def bulk_account_action(data: SecurityBulkIn, request: Request, db: Db, user: Cu
     }
     affected, skipped, names = 0, 0, []
     for target in targets:
-        if target.id == user.id or (data.action == "lock" and any(role.is_owner for role in target.roles) and not owner(user)):
+        if target.id == user.id or (any(role.is_owner for role in target.roles) and not owner(user)):
+            # Every bulk action obeys the same Owner rule as its single-account form.
             skipped += 1
             continue
         if data.action == "force-password-change":
             password_policy.require_change(target)
+            password_policy.expire_now(db, target)
             revoke_sessions(db, target)
             workflow.notify(
                 db, organization_id=user.organization_id, recipients=[target], title="Your password must be changed",

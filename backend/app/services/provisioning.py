@@ -10,7 +10,8 @@ from pydantic import EmailStr, TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
-from app.core.security import hash_password, validate_password
+from app.core.security import hash_password, password_expires_at, validate_password
+from app.core.time import utcnow
 from app.models import Currency, Organization, Permission, Role, User
 
 OWNER_ROLE = "Owner"
@@ -202,7 +203,12 @@ def provision(slug: str, name: str, email: str, password: str, owner_name: str, 
         ensure_default_usd_currency(session, organization.id)
         if session.scalar(select(User).where(User.organization_id == organization.id, User.email == email)):
             raise ProvisioningError(f"{email} already exists in workspace '{slug}'")
-        user = User(organization_id=organization.id, email=email, full_name=owner_name, password_hash=hash_password(password), roles=[owner_role(session, organization.id)])
+        changed_at = utcnow()
+        user = User(
+            organization_id=organization.id, email=email, full_name=owner_name,
+            password_hash=hash_password(password), roles=[owner_role(session, organization.id)],
+            password_changed_at=changed_at, password_expires_at=password_expires_at(changed_at),
+        )
         session.add(user)
         session.commit()
         return user

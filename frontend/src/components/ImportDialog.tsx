@@ -61,7 +61,7 @@ export function ImportDialog({ open, onClose, title, subtitle, headers, optional
       <Box display="flex" gap={1} flexWrap="wrap">
         <Button component="label" variant="outlined" startIcon={parsing ? <CircularProgress size={15}/> : <UploadFileRounded sx={{ fontSize: 18 }}/>} disabled={busy || parsing}>
           Choose file (.xlsx or .csv)
-          <input hidden type="file" accept=".xlsx,.xls,.csv" onChange={e => { pick(e.target.files?.[0]); e.target.value = '' }}/>
+          <input hidden type="file" accept=".xlsx,.csv" onChange={e => { pick(e.target.files?.[0]); e.target.value = '' }}/>
         </Button>
         <Button color="inherit" startIcon={<GetAppRounded sx={{ fontSize: 18 }}/>} onClick={() => downloadTemplate(templateName, displayHeaders, sample)} disabled={busy}>Download template</Button>
       </Box>

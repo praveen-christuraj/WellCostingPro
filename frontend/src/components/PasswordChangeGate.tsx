@@ -11,7 +11,7 @@ import { ErrorMessage } from './Common'
 // replaced by this screen until the account holder sets one. It has no dismiss
 // control by design — the only way on is to complete the change or sign out.
 export default function PasswordChangeGate() {
-  const { user, logout } = useAuth()
+  const { user, logout, passwordExpired } = useAuth()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -52,7 +52,9 @@ export default function PasswordChangeGate() {
         </Box>
       </Box>
       <Typography color="text.secondary" fontSize={13} sx={{ mb: 2.5, lineHeight: 1.55 }}>
-        Your workspace administrator requires a new password before you continue as{' '}
+        {passwordExpired
+          ? <>Your password reached its maximum age, so it must be replaced before you continue as{' '}</>
+          : <>Your workspace administrator requires a new password before you continue as{' '}</>}
         <Box component="strong" sx={{ color: 'text.primary' }}>{user?.email}</Box>. All previous sessions were signed out.
       </Typography>
       {done ? <Alert severity="success">

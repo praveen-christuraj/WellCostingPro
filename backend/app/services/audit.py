@@ -3,20 +3,31 @@
 Every user-visible action is recorded in the same transaction as the change
 itself, with typed columns only (see ``AuditLog``). Never build a JSON payload
 for storage — extend the table with real columns instead.
+
+The client address comes from :func:`app.core.request_security.client_ip`, so a
+caller cannot forge an audit row by rotating ``X-Forwarded-For``. Free-text
+fields are sanitised of control characters before storage because they are shown
+verbatim in the audit register and in CSV exports.
 """
+import re
+
 from fastapi import Request
 from sqlalchemy.orm import Session
+from app.core.request_security import client_ip
 from app.models import AuditLog, User
+
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _clean(value: str, limit: int) -> str:
+    return _CONTROL.sub("", value or "").strip()[:limit]
 
 
 def _request_meta(request: Request | None) -> tuple[str, str]:
     if request is None:
         return "", ""
-    ip = request.client.host if request.client else ""
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        ip = forwarded.split(",")[0].strip()
-    agent = request.headers.get("user-agent", "")[:255]
+    ip = client_ip(request)
+    agent = _clean(request.headers.get("user-agent", ""), 255)
     return ip, agent
 
 
@@ -39,13 +50,13 @@ def record(
     entry = AuditLog(
         organization_id=organization_id,
         actor_user_id=actor.id if actor else None,
-        actor_email=actor.email if actor else actor_email,
-        actor_name=actor.full_name if actor else actor_name,
-        action=action[:40],
-        entity_type=entity_type[:40],
+        actor_email=_clean(actor.email if actor else actor_email, 255),
+        actor_name=_clean(actor.full_name if actor else actor_name, 160),
+        action=_clean(action, 40),
+        entity_type=_clean(entity_type, 40),
         entity_id=entity_id,
-        entity_label=entity_label[:255],
-        summary=summary[:500],
+        entity_label=_clean(entity_label, 255),
+        summary=_clean(summary, 500),
         ip_address=ip[:45],
         user_agent=agent,
     )

@@ -402,7 +402,7 @@ def import_archive(
     db: Db,
     user: Current,
     file: UploadFile = File(...),
-    description: str = Form(default=""),
+    description: str = Form(default="", max_length=500),
 ) -> BackupJobOut:
     limits = get_settings().backup_max_upload_mb * 1024 * 1024
     root = service.backup_root()

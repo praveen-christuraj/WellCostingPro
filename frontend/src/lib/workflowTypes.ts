@@ -11,6 +11,7 @@ export type SecurityAccount = {
   id: string; full_name: string; email: string; is_active: boolean
   failed_logins: number; locked_until: string | null
   must_change_password: boolean; password_changed_at: string | null; last_login_at: string | null
+  password_expires_at: string | null; password_expired: boolean; password_days_remaining: number | null
   active_sessions: number; role_names: string[]; is_owner: boolean
 }
 

@@ -9,8 +9,10 @@ type AuthState = {
   logout: () => Promise<void>
   reload: () => Promise<void>
   can: (permission: string) => boolean
-  /** An administrator demanded a new password; the workspace stays closed until it is set. */
+  /** An administrator demanded a new password, or it aged out; the workspace stays closed until it is set. */
   mustChangePassword: boolean
+  /** True when the gate is showing because of password age rather than an administrator. */
+  passwordExpired: boolean
 }
 const Context = createContext<AuthState | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -35,7 +37,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
   const logout = async () => { try { await api('/auth/logout', { method: 'POST', silent: true }) } finally { setAccessToken(null); setUser(null) } }
   const can = (permission: string) => !!user && (user.is_owner || user.permission_keys.includes(permission))
-  const mustChangePassword = !!user?.must_change_password
-  return <Context.Provider value={{ user, loading, login, logout, reload, can, mustChangePassword }}>{children}</Context.Provider>
+  const passwordExpired = !!user?.password_expired
+  const mustChangePassword = !!user?.must_change_password || passwordExpired
+  return <Context.Provider value={{ user, loading, login, logout, reload, can, mustChangePassword, passwordExpired }}>{children}</Context.Provider>
 }
 export function useAuth() { const ctx = useContext(Context); if (!ctx) throw new Error('AuthProvider missing'); return ctx }

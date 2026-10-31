@@ -71,16 +71,24 @@ ARCHIVE_SUFFIX = ".jsonl.gz"
 CHUNK_ROWS = 500
 MAX_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024  # refuse to read a file bigger than 4 GiB
 RESTORE_CONFIRM_PREFIX = "RESTORE"
-# Never archived: migration bookkeeping, sessions (users must sign in again) and
-# this module's own history (so a restore never rewrites the backup register).
-EXCLUDED_TABLES = frozenset({"alembic_version", "refresh_sessions"})
+# Never archived: migration bookkeeping, sessions (users must sign in again),
+# credential material (password hashes/history, reset codes and attempt ledgers)
+# and this module's own history. An archive is a *business data* copy; it must not
+# become a portable credential dump, and restoring it must never roll an account's
+# password or role assignments back to an older, weaker state.
+CREDENTIAL_TABLES = frozenset({
+    "users", "roles", "permissions", "user_roles", "role_permissions",
+    "password_history", "password_reset_requests", "password_reset_attempts",
+    "refresh_sessions",
+})
+EXCLUDED_TABLES = frozenset({"alembic_version"}) | CREDENTIAL_TABLES
 EXCLUDED_PREFIXES = ("backup_",)
 # Replaced by neither the delete nor the insert phase of a restore:
 # * audit_logs — the trail of who did what must survive (and record) a restore;
 # * organizations — the tenant anchor itself. Restoring it would cascade-delete
 #   this module's own history through the workspace foreign key, and an archive
 #   is never allowed to rewrite which workspace it belongs to.
-PRESERVED_TABLES = frozenset({"audit_logs", "organizations"})
+PRESERVED_TABLES = frozenset({"audit_logs", "organizations"}) | CREDENTIAL_TABLES
 PENDING_REQUEST_STATUSES = ("pending_approval", "approved", "validation_running", "validated", "restore_running")
 RUNNING_JOB_STATUSES = ("pending", "running")
 SCHEDULE_MODES = ("minutes", "hours", "daily", "weekly")
@@ -121,15 +129,30 @@ def archive_directory(settings: BackupSettings | None, slug: str) -> Path:
     directory = (root / folder_name(settings, slug)).resolve()
     if root != directory and root not in directory.parents:
         raise BackupError(422, "The backup folder must stay inside the configured backup root.")
-    directory.mkdir(parents=True, exist_ok=True)
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        directory.chmod(0o700)
+    except OSError:  # a mounted volume may not support chmod; the platform ACL governs then
+        pass
     return directory
 
 
 def ensure_within_root(path: Path) -> Path:
+    """Resolve an archive path and prove it is a regular file inside the root.
+
+    ``resolve`` follows symlinks, so a link planted inside the backup folder
+    cannot be used to read (or overwrite) ``/etc/passwd``: after resolution the
+    target must still be under the root, and the final component must not itself
+    be a link.
+    """
     root = backup_root()
+    if path.is_symlink():
+        raise BackupError(422, "The backup file must be a regular file, not a symbolic link.")
     resolved = path.resolve()
     if resolved != root and root not in resolved.parents:
         raise BackupError(422, "The backup file is outside the configured backup root.")
+    if resolved.exists() and not resolved.is_file():
+        raise BackupError(422, "The backup file is not a regular file.")
     return resolved
 
 
@@ -460,6 +483,10 @@ def write_archive(
                 text.detach()
                 stream.close()
         partial_path.replace(final_path)
+        try:
+            final_path.chmod(0o600)
+        except OSError:
+            pass
     except Exception:
         partial_path.unlink(missing_ok=True)
         raise
